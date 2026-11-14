@@ -24,6 +24,19 @@ try {
 let activeChild = null;
 let restartTimer = null;
 let shuttingDown = false;
+let workerRestartAttempts = 0;
+let workerStartedAt = 0;
+
+function scheduleWorkerRestart(reason) {
+    if (shuttingDown || restartTimer) return;
+    workerRestartAttempts += 1;
+    const delayMs = Math.min(30_000, 1_000 * 2 ** Math.min(workerRestartAttempts - 1, 5));
+    console.warn(`⚠️ [SUPERVISOR] Worker stopped (${reason}); restarting in ${delayMs} ms...`);
+    restartTimer = setTimeout(() => {
+        restartTimer = null;
+        if (!shuttingDown) startWorker();
+    }, delayMs);
+}
 
 function forwardSignal(signal) {
     if (shuttingDown) return;
@@ -67,6 +80,11 @@ function startWorker() {
     });
 
     activeChild = child;
+    workerStartedAt = Date.now();
+
+    child.on("error", (error) => {
+        console.error(`❌ [SUPERVISOR] Worker process error: ${error.message}`);
+    });
 
     child.on("message", (msg) => {
         if (msg && typeof msg === "object" && msg.type === "spider:restart") {
@@ -86,6 +104,7 @@ function startWorker() {
         }
 
         if (restartRequested || code === RESTART_EXIT_CODE) {
+            workerRestartAttempts = 0;
             console.log("🔄 [SUPERVISOR] Reloading Spider Man bot worker without stopping panel process...");
             clearTemporarySessionsAndCache({ cwd: __dirname });
             try {
@@ -100,12 +119,12 @@ function startWorker() {
             return;
         }
 
-        if (signal) {
-            process.exit(1);
-            return;
+        if (Date.now() - workerStartedAt >= 30_000) {
+            workerRestartAttempts = 0;
         }
 
-        process.exit(typeof code === "number" ? code : 0);
+        const reason = signal ? `signal ${signal}` : `exit code ${code ?? "unknown"}`;
+        scheduleWorkerRestart(reason);
     });
 }
 
