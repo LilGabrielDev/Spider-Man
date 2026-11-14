@@ -5,13 +5,16 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   cleanupDiskArtifacts,
+  clearTemporarySessionsAndCache,
   createBaileysCacheStore,
   createBoundedMap,
   createBoundedSet,
   getWorkerMemoryExecArgv,
   pruneAuthDirectory,
+  startSessionAndCacheCleaner,
 } from '../../spider/utils/resourceGuard.js';
 import { createCommandRateLimiter } from '../../spider/utils/securityPolicy.js';
+import { commands as adminCommands } from '../commands/Admin.js';
 
 function withTempWorkspace(fn) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'spider-rg-test-'));
@@ -367,4 +370,198 @@ test('createCommandRateLimiter bounds tracked senders under high unique-sender c
   assert.equal(limiter.allow('sender-2049'), false);
   // Earliest sender was evicted due to the 2000-entry memory cap
   assert.equal(limiter.allow('sender-0'), true);
+});
+
+test('clearTemporarySessionsAndCache clears caches, pairing sessions, and temp session files across dirs', () => {
+  withTempWorkspace((root) => {
+    const cwd = path.join(root, 'bot');
+    const tmpDir = path.join(root, 'os-tmp');
+    const authDir = path.join(cwd, 'spider', 'auth');
+    const sessionsDir = path.join(cwd, 'sessions');
+    const cacheDir = path.join(cwd, '.cache', 'nested');
+    const nmCacheDir = path.join(cwd, 'node_modules', '.cache', 'sharp');
+    const pairSessionDir = path.join(
+      cwd,
+      'Spider',
+      'legacy',
+      'lilgabriel',
+      'features',
+      'spidersession',
+      'temp',
+      'pair123',
+    );
+    const tmpPairDir = path.join(tmpDir, 'spider-pair-abc');
+
+    for (const dir of [
+      cwd,
+      tmpDir,
+      authDir,
+      sessionsDir,
+      cacheDir,
+      nmCacheDir,
+      pairSessionDir,
+      tmpPairDir,
+    ]) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+
+    const nowMs = Date.now();
+    const expiredAge = 20 * 60 * 1000;
+
+    // Protected credentials that must survive
+    fs.writeFileSync(path.join(authDir, 'creds.json'), '{"me":"ok"}');
+    setFileAge(path.join(authDir, 'creds.json'), expiredAge, nowMs);
+
+    // Temp session artifacts in both authDir and sessionsDir
+    const staleFiles = [
+      path.join(authDir, 'session-123.tmp-99'),
+      path.join(authDir, 'creds.json.bak'),
+      path.join(sessionsDir, 'session-abc.lock'),
+      path.join(cwd, '.spider-update.json.tmp-42'),
+      path.join(cacheDir, 'img-thumb.bin'),
+      path.join(nmCacheDir, 'prebuild.cache'),
+      path.join(pairSessionDir, 'creds.json'),
+      path.join(tmpPairDir, 'creds.json'),
+    ];
+    for (const file of staleFiles) {
+      fs.writeFileSync(file, 'stale-data');
+      setFileAge(file, expiredAge, nowMs);
+    }
+    setFileAge(pairSessionDir, expiredAge, nowMs);
+    setFileAge(tmpPairDir, expiredAge, nowMs);
+
+    // Non-expired parent dirs to ensure recursive cleanup inside cache dirs works
+    setFileAge(path.join(cwd, '.cache'), 1_000, nowMs);
+    setFileAge(cacheDir, 1_000, nowMs);
+
+    // Excess tctoken files in authDir
+    for (let i = 0; i < 4; i += 1) {
+      const p = path.join(authDir, `tctoken-${i}.json`);
+      fs.writeFileSync(p, '{}');
+      setFileAge(p, (4 - i) * 60 * 1000, nowMs);
+    }
+
+    let currentTime = 1_000;
+    const boundedCache = createBoundedMap({ maxEntries: 10, ttlMs: 500, now: () => currentTime });
+    boundedCache.set('old-key', 'value');
+    currentTime = nowMs;
+
+    const summary = clearTemporarySessionsAndCache({
+      authDir,
+      cwd,
+      tmpDir,
+      caches: [boundedCache],
+      maxAgeMs: 15 * 60 * 1000,
+      tempMaxAgeMs: 10 * 60 * 1000,
+      maxTcTokens: 2,
+      nowMs,
+    });
+
+    assert.equal(boundedCache.size, 0);
+    assert.equal(fs.existsSync(path.join(authDir, 'creds.json')), true);
+    assert.equal(fs.existsSync(path.join(authDir, 'session-123.tmp-99')), false);
+    assert.equal(fs.existsSync(path.join(authDir, 'creds.json.bak')), false);
+    assert.equal(fs.existsSync(path.join(sessionsDir, 'session-abc.lock')), false);
+    assert.equal(fs.existsSync(path.join(cwd, '.spider-update.json.tmp-42')), false);
+    assert.equal(fs.existsSync(path.join(cacheDir, 'img-thumb.bin')), false);
+    assert.equal(fs.existsSync(path.join(nmCacheDir, 'prebuild.cache')), false);
+    assert.equal(fs.existsSync(pairSessionDir), false);
+    assert.equal(fs.existsSync(tmpPairDir), false);
+    assert.equal(fs.existsSync(path.join(authDir, 'tctoken-0.json')), false);
+    assert.equal(fs.existsSync(path.join(authDir, 'tctoken-3.json')), true);
+    assert.ok(summary.totalRemovedFiles >= 6);
+    assert.ok(summary.totalRemovedDirs >= 2);
+    assert.ok(summary.totalFreedBytes > 0);
+  });
+});
+
+test('startSessionAndCacheCleaner runs periodic background sweeps and stops cleanly', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'spider-rg-async-'));
+  let cleaner;
+  let watchdog;
+
+  try {
+    const cwd = path.join(root, 'bot');
+    const tmpDir = path.join(root, 'tmp');
+    const authDir = path.join(cwd, 'auth');
+    const tempDir = path.join(cwd, 'temp');
+    fs.mkdirSync(authDir, { recursive: true });
+    fs.mkdirSync(tempDir, { recursive: true });
+    fs.mkdirSync(tmpDir, { recursive: true });
+
+    await new Promise((resolve, reject) => {
+      watchdog = setTimeout(() => {
+        reject(new Error('Timed out waiting for periodic background cleanup run'));
+      }, 2000);
+
+      const cleanupRuns = [];
+      cleaner = startSessionAndCacheCleaner({
+        authDir,
+        cwd,
+        tmpDir,
+        intervalMs: 40,
+        maxAgeMs: 10,
+        tempMaxAgeMs: 10,
+        quiet: true,
+        onCleanup(summary) {
+          cleanupRuns.push(summary);
+          if (cleanupRuns.length === 1) {
+            const staleSession = path.join(authDir, 'session-99.tmp');
+            const staleCache = path.join(tempDir, 'cached.dat');
+            fs.writeFileSync(staleSession, '12345');
+            fs.writeFileSync(staleCache, '123456789');
+            const old = new Date(Date.now() - 5_000);
+            fs.utimesSync(staleSession, old, old);
+            fs.utimesSync(staleCache, old, old);
+          } else if (cleanupRuns.length >= 2) {
+            cleaner.stop();
+            try {
+              const stats = cleaner.getStats();
+              assert.ok(stats.runs >= 2);
+              assert.ok(stats.totalRemovedFiles >= 2);
+              assert.equal(fs.existsSync(path.join(authDir, 'session-99.tmp')), false);
+              assert.equal(fs.existsSync(path.join(tempDir, 'cached.dat')), false);
+              resolve();
+            } catch (err) {
+              reject(err);
+            }
+          }
+        },
+      });
+    });
+  } finally {
+    if (watchdog) clearTimeout(watchdog);
+    if (cleaner) cleaner.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Admin clearcache command is owner-only and reports cleaned artifacts', async () => {
+  const clearCmd = adminCommands.find((cmd) => cmd.name === 'clearcache');
+  assert.ok(clearCmd);
+  assert.equal(clearCmd.ownerOnly, true);
+
+  const sent = [];
+  const fakeSock = {
+    async sendMessage(to, payload) {
+      sent.push({ to, payload });
+    },
+  };
+
+  await clearCmd.execute({
+    sock: fakeSock,
+    from: '123@s.whatsapp.net',
+    msg: { key: { id: 'm1' } },
+    isOwner: false,
+  });
+  assert.match(sent[0].payload.text, /restricted to the bot owner/i);
+
+  await clearCmd.execute({
+    sock: fakeSock,
+    from: '123@s.whatsapp.net',
+    msg: { key: { id: 'm2' } },
+    isOwner: true,
+  });
+  assert.match(sent[1].payload.text, /DISK & CACHE CLEANER/);
+  assert.match(sent[1].payload.text, /SESSION TEMP FILES/);
 });

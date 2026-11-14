@@ -310,7 +310,23 @@ function removeEntry(fsImpl, targetPath, stats, result) {
   }
 }
 
-function sweepDirectory(fsImpl, dirPath, { maxAgeMs, nowMs, nameMatcher }, result) {
+export const DEFAULT_CLEANUP_INTERVAL_MS = DEFAULT_MAINTENANCE_INTERVAL_MS;
+export const DEFAULT_SESSION_TEMP_AGE_MS = 10 * 60 * 1000;
+
+export function formatBytes(bytes) {
+  const value = Number(bytes) || 0;
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  if (value < 1024 * 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(2)} MB`;
+  return `${(value / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+function sweepDirectory(
+  fsImpl,
+  dirPath,
+  { maxAgeMs, nowMs, nameMatcher, recursiveSubdirs = false },
+  result,
+) {
   if (!dirPath) return;
   let entries;
   try {
@@ -328,19 +344,33 @@ function sweepDirectory(fsImpl, dirPath, { maxAgeMs, nowMs, nameMatcher }, resul
     const ageMs = nowMs - (st.mtimeMs || st.ctimeMs || 0);
     if (maxAgeMs <= 0 || ageMs >= maxAgeMs) {
       removeEntry(fsImpl, fullPath, st, result);
+    } else if (recursiveSubdirs && st.isDirectory()) {
+      sweepDirectory(
+        fsImpl,
+        fullPath,
+        { maxAgeMs, nowMs, recursiveSubdirs: true },
+        result,
+      );
+      try {
+        if (fsImpl.readdirSync(fullPath).length === 0) {
+          fsImpl.rmSync(fullPath, { recursive: true, force: true });
+          result.removedDirs += 1;
+        }
+      } catch {}
     }
   }
 }
 
 const CWD_ARTIFACT_PATTERN =
-  /^(?:temp_\d+|video_\d+\.mp4|audio_\d+\.mp3|sticker_\d+\.webp|.*-Backup-[\dT-]+\.zip)$/i;
+  /^(?:temp_\d+|video_\d+\.mp4|audio_\d+\.mp3|sticker_\d+\.webp|.*-Backup-[\dT-]+\.zip|\.spider-update\.json\.tmp-.*)$/i;
 const TMPDIR_PREFIX_PATTERN =
-  /^(?:ultra-lil-play-|ultra-lil-compress-|ultra-lil-temp|sticker_\d+_\d+\.(?:webm|webp)$)/i;
+  /^(?:ultra-lil-play-|ultra-lil-compress-|ultra-lil-temp|spider-pair-|yt-dlp-|jimp-|sticker_\d+_\d+\.(?:webm|webp)$)/i;
 
 export function cleanupDiskArtifacts({
   cwd = process.cwd(),
   tmpDir = os.tmpdir(),
   tempDirs = [],
+  cacheDirs = [],
   maxAgeMs = DEFAULT_MAX_TEMP_AGE_MS,
   nowMs = Date.now(),
   fsImpl = fs,
@@ -352,14 +382,32 @@ export function cleanupDiskArtifacts({
     '/tmp/ultra-lil-temp',
     cwd ? path.join(cwd, 'temp') : null,
     cwd ? path.join(cwd, 'tmp') : null,
+    cwd ? path.join(cwd, 'spider', 'temp') : null,
+    cwd ? path.join(cwd, 'spider', 'tmp') : null,
+    cwd ? path.join(cwd, 'cache') : null,
+    cwd ? path.join(cwd, '.cache') : null,
+    cwd ? path.join(cwd, 'spider', 'cache') : null,
+    cwd ? path.join(cwd, 'spider', '.cache') : null,
+    cwd ? path.join(cwd, 'node_modules', '.cache') : null,
+    cwd ? path.join(cwd, '.npm', '_cacache') : null,
+    cwd ? path.join(cwd, '.npm', '_logs') : null,
+    cwd
+      ? path.join(cwd, 'Spider', 'legacy', 'lilgabriel', 'features', 'spidersession', 'temp')
+      : null,
     ...tempDirs,
+    ...cacheDirs,
   ].filter(Boolean);
 
   for (const dir of dedicatedTempDirs) {
     const resolved = path.resolve(dir);
     if (visitedDirs.has(resolved)) continue;
     visitedDirs.add(resolved);
-    sweepDirectory(fsImpl, resolved, { maxAgeMs, nowMs }, result);
+    sweepDirectory(
+      fsImpl,
+      resolved,
+      { maxAgeMs, nowMs, recursiveSubdirs: true },
+      result,
+    );
   }
 
   if (tmpDir) {
@@ -412,10 +460,18 @@ const PROTECTED_AUTH_PREFIXES = [
   'device-list-',
 ];
 
+const TEMP_SESSION_FILE_PATTERN =
+  /(?:\.tmp(?:-[^\s]*)?|\.bak|\.lock|-lock|\.partial|\.swp)$/i;
+
 function isProtectedAuthFile(fileName) {
   return PROTECTED_AUTH_PREFIXES.some(
     (prefix) => fileName === prefix || fileName.startsWith(prefix),
   );
+}
+
+function isTempSessionFile(fileName) {
+  if (fileName === 'creds.json') return false;
+  return TEMP_SESSION_FILE_PATTERN.test(fileName);
 }
 
 export function pruneAuthDirectory({
@@ -423,7 +479,8 @@ export function pruneAuthDirectory({
   maxSenderKeys = 400,
   maxSessionFiles = 500,
   maxPreKeys = 900,
-  tempMaxAgeMs = 10 * 60 * 1000,
+  maxTcTokens = 200,
+  tempMaxAgeMs = DEFAULT_SESSION_TEMP_AGE_MS,
   nowMs = Date.now(),
   fsImpl = fs,
 } = {}) {
@@ -441,6 +498,7 @@ export function pruneAuthDirectory({
   const senderKeys = [];
   const sessions = [];
   const preKeys = [];
+  const tcTokens = [];
   let protectedCount = 0;
   let otherCount = 0;
 
@@ -449,7 +507,7 @@ export function pruneAuthDirectory({
     const st = safeStat(fsImpl, fullPath);
     if (!st || st.isDirectory()) continue;
 
-    if (name.endsWith('.tmp')) {
+    if (isTempSessionFile(name)) {
       const ageMs = nowMs - (st.mtimeMs || st.ctimeMs || 0);
       if (tempMaxAgeMs <= 0 || ageMs >= tempMaxAgeMs) {
         try {
@@ -477,6 +535,8 @@ export function pruneAuthDirectory({
       sessions.push(item);
     } else if (name.startsWith('pre-key-')) {
       preKeys.push(item);
+    } else if (name.startsWith('tctoken-')) {
+      tcTokens.push(item);
     } else {
       otherCount += 1;
     }
@@ -506,80 +566,257 @@ export function pruneAuthDirectory({
   const keptSenderKeys = pruneOldest(senderKeys, maxSenderKeys);
   const keptSessions = pruneOldest(sessions, maxSessionFiles);
   const keptPreKeys = pruneOldest(preKeys, maxPreKeys);
+  const keptTcTokens = pruneOldest(tcTokens, maxTcTokens);
   result.remainingFiles =
-    protectedCount + otherCount + keptSenderKeys + keptSessions + keptPreKeys;
+    protectedCount + otherCount + keptSenderKeys + keptSessions + keptPreKeys + keptTcTokens;
   return result;
 }
 
-export function startResourceMaintenance({
+export function discoverSessionDirectories({
   authDir,
+  sessionDirs = [],
+  cwd = process.cwd(),
+  fsImpl = fs,
+} = {}) {
+  const candidates = [
+    authDir,
+    ...sessionDirs,
+    cwd ? path.join(cwd, 'auth') : null,
+    cwd ? path.join(cwd, 'spider', 'auth') : null,
+    cwd ? path.join(cwd, 'auth_info_baileys') : null,
+    cwd ? path.join(cwd, 'sessions') : null,
+    cwd ? path.join(cwd, 'session') : null,
+  ].filter(Boolean);
+
+  const unique = [];
+  const seen = new Set();
+  for (const dir of candidates) {
+    const resolved = path.resolve(dir);
+    if (seen.has(resolved)) continue;
+    seen.add(resolved);
+    try {
+      if (fsImpl.existsSync(resolved)) {
+        unique.push(resolved);
+      }
+    } catch {}
+  }
+  return unique;
+}
+
+export function clearTemporarySessionsAndCache({
+  authDir,
+  sessionDirs = [],
+  cacheDirs = [],
   cwd = process.cwd(),
   tmpDir = os.tmpdir(),
   tempDirs = [],
   caches = [],
-  intervalMs = DEFAULT_MAINTENANCE_INTERVAL_MS,
   maxAgeMs = DEFAULT_MAX_TEMP_AGE_MS,
+  tempMaxAgeMs = DEFAULT_SESSION_TEMP_AGE_MS,
+  maxSenderKeys = 400,
+  maxSessionFiles = 500,
+  maxPreKeys = 900,
+  maxTcTokens = 200,
+  nowMs = Date.now(),
+  fsImpl = fs,
+} = {}) {
+  for (const cache of caches) {
+    try {
+      cache?.prune?.(nowMs);
+    } catch {}
+  }
+
+  const disk = cleanupDiskArtifacts({
+    cwd,
+    tmpDir,
+    tempDirs,
+    cacheDirs,
+    maxAgeMs,
+    nowMs,
+    fsImpl,
+  });
+
+  const resolvedSessionDirs = discoverSessionDirectories({
+    authDir,
+    sessionDirs,
+    cwd,
+    fsImpl,
+  });
+
+  const auth = { removedFiles: 0, freedBytes: 0, remainingFiles: 0 };
+  const sessionResults = [];
+
+  for (const dir of resolvedSessionDirs) {
+    const stats = pruneAuthDirectory({
+      authDir: dir,
+      maxSenderKeys,
+      maxSessionFiles,
+      maxPreKeys,
+      maxTcTokens,
+      tempMaxAgeMs,
+      nowMs,
+      fsImpl,
+    });
+    auth.removedFiles += stats.removedFiles;
+    auth.freedBytes += stats.freedBytes;
+    auth.remainingFiles += stats.remainingFiles;
+    sessionResults.push({ dir, ...stats });
+  }
+
+  return {
+    disk,
+    auth,
+    sessionResults,
+    totalRemovedFiles: disk.removedFiles + auth.removedFiles,
+    totalRemovedDirs: disk.removedDirs,
+    totalFreedBytes: disk.freedBytes + auth.freedBytes,
+    ranAt: nowMs,
+  };
+}
+
+function readDurationEnv(env, key, fallback) {
+  const raw = Number(env?.[key]);
+  return Number.isFinite(raw) && raw > 0 ? raw : fallback;
+}
+
+export function startResourceMaintenance({
+  authDir,
+  sessionDirs = [],
+  cacheDirs = [],
+  cwd = process.cwd(),
+  tmpDir = os.tmpdir(),
+  tempDirs = [],
+  caches = [],
+  intervalMs,
+  maxAgeMs,
+  tempMaxAgeMs,
+  maxSenderKeys = 400,
+  maxSessionFiles = 500,
+  maxPreKeys = 900,
+  maxTcTokens = 200,
   memoryHighWaterRatio = 0.85,
+  quiet = false,
+  env = process.env,
   onCleanup,
 } = {}) {
-  function runNow({ forceMemoryTrim = false } = {}) {
-    const nowMs = Date.now();
-    for (const cache of caches) {
-      try {
-        cache?.prune?.(nowMs);
-      } catch {}
+  const effectiveIntervalMs =
+    Number.isFinite(Number(intervalMs)) && Number(intervalMs) > 0
+      ? Number(intervalMs)
+      : readDurationEnv(env, 'SPIDER_CLEANUP_INTERVAL_MS', DEFAULT_CLEANUP_INTERVAL_MS);
+  const defaultMaxAgeMs =
+    Number.isFinite(Number(maxAgeMs)) && Number(maxAgeMs) >= 0
+      ? Number(maxAgeMs)
+      : readDurationEnv(env, 'SPIDER_CLEANUP_MAX_AGE_MS', DEFAULT_MAX_TEMP_AGE_MS);
+  const defaultTempMaxAgeMs =
+    Number.isFinite(Number(tempMaxAgeMs)) && Number(tempMaxAgeMs) >= 0
+      ? Number(tempMaxAgeMs)
+      : readDurationEnv(env, 'SPIDER_SESSION_TEMP_MAX_AGE_MS', DEFAULT_SESSION_TEMP_AGE_MS);
+
+  let isRunning = false;
+  const stats = {
+    runs: 0,
+    totalRemovedFiles: 0,
+    totalRemovedDirs: 0,
+    totalFreedBytes: 0,
+    lastRunAt: null,
+    lastSummary: null,
+  };
+
+  function runNow({ forceMemoryTrim = false, aggressive = false } = {}) {
+    if (isRunning) {
+      return stats.lastSummary;
     }
+    isRunning = true;
+    try {
+      const nowMs = Date.now();
+      const passMaxAgeMs = aggressive ? Math.min(defaultMaxAgeMs, 5_000) : defaultMaxAgeMs;
+      const passTempAgeMs = aggressive ? Math.min(defaultTempMaxAgeMs, 5_000) : defaultTempMaxAgeMs;
 
-    const disk = cleanupDiskArtifacts({
-      cwd,
-      tmpDir,
-      tempDirs,
-      maxAgeMs,
-      nowMs,
-    });
-    const auth = authDir
-      ? pruneAuthDirectory({ authDir, nowMs })
-      : { removedFiles: 0, freedBytes: 0, remainingFiles: 0 };
+      const cleanupSummary = clearTemporarySessionsAndCache({
+        authDir,
+        sessionDirs,
+        cacheDirs,
+        cwd,
+        tmpDir,
+        tempDirs,
+        caches,
+        maxAgeMs: passMaxAgeMs,
+        tempMaxAgeMs: passTempAgeMs,
+        maxSenderKeys,
+        maxSessionFiles,
+        maxPreKeys,
+        maxTcTokens,
+        nowMs,
+      });
 
-    const mem = process.memoryUsage();
-    const heapLimitBytes =
-      readCgroupMemoryLimitBytes() || Math.max(mem.heapTotal * 1.5, 256 * 1024 * 1024);
-    const rssRatio = heapLimitBytes > 0 ? mem.rss / heapLimitBytes : 0;
+      const mem = process.memoryUsage();
+      const heapLimitBytes =
+        readCgroupMemoryLimitBytes() || Math.max(mem.heapTotal * 1.5, 256 * 1024 * 1024);
+      const rssRatio = heapLimitBytes > 0 ? mem.rss / heapLimitBytes : 0;
 
-    let memoryTrimmed = false;
-    if (forceMemoryTrim || rssRatio >= memoryHighWaterRatio) {
-      memoryTrimmed = true;
-      for (const cache of caches) {
+      let memoryTrimmed = false;
+      if (forceMemoryTrim || aggressive || rssRatio >= memoryHighWaterRatio) {
+        memoryTrimmed = true;
+        for (const cache of caches) {
+          try {
+            if (typeof cache?.flushAll === 'function') cache.flushAll();
+            else if (typeof cache?.clear === 'function') cache.clear();
+          } catch {}
+        }
         try {
-          if (typeof cache?.flushAll === 'function') cache.flushAll();
-          else if (typeof cache?.clear === 'function') cache.clear();
+          if (typeof globalThis.gc === 'function') globalThis.gc();
         } catch {}
       }
-      try {
-        if (typeof globalThis.gc === 'function') globalThis.gc();
-      } catch {}
-    }
 
-    const summary = { disk, auth, memoryTrimmed, rssBytes: mem.rss };
-    if (typeof onCleanup === 'function') {
-      try {
-        onCleanup(summary);
-      } catch {}
+      const summary = {
+        ...cleanupSummary,
+        memoryTrimmed,
+        rssBytes: mem.rss,
+      };
+
+      stats.runs += 1;
+      stats.totalRemovedFiles += summary.totalRemovedFiles;
+      stats.totalRemovedDirs += summary.totalRemovedDirs;
+      stats.totalFreedBytes += summary.totalFreedBytes;
+      stats.lastRunAt = nowMs;
+      stats.lastSummary = summary;
+
+      if (
+        !quiet &&
+        (summary.totalRemovedFiles > 0 || summary.totalRemovedDirs > 0 || memoryTrimmed)
+      ) {
+        console.log(
+          `🧹 [CLEANER] Cleared ${summary.totalRemovedFiles} file(s), ${summary.totalRemovedDirs} dir(s) (${formatBytes(summary.totalFreedBytes)} freed).`,
+        );
+      }
+
+      if (typeof onCleanup === 'function') {
+        try {
+          onCleanup(summary);
+        } catch {}
+      }
+      return summary;
+    } finally {
+      isRunning = false;
     }
-    return summary;
   }
 
   runNow();
 
   const timer = setInterval(() => {
     runNow();
-  }, intervalMs);
+  }, effectiveIntervalMs);
   timer.unref?.();
 
   return {
     runNow,
+    getStats() {
+      return { ...stats };
+    },
     stop() {
       clearInterval(timer);
     },
   };
 }
+
+export const startSessionAndCacheCleaner = startResourceMaintenance;
