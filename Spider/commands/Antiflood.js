@@ -10,6 +10,7 @@ import {
 } from '../../spider/utils/antiflood.js';
 import { cleanJid, extractPhone } from '../../spider/utils/antiscam.js';
 import { spiderDivider, spiderFooter, spiderHeader, spiderRow } from '../utils/tableStyle.js';
+import { extractContextInfo } from '../../spider/utils/groupActionHelper.js';
 
 function normalizeAction(raw) {
   const value = String(raw || '').trim().toLowerCase();
@@ -37,9 +38,9 @@ function actionLabel(action) {
 }
 
 function getQuotedOrMentionedTarget(msg) {
-  const ext = msg?.message?.extendedTextMessage?.contextInfo;
-  const quotedParticipant = ext?.participant;
-  const mentioned = ext?.mentionedJid?.[0];
+  const { contextInfo } = extractContextInfo(msg);
+  const quotedParticipant = contextInfo?.participant;
+  const mentioned = contextInfo?.mentionedJid?.[0];
   return quotedParticipant || mentioned || null;
 }
 
