@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import AdmZip from 'adm-zip';
-import { detectHostingProvider } from './hostDetector.js';
+import { detectHostingProvider, detectHostingProviderAsync } from './hostDetector.js';
 
 export const DEFAULT_REPOSITORY = 'LilGabrielDev/Spider-Man';
 export const UPDATE_STATE_FILENAME = '.spider-update.json';
@@ -67,6 +67,32 @@ export function detectHostingEnvironment(env = process.env) {
   const label = detectHostingProvider({
     env,
     probeSystem: env === process.env,
+  });
+
+  return { mode: 'self', label };
+}
+
+export async function detectHostingEnvironmentAsync(env = process.env) {
+  if (env.HEROKU_API_KEY && env.HEROKU_APP_NAME) {
+    return { mode: 'heroku', label: 'Heroku' };
+  }
+
+  const explicit = String(env.HOST_PROVIDER || env.HOSTING_PROVIDER || '')
+    .trim()
+    .toLowerCase();
+
+  const deployHookUrl = String(
+    env.DEPLOY_HOOK_URL || env.RENDER_DEPLOY_HOOK_URL || '',
+  ).trim();
+  if (deployHookUrl) {
+    const label = env.RENDER || explicit === 'render' ? 'Render' : 'Deploy Hook';
+    return { mode: 'deploy_hook', label, deployHookUrl };
+  }
+
+  const label = await detectHostingProviderAsync({
+    env,
+    probeSystem: env === process.env,
+    probeNetwork: env === process.env,
   });
 
   return { mode: 'self', label };
@@ -271,7 +297,7 @@ export async function runBotUpdate({
   skipNpmInstall = false,
 } = {}) {
   const repository = normalizeRepository(repo, config);
-  const host = detectHostingEnvironment(env);
+  const host = await detectHostingEnvironmentAsync(env);
   const latest = await fetchVerifiedLatestCommit(repository, { fetchImpl });
   const currentSha = getCurrentCommitSha({ rootDir, env, execImpl });
   const upToDate = !force && isSameCommit(currentSha, latest.sha);

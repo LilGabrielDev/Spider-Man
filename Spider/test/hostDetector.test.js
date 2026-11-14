@@ -1,7 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { detectHostingProvider, normalizeExplicitHostProvider } from '../../spider/utils/hostDetector.js';
-import { detectPlatform } from '../france/utils.js';
+import {
+  detectHostingProvider,
+  detectHostingProviderAsync,
+  normalizeExplicitHostProvider,
+  resetHostDetectorCache,
+} from '../../spider/utils/hostDetector.js';
+import { detectPlatform, detectPlatformAsync } from '../france/utils.js';
 
 function createFakeFs(existingPaths = [], files = {}) {
   const pathSet = new Set(existingPaths);
@@ -62,16 +67,43 @@ test('detectHostingProvider detects all major cloud, PaaS, and panel environment
   );
   assert.equal(
     detectHostingProvider({ env: { P_SERVER_UUID: 'uuid-123' }, probeSystem: false }),
-    'Katabump / Panel',
+    'Pterodactyl Panel',
   );
   assert.equal(
     detectHostingProvider({ env: { USER: 'container', HOME: '/home/container' }, probeSystem: false }),
-    'Katabump / Panel',
+    'Pterodactyl Panel',
   );
   assert.equal(detectHostingProvider({ env: {}, probeSystem: false }), 'Panel');
 });
 
-test('detectHostingProvider lets concrete platform signals override legacy Bothosting sample default', () => {
+test('detectHostingProvider ignores HOSTING_URL sample promo link and legacy Bothosting sample default', () => {
+  assert.equal(
+    detectHostingProvider({
+      env: { HOSTING_URL: 'https://cheap.bothosting.lilgabrieltech.top', P_SERVER_UUID: 'srv-1' },
+      probeSystem: false,
+    }),
+    'Pterodactyl Panel',
+  );
+
+  assert.equal(
+    detectHostingProvider({
+      env: { HOSTING_URL: 'https://cheap.bothosting.lilgabrieltech.top', K_SERVICE: 'cloud-run-1' },
+      probeSystem: false,
+    }),
+    'Google Cloud Run',
+  );
+
+  assert.equal(
+    detectHostingProvider({
+      env: { HOSTING_URL: 'https://cheap.bothosting.lilgabrieltech.top' },
+      probeSystem: true,
+      osImpl: { hostname: () => 'vps-01', platform: () => 'linux' },
+      fsImpl: createFakeFs(),
+      networkHint: null,
+    }),
+    'Linux VPS',
+  );
+
   assert.equal(
     detectHostingProvider({
       env: { HOSTING_PROVIDER: 'Bothosting', RENDER: 'true' },
@@ -85,7 +117,7 @@ test('detectHostingProvider lets concrete platform signals override legacy Botho
       env: { HOSTING_PROVIDER: 'Bothosting', P_SERVER_UUID: 'srv-1' },
       probeSystem: false,
     }),
-    'Katabump / Panel',
+    'Pterodactyl Panel',
   );
 
   assert.equal(
@@ -105,7 +137,7 @@ test('detectHostingProvider lets concrete platform signals override legacy Botho
   );
 });
 
-test('detectHostingProvider probes system hostname, /home/container, Docker, and OS when probeSystem is enabled', () => {
+test('detectHostingProvider probes system hostname, resolv.conf, DMI vendor, /home/container, Docker, and OS', () => {
   assert.equal(
     detectHostingProvider({
       env: {},
@@ -120,10 +152,33 @@ test('detectHostingProvider probes system hostname, /home/container, Docker, and
     detectHostingProvider({
       env: {},
       probeSystem: true,
+      osImpl: { hostname: () => 'localhost', platform: () => 'linux' },
+      fsImpl: createFakeFs(['/etc/resolv.conf'], { '/etc/resolv.conf': 'search google.internal.\n' }),
+    }),
+    'Google Cloud',
+  );
+
+  assert.equal(
+    detectHostingProvider({
+      env: {},
+      probeSystem: true,
+      osImpl: { hostname: () => 'server-1', platform: () => 'linux' },
+      fsImpl: createFakeFs(['/sys/class/dmi/id/sys_vendor'], {
+        '/sys/class/dmi/id/sys_vendor': 'Hetzner\n',
+      }),
+    }),
+    'Hetzner',
+  );
+
+  assert.equal(
+    detectHostingProvider({
+      env: {},
+      probeSystem: true,
       osImpl: { hostname: () => 'panel-node', platform: () => 'linux' },
       fsImpl: createFakeFs(['/home/container']),
+      networkHint: null,
     }),
-    'Katabump / Panel',
+    'Pterodactyl Panel',
   );
 
   assert.equal(
@@ -132,6 +187,7 @@ test('detectHostingProvider probes system hostname, /home/container, Docker, and
       probeSystem: true,
       osImpl: { hostname: () => 'app-container', platform: () => 'linux' },
       fsImpl: createFakeFs(['/.dockerenv']),
+      networkHint: null,
     }),
     'Docker',
   );
@@ -142,6 +198,7 @@ test('detectHostingProvider probes system hostname, /home/container, Docker, and
       probeSystem: true,
       osImpl: { hostname: () => 'k8s-pod', platform: () => 'linux' },
       fsImpl: createFakeFs(['/proc/1/cgroup'], { '/proc/1/cgroup': '12:memory:/kubepods/pod123\n' }),
+      networkHint: null,
     }),
     'Docker',
   );
@@ -152,14 +209,99 @@ test('detectHostingProvider probes system hostname, /home/container, Docker, and
       probeSystem: true,
       osImpl: { hostname: () => 'vps-01', platform: () => 'linux' },
       fsImpl: createFakeFs(),
+      networkHint: null,
     }),
     'Linux VPS',
   );
 });
 
-test('detectPlatform resolves a non-empty automatically detected host string', () => {
+test('detectHostingProviderAsync resolves PTR/ASN hints for panels and skips network probe on known PaaS', async () => {
+  resetHostDetectorCache();
+
+  const katabumpHost = await detectHostingProviderAsync({
+    env: { P_SERVER_UUID: 'srv-kata-1' },
+    probeSystem: true,
+    probeNetwork: true,
+    osImpl: { hostname: () => 'panel-node', platform: () => 'linux' },
+    fsImpl: createFakeFs(['/home/container']),
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        success: true,
+        ip: '198.51.100.10',
+        connection: { org: 'OVH SAS', isp: 'OVHcloud', domain: 'ovh.net' },
+      }),
+    }),
+    dnsImpl: { reverse: async () => ['node3.katabump.com'] },
+  });
+  assert.equal(katabumpHost, 'Katabump.com');
+
+  resetHostDetectorCache();
+  const bothostingHost = await detectHostingProviderAsync({
+    env: { P_SERVER_UUID: 'srv-bh-1' },
+    probeSystem: true,
+    probeNetwork: true,
+    osImpl: { hostname: () => 'panel-node', platform: () => 'linux' },
+    fsImpl: createFakeFs(['/home/container']),
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        success: true,
+        ip: '198.51.100.20',
+        connection: { org: 'Hetzner Online GmbH', isp: 'Hetzner' },
+      }),
+    }),
+    dnsImpl: { reverse: async () => ['fi1.bot-hosting.net'] },
+  });
+  assert.equal(bothostingHost, 'Bot-Hosting.net');
+
+  resetHostDetectorCache();
+  const ovhPanelHost = await detectHostingProviderAsync({
+    env: { P_SERVER_UUID: 'srv-ovh-1' },
+    probeSystem: true,
+    probeNetwork: true,
+    osImpl: { hostname: () => 'panel-node', platform: () => 'linux' },
+    fsImpl: createFakeFs(['/home/container']),
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        success: true,
+        ip: '198.51.100.30',
+        connection: { org: 'OVH SAS', isp: 'OVHcloud', domain: 'ovh.net' },
+      }),
+    }),
+    dnsImpl: { reverse: async () => [] },
+  });
+  assert.equal(ovhPanelHost, 'Panel (OVHcloud)');
+
+  resetHostDetectorCache();
+  let fetchCalled = false;
+  const renderHost = await detectHostingProviderAsync({
+    env: { RENDER: 'true' },
+    probeSystem: true,
+    probeNetwork: true,
+    osImpl: { hostname: () => 'render-1', platform: () => 'linux' },
+    fsImpl: createFakeFs(),
+    fetchImpl: async () => {
+      fetchCalled = true;
+      return { ok: false };
+    },
+  });
+  assert.equal(renderHost, 'Render');
+  assert.equal(fetchCalled, false);
+  resetHostDetectorCache();
+});
+
+test('detectPlatform and detectPlatformAsync resolve non-empty host strings without sample defaults', async () => {
   const detected = detectPlatform();
   assert.equal(typeof detected, 'string');
   assert.ok(detected.trim().length > 0);
   assert.notEqual(detected, 'Bothosting');
+
+  const detectedAsync = await detectPlatformAsync();
+  assert.equal(typeof detectedAsync, 'string');
+  assert.ok(detectedAsync.trim().length > 0);
+  assert.notEqual(detectedAsync, 'Bothosting');
+  resetHostDetectorCache();
 });
+
