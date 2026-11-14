@@ -14,16 +14,16 @@ let networkProbeCache = {
 let inFlightNetworkProbe = null;
 
 const EXPLICIT_PROVIDER_ALIASES = {
-  katabump: 'Katabump.com',
-  'katabump.com': 'Katabump.com',
-  'bot-hosting': 'Bot-Hosting.net',
-  bothosting: 'Bot-Hosting.net',
-  'bot-hosting.net': 'Bot-Hosting.net',
-  optiklink: 'Optiklink.com',
-  'optiklink.com': 'Optiklink.com',
+  katabump: 'Katabump',
+  'katabump.com': 'Katabump',
+  'bot-hosting': 'Bot-Hosting',
+  bothosting: 'Bot-Hosting',
+  'bot-hosting.net': 'Bot-Hosting',
+  optiklink: 'Optiklink',
+  'optiklink.com': 'Optiklink',
   cybrancee: 'Cybrancee',
-  pella: 'Pella.app',
-  'pella.app': 'Pella.app',
+  pella: 'Pella',
+  'pella.app': 'Pella',
   solarhosting: 'SolarHosting',
   witherhosting: 'WitherHosting',
   bisecthosting: 'BisectHosting',
@@ -33,9 +33,9 @@ const EXPLICIT_PROVIDER_ALIASES = {
   railway: 'Railway',
   koyeb: 'Koyeb',
   render: 'Render',
-  fly: 'Fly.io',
-  'fly.io': 'Fly.io',
-  flyio: 'Fly.io',
+  fly: 'Fly',
+  'fly.io': 'Fly',
+  flyio: 'Fly',
   replit: 'Replit',
   glitch: 'Glitch',
   github: 'GitHub Actions',
@@ -62,11 +62,11 @@ const SECRET_OR_PROMO_ENV_RE =
   /^(?:SESSION.*|HOSTING_URL|CHANNEL_.*|BOT_PIC|MENU_IMAGES|GITHUB_REPO|UPDATE_REPOSITORY|AUTO_JOIN_GROUP_LINK|OWNER_.*|USER_LID|.*(?:KEY|SECRET|TOKEN|PASS|PWD_HASH|COOKIE|AUTH|DSN|DATABASE_URL).*)$/i;
 
 const KNOWN_BRAND_PATTERNS = [
-  { pattern: /\bkatabump\b|katabump\.com|\bkatabamp\b/i, label: 'Katabump.com', isBotHost: true },
-  { pattern: /bot-?hosting\.net|\bbot-?hosting\b/i, label: 'Bot-Hosting.net', isBotHost: true },
-  { pattern: /\boptiklink\b|optiklink\.com/i, label: 'Optiklink.com', isBotHost: true },
+  { pattern: /\bkatabump\b|katabump\.com|\bkatabamp\b/i, label: 'Katabump', isBotHost: true },
+  { pattern: /bot-?hosting\.net|\bbot-?hosting\b/i, label: 'Bot-Hosting', isBotHost: true },
+  { pattern: /\boptiklink\b|optiklink\.com/i, label: 'Optiklink', isBotHost: true },
   { pattern: /\bcybrancee\b/i, label: 'Cybrancee', isBotHost: true },
-  { pattern: /\bpella\.app\b/i, label: 'Pella.app', isBotHost: true },
+  { pattern: /\bpella\.app\b/i, label: 'Pella', isBotHost: true },
   { pattern: /\bsolarhosting\b/i, label: 'SolarHosting', isBotHost: true },
   { pattern: /\bwitherhosting\b/i, label: 'WitherHosting', isBotHost: true },
   { pattern: /\bbisecthosting\b/i, label: 'BisectHosting', isBotHost: true },
@@ -75,7 +75,7 @@ const KNOWN_BRAND_PATTERNS = [
   { pattern: /\brailway\.app\b|\brailway\.internal\b/i, label: 'Railway', isBotHost: true },
   { pattern: /\bonrender\.com\b|\brender\.com\b/i, label: 'Render', isBotHost: true },
   { pattern: /\bkoyeb\.app\b|\bkoyeb\b/i, label: 'Koyeb', isBotHost: true },
-  { pattern: /\bfly\.dev\b|\bfly\.io\b|\bflyio\b/i, label: 'Fly.io', isBotHost: true },
+  { pattern: /\bfly\.dev\b|\bfly\.io\b|\bflyio\b/i, label: 'Fly', isBotHost: true },
   { pattern: /\breplit\.co\b|\brepl\.co\b|\breplit\.dev\b/i, label: 'Replit', isBotHost: true },
   { pattern: /\bglitch\.me\b|\bglitch\.com\b/i, label: 'Glitch', isBotHost: true },
   { pattern: /\bvercel\.app\b|\bvercel\.com\b/i, label: 'Vercel', isBotHost: true },
@@ -100,7 +100,18 @@ export function normalizeExplicitHostProvider(rawValue) {
   if (lowered === 'auto' || lowered === 'unknown' || lowered === 'unknown host') {
     return '';
   }
-  return EXPLICIT_PROVIDER_ALIASES[lowered] || trimmed;
+  if (EXPLICIT_PROVIDER_ALIASES[lowered]) {
+    return EXPLICIT_PROVIDER_ALIASES[lowered];
+  }
+  const strippedHost = lowered.replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
+  if (EXPLICIT_PROVIDER_ALIASES[strippedHost]) {
+    return EXPLICIT_PROVIDER_ALIASES[strippedHost];
+  }
+  const matched = matchProviderFromText(trimmed, { includeDatacenters: true });
+  if (matched?.label) {
+    return matched.label;
+  }
+  return trimmed;
 }
 
 function readTextSafe(fsImpl, filePath) {
@@ -194,9 +205,12 @@ export function resolveNetworkHostHint({ ip, ptrHostnames = [], isp = '', org = 
   if (brandMatch) {
     return brandMatch;
   }
-  const cleanOrg = String(org || isp || '')
+  let cleanOrg = String(org || isp || '')
     .replace(/\s+(?:LLC|Inc\.?|Ltd\.?|GmbH|SAS|B\.V\.|S\.A\.|Corp\.?|Limited)$/i, '')
     .trim();
+  if (cleanOrg && !/\s/.test(cleanOrg)) {
+    cleanOrg = cleanOrg.replace(/\.(?:com|net|org|io|app|dev|cloud|host|xyz|top)$/i, '');
+  }
   if (cleanOrg && !/^(?:unknown|none|n\/a)$/i.test(cleanOrg)) {
     return { label: cleanOrg, isBotHost: false };
   }
@@ -332,19 +346,19 @@ export function detectHostingProvider({
   }
 
   if (safeEnv.KATABUMP || safeEnv.KATABUMP_SERVER || safeEnv.KATABAMP) {
-    return 'Katabump.com';
+    return 'Katabump';
   }
   if (safeEnv.BOTHOSTING || safeEnv.BOT_HOSTING) {
-    return 'Bot-Hosting.net';
+    return 'Bot-Hosting';
   }
   if (safeEnv.OPTIKLINK) {
-    return 'Optiklink.com';
+    return 'Optiklink';
   }
   if (safeEnv.CYBRANCEE) {
     return 'Cybrancee';
   }
   if (safeEnv.PELLA) {
-    return 'Pella.app';
+    return 'Pella';
   }
   if (safeEnv.SOLARHOSTING) {
     return 'SolarHosting';
@@ -381,7 +395,7 @@ export function detectHostingProvider({
   }
 
   if (safeEnv.FLY_APP_NAME || safeEnv.FLY_MACHINE_ID || safeEnv.FLY_REGION || safeEnv.FLY_ALLOC_ID) {
-    return 'Fly.io';
+    return 'Fly';
   }
 
   if (safeEnv.K_SERVICE || safeEnv.CLOUD_RUN_JOB || safeEnv.K_REVISION) {
@@ -490,7 +504,7 @@ export function detectHostingProvider({
   }
 
   const configFallback = normalizeExplicitHostProvider(config?.HOSTING_PROVIDER);
-  if (configFallback && configFallback !== 'Bot-Hosting.net') {
+  if (configFallback && configFallback !== 'Bot-Hosting') {
     return configFallback;
   }
 

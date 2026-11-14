@@ -47,12 +47,12 @@ test('detectHostingEnvironment detects Heroku, Deploy Hooks, Katabump, Bot-Hosti
 
   assert.deepEqual(detectHostingEnvironment({ KATABUMP: 'true' }), {
     mode: 'self',
-    label: 'Katabump.com',
+    label: 'Katabump',
   });
 
   assert.deepEqual(detectHostingEnvironment({ HOST_PROVIDER: 'katabump' }), {
     mode: 'self',
-    label: 'Katabump.com',
+    label: 'Katabump',
   });
 
   assert.deepEqual(detectHostingEnvironment({ P_SERVER_UUID: 'uuid-123' }), {
@@ -62,7 +62,7 @@ test('detectHostingEnvironment detects Heroku, Deploy Hooks, Katabump, Bot-Hosti
 
   assert.deepEqual(detectHostingEnvironment({ HOST_PROVIDER: 'bot-hosting' }), {
     mode: 'self',
-    label: 'Bot-Hosting.net',
+    label: 'Bot-Hosting',
   });
 
   assert.deepEqual(detectHostingEnvironment({ RAILWAY_ENVIRONMENT: 'production' }), {
@@ -241,7 +241,7 @@ test('runBotUpdate supports Katabump/Panel direct updates, checkOnly, up_to_date
       execImpl: execMock,
     });
     assert.equal(selfResult.status, 'updated_self');
-    assert.equal(selfResult.host.label, 'Katabump.com');
+    assert.equal(selfResult.host.label, 'Katabump');
     assert.equal(selfResult.packageJsonChanged, true);
     assert.equal(selfResult.restartRecommended, true);
     assert.deepEqual(execCalls, [['npm', 'install', '--legacy-peer-deps']]);

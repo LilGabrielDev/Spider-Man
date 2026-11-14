@@ -23,30 +23,31 @@ function createFakeFs(existingPaths = [], files = {}) {
   };
 }
 
-test('normalizeExplicitHostProvider normalizes aliases and ignores auto/unknown placeholders', () => {
+test('normalizeExplicitHostProvider normalizes aliases and strips URL/domain link suffixes', () => {
   assert.equal(normalizeExplicitHostProvider(''), '');
   assert.equal(normalizeExplicitHostProvider('auto'), '');
   assert.equal(normalizeExplicitHostProvider('Unknown'), '');
   assert.equal(normalizeExplicitHostProvider('unknown host'), '');
-  assert.equal(normalizeExplicitHostProvider('katabump'), 'Katabump.com');
-  assert.equal(normalizeExplicitHostProvider('Bothosting'), 'Bot-Hosting.net');
+  assert.equal(normalizeExplicitHostProvider('katabump'), 'Katabump');
+  assert.equal(normalizeExplicitHostProvider('https://katabump.com/'), 'Katabump');
+  assert.equal(normalizeExplicitHostProvider('Bothosting'), 'Bot-Hosting');
   assert.equal(normalizeExplicitHostProvider('render'), 'Render');
   assert.equal(normalizeExplicitHostProvider('Custom Cloud'), 'Custom Cloud');
 });
 
-test('detectHostingProvider detects all major cloud, PaaS, and panel environments automatically', () => {
+test('detectHostingProvider detects all major cloud, PaaS, and panel environments as clean host names', () => {
   assert.equal(detectHostingProvider({ env: { DYNO: 'web.1' }, probeSystem: false }), 'Heroku');
-  assert.equal(detectHostingProvider({ env: { KATABUMP: '1' }, probeSystem: false }), 'Katabump.com');
+  assert.equal(detectHostingProvider({ env: { KATABUMP: '1' }, probeSystem: false }), 'Katabump');
   assert.equal(
     detectHostingProvider({ env: { HOSTNAME: 'node-katabump-01' }, probeSystem: false }),
-    'Katabump.com',
+    'Katabump',
   );
-  assert.equal(detectHostingProvider({ env: { BOTHOSTING: '1' }, probeSystem: false }), 'Bot-Hosting.net');
-  assert.equal(detectHostingProvider({ env: { OPTIKLINK: '1' }, probeSystem: false }), 'Optiklink.com');
+  assert.equal(detectHostingProvider({ env: { BOTHOSTING: '1' }, probeSystem: false }), 'Bot-Hosting');
+  assert.equal(detectHostingProvider({ env: { OPTIKLINK: '1' }, probeSystem: false }), 'Optiklink');
   assert.equal(detectHostingProvider({ env: { RAILWAY_PROJECT_ID: 'proj-1' }, probeSystem: false }), 'Railway');
   assert.equal(detectHostingProvider({ env: { RENDER: 'true' }, probeSystem: false }), 'Render');
   assert.equal(detectHostingProvider({ env: { KOYEB_SERVICE_ID: 'svc-1' }, probeSystem: false }), 'Koyeb');
-  assert.equal(detectHostingProvider({ env: { FLY_APP_NAME: 'spider-bot' }, probeSystem: false }), 'Fly.io');
+  assert.equal(detectHostingProvider({ env: { FLY_APP_NAME: 'spider-bot' }, probeSystem: false }), 'Fly');
   assert.equal(detectHostingProvider({ env: { K_SERVICE: 'spider-service' }, probeSystem: false }), 'Google Cloud Run');
   assert.equal(detectHostingProvider({ env: { FUNCTION_TARGET: 'handler' }, probeSystem: false }), 'Google Cloud');
   assert.equal(detectHostingProvider({ env: { REPL_ID: 'repl-123' }, probeSystem: false }), 'Replit');
@@ -125,7 +126,7 @@ test('detectHostingProvider ignores HOSTING_URL sample promo link and legacy Bot
       env: { HOSTING_PROVIDER: 'Bothosting' },
       probeSystem: false,
     }),
-    'Bot-Hosting.net',
+    'Bot-Hosting',
   );
 
   assert.equal(
@@ -133,7 +134,7 @@ test('detectHostingProvider ignores HOSTING_URL sample promo link and legacy Bot
       env: { HOST_PROVIDER: 'katabump', RENDER: 'true' },
       probeSystem: false,
     }),
-    'Katabump.com',
+    'Katabump',
   );
 });
 
@@ -145,7 +146,7 @@ test('detectHostingProvider probes system hostname, resolv.conf, DMI vendor, /ho
       osImpl: { hostname: () => 'uk-katabump-02', platform: () => 'linux' },
       fsImpl: createFakeFs(),
     }),
-    'Katabump.com',
+    'Katabump',
   );
 
   assert.equal(
@@ -234,7 +235,7 @@ test('detectHostingProviderAsync resolves PTR/ASN hints for panels and skips net
     }),
     dnsImpl: { reverse: async () => ['node3.katabump.com'] },
   });
-  assert.equal(katabumpHost, 'Katabump.com');
+  assert.equal(katabumpHost, 'Katabump');
 
   resetHostDetectorCache();
   const bothostingHost = await detectHostingProviderAsync({
@@ -253,7 +254,7 @@ test('detectHostingProviderAsync resolves PTR/ASN hints for panels and skips net
     }),
     dnsImpl: { reverse: async () => ['fi1.bot-hosting.net'] },
   });
-  assert.equal(bothostingHost, 'Bot-Hosting.net');
+  assert.equal(bothostingHost, 'Bot-Hosting');
 
   resetHostDetectorCache();
   const ovhPanelHost = await detectHostingProviderAsync({
@@ -302,6 +303,17 @@ test('detectPlatform and detectPlatformAsync resolve non-empty host strings with
   assert.equal(typeof detectedAsync, 'string');
   assert.ok(detectedAsync.trim().length > 0);
   assert.notEqual(detectedAsync, 'Bothosting');
+  assert.equal(/https?:\/\//i.test(detectedAsync), false);
   resetHostDetectorCache();
+});
+
+test('HOSTING_URL link is retained in config while startup notification only displays host name', async () => {
+  const fsModule = await import('node:fs');
+  const pathModule = await import('node:path');
+  const { default: config } = await import('../../spider/config.js');
+  assert.ok(String(config.HOSTING_URL || '').startsWith('https://'));
+  const indexSrc = fsModule.readFileSync(pathModule.resolve(process.cwd(), 'spider/index.js'), 'utf8');
+  assert.equal(indexSrc.includes('_0x53c771(0x22a)'), false);
+  assert.equal(indexSrc.includes('_0x49a1d3(0x22a)'), false);
 });
 
