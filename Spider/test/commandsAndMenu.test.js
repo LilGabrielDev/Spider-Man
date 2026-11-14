@@ -719,3 +719,49 @@ test('all 189 commands execute safely without throwing uncaught exceptions', asy
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('CHANNEL_JID defaults to blank and commands/wrapper handle empty channel JID safely', async () => {
+  const origChannelJid = process.env.CHANNEL_JID;
+  const origNewsletterJid = process.env.NEWSLETTER_JID;
+  const origConfigChannelJid = config.CHANNEL_JID;
+
+  try {
+    delete process.env.CHANNEL_JID;
+    delete process.env.NEWSLETTER_JID;
+
+    const freshConfigUrl = `${pathToFileURL(path.resolve('spider/config.js')).href}?cacheBust=${Date.now()}`;
+    const freshConfigMod = await import(freshConfigUrl);
+    const freshConfig = freshConfigMod.default || freshConfigMod;
+    assert.equal(freshConfig.CHANNEL_JID, '');
+
+    const franceUtilsUrl = `${pathToFileURL(path.resolve('Spider/france/utils.js')).href}?cacheBust=${Date.now()}`;
+    const franceUtilsMod = await import(franceUtilsUrl);
+    const franceUtils = franceUtilsMod.default || franceUtilsMod;
+    assert.equal(franceUtils.NEWSLETTER_JID, '');
+
+    config.CHANNEL_JID = '';
+    const sent = [];
+    const sock = createMockSock(sent);
+    for (const cmdName of ['host', 'help', 'npm']) {
+      const cmd = commandsMap.get(cmdName);
+      assert.ok(cmd, `Expected command ${cmdName} to be loaded`);
+      await cmd.execute(makeCtx(cmdName, {
+        sock,
+        text: cmdName === 'npm' ? 'axios' : '',
+        args: cmdName === 'npm' ? ['axios'] : [],
+      }));
+    }
+    assert.ok(sent.length >= 3, 'Expected commands to send messages cleanly with blank CHANNEL_JID');
+
+    const spiderIndexSrc = fs.readFileSync(path.resolve('spider/index.js'), 'utf8');
+    assert.match(spiderIndexSrc, /forwardedNewsletterMessageInfo/);
+    assert.match(spiderIndexSrc, /businessMessageForwardInfo/);
+  } finally {
+    config.CHANNEL_JID = origConfigChannelJid;
+    if (origChannelJid === undefined) delete process.env.CHANNEL_JID;
+    else process.env.CHANNEL_JID = origChannelJid;
+    if (origNewsletterJid === undefined) delete process.env.NEWSLETTER_JID;
+    else process.env.NEWSLETTER_JID = origNewsletterJid;
+  }
+});
+
