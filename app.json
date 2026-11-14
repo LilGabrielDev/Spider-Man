@@ -40,8 +40,8 @@
       "required": false
     },
     "CHANNEL_JID": {
-      "description": "WhatsApp channel JID used in forwarded message metadata",
-      "value": "120363431857319034@newsletter",
+      "description": "WhatsApp channel JID used in forwarded message metadata (optional; leave blank to disable)",
+      "value": "",
       "required": false
     },
     "CHANNEL_URL": {
