@@ -1,1 +1,65 @@
-const _0x2073f5=_0x2195;import{downloadContentFromMessage}from'@whiskeysockets/baileys';import _0x1ee0e9 from'fs-extra';import _0x3984a4 from'path';import{Jimp}from'jimp';import{MESSAGES}from'../france/index.js';const S_WHATSAPP_NET=_0x2073f5(0x0);function _0x2bb1(){const _0x1ab468=['s.whatsapp.net','width','bitmap','quotedMessage','gpp','1.\x20Got\x20quoted\x20image\x20message','join','temp','writeFile','3.\x20File\x20saved\x20to:','scaleToFit','set','6.\x20Query\x20successful,\x20response:','sendMessage','===\x20FULLGPP\x20DEBUG\x20END\x20(SUCCESS)\x20===','===\x20FULLGPP\x20ERROR\x20===','error','Error\x20stack:'];_0x2bb1=function(){return _0x1ab468;};return _0x2bb1();}function _0x2195(_0x2bb130,_0x2195bf){_0x2bb130=_0x2bb130-0x0;const _0x2dabcf=_0x2bb1();let _0x58b236=_0x2dabcf[_0x2bb130];return _0x58b236;}async function getBuffer(_0x48325f,_0x40eb83){const _0x5d0cc1=await downloadContentFromMessage(_0x48325f,_0x40eb83);const _0x19d0bd=[];for await(const _0x2b8507 of _0x5d0cc1)_0x19d0bd['push'](_0x2b8507);return Buffer['concat'](_0x19d0bd);}const processGroupImage=async _0x55ee6b=>{const _0x31c118=_0x2073f5;const _0x1ab954=await Jimp['read'](_0x55ee6b);const _0x3812e2=_0x1ab954['crop']({'x':0x0,'y':0x0,'w':_0x1ab954['bitmap'][_0x31c118(0x1)],'h':_0x1ab954[_0x31c118(0x2)]['height']})['scaleToFit']({'w':0x2d0,'h':0x2d0});return await _0x3812e2['getBuffer']('image/jpeg');};export const commands=[{'name':'fullgpp','description':'Set\x20group\x20profile\x20picture\x20without\x20cropping\x20or\x20compression.','category':'Group','aliases':['fullgp','gpp'],'groupOnly':!![],'adminOnly':!![],'botAdminOnly':!![],'execute':async({sock:_0x39b3c7,from:_0x363cf1,text:_0x4c82ee,msg:_0x3d9c00})=>{const _0x3c7ae2=_0x2073f5;const _0x871035=_0x3d9c00['message']?.['extendedTextMessage']?.['contextInfo']?.[_0x3c7ae2(0x3)];const _0x2f4820=_0x871035?.['imageMessage'];if(!_0x2f4820){return _0x39b3c7['sendMessage'](_0x363cf1,{'text':MESSAGES[_0x3c7ae2(0x4)]['noImage']},{'quoted':_0x3d9c00});}let _0x264c6f=null;try{const _0x279c23=await getBuffer(_0x2f4820,'image');_0x264c6f=_0x3984a4[_0x3c7ae2(0x6)](process['cwd'](),_0x3c7ae2(0x7),Date['now']()+'.jpg');await _0x1ee0e9['ensureDir'](_0x3984a4['dirname'](_0x264c6f));await _0x1ee0e9[_0x3c7ae2(0x8)](_0x264c6f,_0x279c23);const _0x3a1d3e=await Jimp['read'](_0x264c6f);const _0x310833=_0x3a1d3e['crop']({'x':0x0,'y':0x0,'w':_0x3a1d3e['bitmap']['width'],'h':_0x3a1d3e['bitmap']['height']})[_0x3c7ae2(0xa)]({'w':0x2d0,'h':0x2d0});const _0x48b746=await _0x310833['getBuffer']('image/jpeg');await _0x39b3c7['query']({'tag':'iq','attrs':{'to':_0x363cf1,'type':_0x3c7ae2(0xb),'xmlns':'w:profile:picture'},'content':[{'tag':'picture','attrs':{'type':'image'},'content':_0x48b746}]});await _0x39b3c7[_0x3c7ae2(0xd)](_0x363cf1,{'text':MESSAGES[_0x3c7ae2(0x4)]['success']},{'quoted':_0x3d9c00});}catch(_0x43cb02){console['error'](_0x3c7ae2(0xf),_0x43cb02['message']);await _0x39b3c7['sendMessage'](_0x363cf1,{'text':MESSAGES[_0x3c7ae2(0x4)][_0x3c7ae2(0x10)]},{'quoted':_0x3d9c00});}finally{if(_0x264c6f)await _0x1ee0e9['remove'](_0x264c6f)['catch'](()=>{});}}}];
+import { downloadContentFromMessage } from '@whiskeysockets/baileys';
+import fs from 'fs-extra';
+import path from 'path';
+import { Jimp } from 'jimp';
+import { MESSAGES } from '../france/index.js';
+import { extractContextInfo, isSendMessageFailure } from '../../spider/utils/groupActionHelper.js';
+
+const S_WHATSAPP_NET = 's.whatsapp.net';
+
+async function getBuffer(mediaMsg, mediaType) {
+  const stream = await downloadContentFromMessage(mediaMsg, mediaType);
+  const chunks = [];
+  for await (const chunk of stream) chunks.push(chunk);
+  return Buffer.concat(chunks);
+}
+
+export const commands = [
+  {
+    name: 'fullgpp',
+    description: 'Set group profile picture without cropping or compression.',
+    category: 'Group',
+    aliases: ['fullgp', 'gpp'],
+    groupOnly: true,
+    adminOnly: true,
+    botAdminOnly: true,
+    execute: async ({ sock, from, msg }) => {
+      const { quotedMessage } = extractContextInfo(msg);
+      const imageMsg = quotedMessage?.imageMessage;
+      if (!imageMsg) {
+        return sock.sendMessage(from, { text: MESSAGES.gpp.noImage }, { quoted: msg });
+      }
+      let tempPath = null;
+      try {
+        const buf = await getBuffer(imageMsg, 'image');
+        tempPath = path.join(process.cwd(), 'temp', `${Date.now()}.jpg`);
+        await fs.ensureDir(path.dirname(tempPath));
+        await fs.writeFile(tempPath, buf);
+        const image = await Jimp.read(tempPath);
+        const resized = image
+          .crop({ x: 0, y: 0, w: image.bitmap.width, h: image.bitmap.height })
+          .scaleToFit({ w: 720, h: 720 });
+        const imgBuffer = await resized.getBuffer('image/jpeg');
+
+        let res;
+        if (typeof sock.updateProfilePicture === 'function') {
+          res = await sock.updateProfilePicture(from, imgBuffer);
+        } else {
+          res = await sock.query({
+            tag: 'iq',
+            attrs: { to: S_WHATSAPP_NET, target: from, type: 'set', xmlns: 'w:profile:picture' },
+            content: [{ tag: 'picture', attrs: { type: 'image' }, content: imgBuffer }],
+          });
+        }
+        if (isSendMessageFailure(res)) throw new Error('fullgpp-failed');
+        await sock.__spiderInvalidateGroupCache?.(from);
+        await sock.sendMessage(from, { text: MESSAGES.gpp.success }, { quoted: msg });
+      } catch (err) {
+        console.error('=== FULLGPP ERROR ===', err.message);
+        await sock.sendMessage(from, { text: MESSAGES.gpp.error }, { quoted: msg });
+      } finally {
+        if (tempPath) await fs.remove(tempPath).catch(() => {});
+      }
+    },
+  },
+];

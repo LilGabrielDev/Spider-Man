@@ -1,1 +1,339 @@
-const _0x455e19=_0xed3b;import{createRequire}from'node:module';import{downloadMediaMessage}from'@whiskeysockets/baileys';import _0x21bd49 from'../../spider/config.js';import{collectSenderIdentities,resolveGroupRolesAsync}from'../../spider/utils/groupRoleResolver.js';const require=createRequire(import.meta.url);const legacyConfig=require('../legacy/lil/config/settings.js');const legacyLoader=require('../legacy/lil/handlers/loader.js');const OWNER_ONLY_NAMES=new Set([_0x455e19(0x0),_0x455e19(0x1),'setvar','triggerupdate','update','broadcast',_0x455e19(0x2),'robotbroadcast','massdm',_0x455e19(0x3),'massdemote',_0x455e19(0x4),_0x455e19(0x5),'mentionbomb','shell','eval','eval2','restart','restartbot',_0x455e19(0x6),'kill','cleartmp','clearcache','getcmd','getfunc','joingc','leavegc','groupclone','tokengen','lockdown',_0x455e19(0x7),'setbotpic','setmenupic','setbotname',_0x455e19(0x8),'setfooter','setcaption','botidentity','rebrand','tobugil','undress',_0x455e19(0x9),'hentai','xvideos',_0x455e19(0xa),'boobs','fuck']);const ADMIN_ONLY_NAMES=new Set(['add',_0x455e19(0xb),'reject-all','requests','remove','kick','promote','demote','promoteall',_0x455e19(0xc),_0x455e19(0xd),'open','link','revoke','clear',_0x455e19(0xe),'tagall',_0x455e19(0xf),_0x455e19(0x10),'warn','resetwarn','setwarncount','setwarnlimit',_0x455e19(0x11),_0x455e19(0x12),'antibot','antilink','antistatusmention','antitag',_0x455e19(0x13),'mute','unmute',_0x455e19(0x14),'pinm','togstatus','accept','reject',_0x455e19(0x15),_0x455e19(0x16)]);function textFromMessage(_0x35b3c2={}){const _0x1e21ec=_0x455e19;return _0x35b3c2['conversation']||_0x35b3c2['extendedTextMessage']?.['text']||_0x35b3c2['imageMessage']?.['caption']||_0x35b3c2['videoMessage']?.['caption']||_0x35b3c2['documentMessage']?.['caption']||_0x35b3c2['buttonsResponseMessage']?.['selectedButtonId']||_0x35b3c2['listResponseMessage']?.['singleSelectReply']?.['selectedRowId']||_0x35b3c2['templateButtonReplyMessage']?.[_0x1e21ec(0x17)]||'';}function typeFromMessage(_0x2598c8={}){return Object['keys'](_0x2598c8)[0x0]||'unknown';}function normalizeNumber(_0x23adc6){const _0x359806=_0x455e19;return String(_0x23adc6||'')['split']('@')[0x0][_0x359806(0x18)](':')[0x0][_0x359806(0x19)](/\D/g,'');}function _0xed3b(_0x12c0bc,_0xed3b24){_0x12c0bc=_0x12c0bc-0x0;const _0x47422f=_0x12c0();let _0x3cf8a6=_0x47422f[_0x12c0bc];return _0x3cf8a6;}function makeMessageView({raw:_0x791c87,sock:_0x47f63f,from:_0x199433,sender:_0x17727f,senderNumber:_0x205f9f,isOwner:_0xe635f6,groupMeta:_0x241a2e,isAdmin:_0x679de0,isBotAdmin:_0x58c501}){const _0x1e1ebf=_0x455e19;const _0x333fab=_0x791c87?.['message']||{};const _0x4b94e0=_0x333fab['extendedTextMessage']?.['contextInfo']||_0x333fab['imageMessage']?.[_0x1e1ebf(0x1a)]||_0x333fab['videoMessage']?.['contextInfo']||_0x333fab['audioMessage']?.[_0x1e1ebf(0x1a)]||_0x333fab[_0x1e1ebf(0x1b)]?.[_0x1e1ebf(0x1a)]||_0x333fab['stickerMessage']?.['contextInfo']||{};const _0x5775c4=_0x4b94e0[_0x1e1ebf(0x1c)]||null;const _0x3b40a9=_0x4b94e0[_0x1e1ebf(0x1d)]?{'remoteJid':_0x199433,'id':_0x4b94e0[_0x1e1ebf(0x1d)],'participant':_0x4b94e0['participant'],'fromMe':![]}:null;const _0x2e07ed=_0x5775c4?{'key':_0x3b40a9,'message':_0x5775c4,'sender':_0x4b94e0[_0x1e1ebf(0x1e)]||_0x4b94e0['remoteJid']||'','chat':_0x199433,'mtype':typeFromMessage(_0x5775c4),'text':textFromMessage(_0x5775c4),'body':textFromMessage(_0x5775c4),'mimetype':Object['values'](_0x5775c4)[0x0]?.['mimetype']||'',get 'msg'(){return Object['values'](_0x5775c4)[0x0]||null;},async 'download'(){if(!_0x3b40a9)throw new Error('Quoted\x20media\x20key\x20is\x20unavailable.');const _0x317ea4={'key':_0x3b40a9,'message':_0x5775c4};return downloadMediaMessage(_0x317ea4,'buffer',{});}}:null;const _0x32d608={..._0x791c87,'key':_0x791c87?.['key']||{},'message':_0x333fab,'chat':_0x199433,'from':_0x199433,'sender':_0x17727f||'','senderNumber':_0x205f9f||normalizeNumber(_0x17727f),'pushName':_0x791c87?.['pushName']||'WhatsApp\x20user','body':textFromMessage(_0x333fab),'text':textFromMessage(_0x333fab),'mtype':typeFromMessage(_0x333fab),'isGroup':_0x199433[_0x1e1ebf(0x1f)](_0x1e1ebf(0x20)),'isOwner':Boolean(_0xe635f6),'fromMe':Boolean(_0x791c87?.[_0x1e1ebf(0x21)]?.['fromMe']),'isAdmin':Boolean(_0x679de0),'isBotAdmin':Boolean(_0x58c501),'isSuperAdmin':Boolean(_0x679de0),'isSudo':Boolean(_0xe635f6),'isButtonResponse':![],'reactKey':_0x791c87?.['key'],'mentionedJid':_0x4b94e0['mentionedJid']||[],'tagged':_0x4b94e0['mentionedJid']||[],'participants':_0x241a2e?.[_0x1e1ebf(0x22)]||[],'groupMetadata':_0x241a2e||null,'quoted':_0x2e07ed,'quotedMsg':_0x5775c4,'quotedKey':_0x3b40a9,'quotedUser':_0x2e07ed?.['sender']||'',async 'download'(){const _0x4ac76c=_0x1e1ebf;return downloadMediaMessage(_0x791c87,_0x4ac76c(0x23),{});},async 'reply'(_0x35985d,_0x231857={}){const _0x2d0cd8=typeof _0x35985d==='string'?{'text':_0x35985d}:_0x35985d;return _0x47f63f['sendMessage'](_0x199433,_0x2d0cd8,{'quoted':_0x791c87,..._0x231857});}};_0x32d608['react']=async _0x22498c=>_0x47f63f['sendMessage'](_0x199433,{'react':{'text':_0x22498c,'key':_0x791c87['key']}});_0x32d608['delete']=async()=>_0x47f63f['sendMessage'](_0x199433,{'delete':_0x791c87[_0x1e1ebf(0x21)]});return _0x32d608;}async function resolveGroupContext(_0x22ce0f,_0x125ddb,_0x19b595,_0x42a879,_0xmsg=null){if(!String(_0x125ddb||'')['endsWith']('@g.us'))return{'groupMeta':null,'isAdmin':![],'isBotAdmin':![]};try{const _0x41efeb=await _0x22ce0f['groupMetadata'](_0x125ddb);const _0xroles=await resolveGroupRolesAsync({'metadata':_0x41efeb,'sock':_0x22ce0f,'senderJids':collectSenderIdentities(_0xmsg,[_0x19b595,_0x42a879])});return{'groupMeta':_0x41efeb,'isAdmin':_0xroles['isSenderAdmin'],'isBotAdmin':_0xroles['isBotAdmin']};}catch{return{'groupMeta':null,'isAdmin':![],'isBotAdmin':![]};}}function _0x12c0(){const _0x42113c=['allvar','getvar','broadcaststatus','masspromote','nuke','xkill','shutdown','unlockdown','setmenu','morph','ass','approve-all','demoteall','close','clearchat','tagadmins','foreigners','welcome','goodbye','antiforeign','pin','acceptall','rejectall','selectedId','split','replace','contextInfo','documentMessage','quotedMessage','stanzaId','participant','endsWith','@g.us','key','participants','buffer','jid','filter','some','phoneNumber','admin','Spider\x20Man\x20Owner','MODE','loadPlugins','getAllCmds','map','toLowerCase','Legacy','has','heroku','settings','desc','Legacy\x20','groupOnly','sock','senderNumber','from','isGroup','reply'];_0x12c0=function(){return _0x42113c;};return _0x12c0();}export async function loadLegacyCommands(){const _0x18227d=_0x455e19;legacyConfig['BOT_NAME']=_0x21bd49['BOT_NAME']||'Spider\x20Man';process.env.BOT_NAME=legacyConfig['BOT_NAME'];legacyConfig['PACK_NAME']=legacyConfig['BOT_NAME'];legacyConfig['BOT_PIC']=_0x21bd49['BOT_PIC'];if(_0x21bd49['BOT_PIC'])process.env.BOT_PIC=_0x21bd49['BOT_PIC'];legacyConfig['OWNER_NUMBER']=_0x21bd49['OWNER_NUMBER']||process.env.OWNER_NUMBER||'';legacyConfig['OWNER_NAME']=_0x21bd49['OWNER_NAME']||_0x18227d(0x29);legacyConfig['MODE']=_0x21bd49[_0x18227d(0x2a)];legacyConfig['BOT_PREFIX']=_0x21bd49['PREFIXES']?.[0x0]||'.';await legacyLoader[_0x18227d(0x2b)]();const _0x406858=legacyLoader[_0x18227d(0x2c)]();return _0x406858[_0x18227d(0x2d)](_0x6ee308=>{const _0x5d1398=_0x18227d;const _0x3006c2=String(_0x6ee308['name']||'')['toLowerCase']();const _0x425f97=(_0x6ee308['aliases']||[])['map'](_0x397b67=>String(_0x397b67)[_0x5d1398(0x2e)]())['filter'](Boolean);const _0x22251d=String(_0x6ee308['category']||_0x5d1398(0x2f))[_0x5d1398(0x19)](/^./,_0x396915=>_0x396915['toUpperCase']());const _0x493989=OWNER_ONLY_NAMES[_0x5d1398(0x30)](_0x3006c2)||['owner',_0x5d1398(0x31),_0x5d1398(0x32)]['includes'](_0x6ee308['category']);const _0x430b40=!_0x493989&&(_0x6ee308['adminOnly']||ADMIN_ONLY_NAMES['has'](_0x3006c2));return{'name':_0x3006c2,'aliases':_0x425f97,'description':_0x6ee308[_0x5d1398(0x33)]||'Legacy\x20'+_0x22251d+'\x20feature\x20from\x20the\x20running\x20Spider\x20Man\x20bot.','category':_0x5d1398(0x34)+_0x22251d,'ownerOnly':Boolean(_0x6ee308['ownerOnly']||_0x493989),'groupOnly':Boolean(_0x6ee308[_0x5d1398(0x35)]),'adminOnly':Boolean(_0x430b40),'execute':async _0x30a7e7=>{const _0x3409d8=_0x5d1398;legacyConfig['MODE']=_0x30a7e7['config'][_0x3409d8(0x2a)];const _0x22eb5a=_0x30a7e7['groupMeta']?{'groupMeta':_0x30a7e7['groupMeta'],'isAdmin':Boolean(_0x30a7e7['isGroupAdmin']),'isBotAdmin':Boolean(_0x30a7e7['isBotGroupAdmin'])}:await resolveGroupContext(_0x30a7e7[_0x3409d8(0x36)],_0x30a7e7['from'],_0x30a7e7['sender'],_0x30a7e7[_0x3409d8(0x37)],_0x30a7e7['msg']);const {groupMeta:_0x272a00,isAdmin:_0x1f6dd3,isBotAdmin:_0x4c3cb7}=_0x22eb5a;const _0x2aa24d=makeMessageView({'raw':_0x30a7e7['msg'],'sock':_0x30a7e7[_0x3409d8(0x36)],'from':_0x30a7e7[_0x3409d8(0x38)],'sender':_0x30a7e7['sender'],'senderNumber':_0x30a7e7[_0x3409d8(0x37)],'isOwner':_0x30a7e7['isOwner'],'groupMeta':_0x272a00,'isAdmin':_0x1f6dd3,'isBotAdmin':_0x4c3cb7});if(_0x6ee308['groupOnly']&&!_0x2aa24d[_0x3409d8(0x39)]){await _0x2aa24d[_0x3409d8(0x3a)]('This\x20command\x20can\x20only\x20be\x20used\x20in\x20a\x20group.');return;}if(_0x430b40&&!_0x1f6dd3){await _0x2aa24d['reply']('Only\x20a\x20group\x20admin\x20can\x20run\x20this\x20command.');return;}const _0x44fc7b={'sock':_0x30a7e7['sock'],'client':_0x30a7e7[_0x3409d8(0x36)],'from':_0x30a7e7['from'],'sender':_0x30a7e7['sender'],'senderNumber':_0x30a7e7[_0x3409d8(0x37)],'pushName':_0x2aa24d['pushName'],'msg':_0x30a7e7['msg'],'m':_0x2aa24d,'text':_0x30a7e7['text'],'body':_0x2aa24d['body'],'args':_0x30a7e7['args'],'command':_0x3006c2,'groupMeta':_0x272a00,'isGroup':_0x2aa24d['isGroup'],'isAdmin':_0x1f6dd3,'isBotAdmin':_0x4c3cb7,'isOwner':_0x30a7e7['isOwner'],'quoted':_0x2aa24d['quoted'],'reply':_0x2aa24d['reply'],'send':(_0x393595,_0x537492)=>_0x30a7e7['sock']['sendMessage'](_0x30a7e7[_0x3409d8(0x38)],_0x393595,_0x537492),'react':_0x2aa24d['react'],'config':legacyConfig};return _0x6ee308['handler'](_0x44fc7b);}};});}export function isLegacyOwnerOnly(_0x3a4bba){return OWNER_ONLY_NAMES['has'](String(_0x3a4bba||'')['toLowerCase']());}export function isLegacyAdminOnly(_0x234434){return ADMIN_ONLY_NAMES['has'](String(_0x234434||'')['toLowerCase']());}
+import { createRequire } from 'node:module';
+import { downloadMediaMessage } from '@whiskeysockets/baileys';
+import _0x21bd49 from '../../spider/config.js';
+import { collectSenderIdentities, resolveGroupRolesAsync } from '../../spider/utils/groupRoleResolver.js';
+import {
+  deleteMessageSafely,
+  extractContextInfo,
+  isFromBot,
+  unwrapMessageContent,
+} from '../../spider/utils/groupActionHelper.js';
+
+const require = createRequire(import.meta.url);
+const legacyConfig = require('../legacy/lil/config/settings.js');
+const legacyLoader = require('../legacy/lil/handlers/loader.js');
+
+const OWNER_ONLY_NAMES = new Set([
+  'allvar',
+  'getvar',
+  'setvar',
+  'triggerupdate',
+  'update',
+  'broadcast',
+  'broadcaststatus',
+  'robotbroadcast',
+  'massdm',
+  'masspromote',
+  'massdemote',
+  'nuke',
+  'xkill',
+  'mentionbomb',
+  'shell',
+  'eval',
+  'eval2',
+  'restart',
+  'restartbot',
+  'shutdown',
+  'kill',
+  'cleartmp',
+  'clearcache',
+  'getcmd',
+  'getfunc',
+  'joingc',
+  'leavegc',
+  'groupclone',
+  'tokengen',
+  'lockdown',
+  'unlockdown',
+  'setbotpic',
+  'setmenupic',
+  'setbotname',
+  'setmenu',
+  'setfooter',
+  'setcaption',
+  'botidentity',
+  'rebrand',
+  'tobugil',
+  'undress',
+  'morph',
+  'hentai',
+  'xvideos',
+  'ass',
+  'boobs',
+  'fuck',
+]);
+
+const ADMIN_ONLY_NAMES = new Set([
+  'add',
+  'approve-all',
+  'reject-all',
+  'requests',
+  'remove',
+  'kick',
+  'promote',
+  'demote',
+  'promoteall',
+  'demoteall',
+  'close',
+  'open',
+  'link',
+  'revoke',
+  'clear',
+  'clearchat',
+  'tagall',
+  'tagadmins',
+  'foreigners',
+  'warn',
+  'resetwarn',
+  'setwarncount',
+  'setwarnlimit',
+  'welcome',
+  'goodbye',
+  'antibot',
+  'antilink',
+  'antistatusmention',
+  'antitag',
+  'antiforeign',
+  'mute',
+  'unmute',
+  'pin',
+  'pinm',
+  'togstatus',
+  'accept',
+  'reject',
+  'acceptall',
+  'rejectall',
+]);
+
+function textFromMessage(content = {}) {
+  return (
+    content.conversation ||
+    content.extendedTextMessage?.text ||
+    content.imageMessage?.caption ||
+    content.videoMessage?.caption ||
+    content.documentMessage?.caption ||
+    content.buttonsResponseMessage?.selectedButtonId ||
+    content.listResponseMessage?.singleSelectReply?.selectedRowId ||
+    content.templateButtonReplyMessage?.selectedId ||
+    ''
+  );
+}
+
+function typeFromMessage(content = {}) {
+  return Object.keys(content)[0] || 'unknown';
+}
+
+function normalizeNumber(jid) {
+  return String(jid || '').split('@')[0].split(':')[0].replace(/\D/g, '');
+}
+
+function makeMessageView({ raw, sock, from, sender, senderNumber, isOwner, groupMeta, isAdmin, isBotAdmin }) {
+  const rawMessage = raw?.message || {};
+  const unwrappedMessage = unwrapMessageContent(rawMessage) || rawMessage;
+  const { contextInfo, quotedMessage: unwrappedQuoted, rawQuotedMessage } = extractContextInfo(raw);
+  const quotedMessage = unwrappedQuoted || rawQuotedMessage || null;
+  const ctx = contextInfo || {};
+  const isGroupChat = String(from || '').endsWith('@g.us');
+
+  const quotedParticipant = ctx.participant || '';
+  const quotedFromMe = Boolean(
+    quotedParticipant
+      ? isFromBot(quotedParticipant, sock)
+      : (!isGroupChat && ctx.stanzaId && !quotedParticipant),
+  );
+
+  const quotedKey = ctx.stanzaId
+    ? {
+        remoteJid: from,
+        id: ctx.stanzaId,
+        ...(quotedParticipant ? { participant: quotedParticipant } : {}),
+        fromMe: quotedFromMe,
+      }
+    : null;
+
+  const quoted = quotedMessage
+    ? {
+        key: quotedKey,
+        id: ctx.stanzaId || '',
+        fromMe: quotedFromMe,
+        message: quotedMessage,
+        rawMessage: rawQuotedMessage || quotedMessage,
+        sender: quotedParticipant || ctx.remoteJid || '',
+        chat: from,
+        mtype: typeFromMessage(quotedMessage),
+        text: textFromMessage(quotedMessage),
+        body: textFromMessage(quotedMessage),
+        mimetype: Object.values(quotedMessage)[0]?.mimetype || '',
+        get msg() {
+          return Object.values(quotedMessage)[0] || null;
+        },
+        async download() {
+          if (!quotedKey) throw new Error('Quoted media key is unavailable.');
+          return downloadMediaMessage({ key: quotedKey, message: quotedMessage }, 'buffer', {});
+        },
+      }
+    : null;
+
+  const view = {
+    ...raw,
+    key: raw?.key || {},
+    message: unwrappedMessage,
+    rawMessage,
+    chat: from,
+    from,
+    sender: sender || '',
+    senderNumber: senderNumber || normalizeNumber(sender),
+    pushName: raw?.pushName || 'WhatsApp user',
+    body: textFromMessage(unwrappedMessage),
+    text: textFromMessage(unwrappedMessage),
+    mtype: typeFromMessage(unwrappedMessage),
+    isGroup: isGroupChat,
+    isOwner: Boolean(isOwner),
+    fromMe: Boolean(raw?.key?.fromMe),
+    isAdmin: Boolean(isAdmin),
+    isBotAdmin: Boolean(isBotAdmin),
+    isSuperAdmin: Boolean(isAdmin),
+    isSudo: Boolean(isOwner),
+    isButtonResponse: false,
+    reactKey: raw?.key,
+    mentionedJid: ctx.mentionedJid || [],
+    tagged: ctx.mentionedJid || [],
+    participants: groupMeta?.participants || [],
+    groupMetadata: groupMeta || null,
+    quoted,
+    quotedMsg: quotedMessage,
+    quotedKey,
+    quotedUser: quoted?.sender || '',
+    async download() {
+      return downloadMediaMessage(raw, 'buffer', {});
+    },
+    async reply(content, options = {}) {
+      const payload = typeof content === 'string' ? { text: content } : content;
+      return sock.sendMessage(from, payload, { quoted: raw, ...options });
+    },
+  };
+
+  view.react = async (emoji) => sock.sendMessage(from, { react: { text: emoji, key: raw.key } });
+  view.delete = async () => deleteMessageSafely({ sock, from, msg: raw, allowFromMeFallback: true });
+  return view;
+}
+
+async function resolveGroupContext(sock, from, sender, senderNumber, msg = null) {
+  if (!String(from || '').endsWith('@g.us')) {
+    return { groupMeta: null, isAdmin: false, isBotAdmin: false };
+  }
+  try {
+    const groupMeta = await sock.groupMetadata(from);
+    const roles = await resolveGroupRolesAsync({
+      metadata: groupMeta,
+      sock,
+      senderJids: collectSenderIdentities(msg, [sender, senderNumber]),
+    });
+    return {
+      groupMeta,
+      isAdmin: roles.isSenderAdmin,
+      isBotAdmin: roles.isBotAdmin,
+    };
+  } catch {
+    return { groupMeta: null, isAdmin: false, isBotAdmin: false };
+  }
+}
+
+export async function loadLegacyCommands() {
+  legacyConfig.BOT_NAME = _0x21bd49.BOT_NAME || 'Spider Man';
+  process.env.BOT_NAME = legacyConfig.BOT_NAME;
+  legacyConfig.PACK_NAME = legacyConfig.BOT_NAME;
+  legacyConfig.BOT_PIC = _0x21bd49.BOT_PIC;
+  if (_0x21bd49.BOT_PIC) process.env.BOT_PIC = _0x21bd49.BOT_PIC;
+  legacyConfig.OWNER_NUMBER = _0x21bd49.OWNER_NUMBER || process.env.OWNER_NUMBER || '';
+  legacyConfig.OWNER_NAME = _0x21bd49.OWNER_NAME || 'Spider Man Owner';
+  legacyConfig.MODE = _0x21bd49.MODE;
+  legacyConfig.BOT_PREFIX = _0x21bd49.PREFIXES?.[0] || '.';
+
+  await legacyLoader.loadPlugins();
+  const cmds = legacyLoader.getAllCmds();
+
+  return cmds.map((cmd) => {
+    const name = String(cmd.name || '').toLowerCase();
+    const aliases = (cmd.aliases || []).map((a) => String(a).toLowerCase()).filter(Boolean);
+    const categoryLabel = String(cmd.category || 'Legacy').replace(/^./, (c) => c.toUpperCase());
+    const ownerOnly = OWNER_ONLY_NAMES.has(name) || ['owner', 'heroku', 'settings'].includes(cmd.category);
+    const adminOnly = !ownerOnly && (cmd.adminOnly || ADMIN_ONLY_NAMES.has(name));
+
+    return {
+      name,
+      aliases,
+      description: cmd.desc || `Legacy ${categoryLabel} feature from the running Spider Man bot.`,
+      category: `Legacy ${categoryLabel}`,
+      ownerOnly: Boolean(cmd.ownerOnly || ownerOnly),
+      groupOnly: Boolean(cmd.groupOnly),
+      adminOnly: Boolean(adminOnly),
+      execute: async (ctx) => {
+        legacyConfig.MODE = ctx.config.MODE;
+        const groupCtx = ctx.groupMeta
+          ? {
+              groupMeta: ctx.groupMeta,
+              isAdmin: Boolean(ctx.isGroupAdmin),
+              isBotAdmin: Boolean(ctx.isBotGroupAdmin),
+            }
+          : await resolveGroupContext(ctx.sock, ctx.from, ctx.sender, ctx.senderNumber, ctx.msg);
+
+        const { groupMeta, isAdmin, isBotAdmin } = groupCtx;
+        const view = makeMessageView({
+          raw: ctx.msg,
+          sock: ctx.sock,
+          from: ctx.from,
+          sender: ctx.sender,
+          senderNumber: ctx.senderNumber,
+          isOwner: ctx.isOwner,
+          groupMeta,
+          isAdmin,
+          isBotAdmin,
+        });
+
+        if (cmd.groupOnly && !view.isGroup) {
+          await view.reply('This command can only be used in a group.');
+          return;
+        }
+        if (adminOnly && !isAdmin) {
+          await view.reply('Only a group admin can run this command.');
+          return;
+        }
+
+        const pluginContext = {
+          sock: ctx.sock,
+          client: ctx.sock,
+          from: ctx.from,
+          sender: ctx.sender,
+          senderNumber: ctx.senderNumber,
+          pushName: view.pushName,
+          msg: ctx.msg,
+          m: view,
+          text: ctx.text,
+          body: view.body,
+          args: ctx.args,
+          command: name,
+          groupMeta,
+          isGroup: view.isGroup,
+          isAdmin,
+          isBotAdmin,
+          isOwner: ctx.isOwner,
+          quoted: view.quoted,
+          reply: view.reply,
+          send: (payload, options) => ctx.sock.sendMessage(ctx.from, payload, options),
+          react: view.react,
+          config: legacyConfig,
+        };
+        return cmd.handler(pluginContext);
+      },
+    };
+  });
+}
+
+export function isLegacyOwnerOnly(name) {
+  return OWNER_ONLY_NAMES.has(String(name || '').toLowerCase());
+}
+
+export function isLegacyAdminOnly(name) {
+  return ADMIN_ONLY_NAMES.has(String(name || '').toLowerCase());
+}

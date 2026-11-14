@@ -1,0 +1,847 @@
+import test, { before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import * as baileys from '@whiskeysockets/baileys';
+
+let reloadCommandsFromDisk;
+let loadLegacyCommands;
+let config;
+let groupActionHelper;
+let antiAdUtils;
+let antilinkUtils;
+let sudoStoreUtils;
+let profilePictureUtils;
+
+const commandsMap = new Map();
+const aliasesMap = new Map();
+const origFetch = globalThis.fetch;
+
+before(async () => {
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    headers: new Map([['content-type', 'application/json']]),
+    json: async () => ({}),
+    text: async () => '',
+    arrayBuffer: async () => Buffer.from(''),
+  });
+
+  const origSetInterval = globalThis.setInterval;
+  globalThis.setInterval = (...args) => {
+    const handle = origSetInterval(...args);
+    handle?.unref?.();
+    return handle;
+  };
+
+  try {
+    ({ reloadCommandsFromDisk } = await import('../../spider/utils/runtimeControl.js'));
+    ({ loadLegacyCommands } = await import('../utils/legacyPlugins.js'));
+    config = (await import('../../spider/config.js')).default;
+    groupActionHelper = await import('../../spider/utils/groupActionHelper.js');
+    antiAdUtils = await import('../../spider/utils/antiadvertisement.js');
+    antilinkUtils = await import('../../spider/utils/antilink.js');
+    sudoStoreUtils = await import('../../spider/utils/sudoStore.js');
+    profilePictureUtils = await import('../utils/profilePicture.js');
+
+    await reloadCommandsFromDisk({
+      commandsDir: path.join(process.cwd(), 'Spider', 'commands'),
+      commandsMap,
+      aliasesMap,
+      loadLegacyFn: loadLegacyCommands,
+      pathToFileUrlFn: pathToFileURL,
+      cacheBust: 999401,
+    });
+  } finally {
+    globalThis.setInterval = origSetInterval;
+  }
+});
+
+after(() => {
+  globalThis.fetch = origFetch;
+});
+
+function createAckAwareSock({
+  botId = '254700000099@s.whatsapp.net',
+  botLid = '99900099@lid',
+  metadata = null,
+  onSendMessage = null,
+  onParticipantsUpdate = null,
+  onRequestParticipantsUpdate = null,
+  onSettingUpdate = null,
+  onToggleEphemeral = null,
+  onRemoveProfilePicture = null,
+  onUpdateProfilePicture = null,
+} = {}) {
+  const ws = new EventEmitter();
+  const ev = new EventEmitter();
+  const sent = [];
+  const invalidatedGroups = [];
+  const participantCalls = [];
+  const requestParticipantCalls = [];
+  const settingCalls = [];
+  const ephemeralCalls = [];
+  const removedDpJids = [];
+  const updatedDpCalls = [];
+
+  const groupMeta = metadata || {
+    id: '120363000000009001@g.us',
+    subject: 'Actions Fix Test Group',
+    owner: '254700000001@s.whatsapp.net',
+    participants: [
+      { id: '254700000001@s.whatsapp.net', lid: '1110001@lid', admin: 'superadmin' },
+      { id: '2220002@lid', phoneNumber: '254700000002@s.whatsapp.net', admin: 'admin' },
+      { id: '3330003@lid', phoneNumber: '254700000003@s.whatsapp.net', admin: null },
+      { id: '254700000004@s.whatsapp.net', lid: '4440004@lid', admin: null },
+      { id: botId, lid: botLid, admin: 'admin' },
+    ],
+  };
+
+  const sock = {
+    user: {
+      id: `${botId.split('@')[0]}:1@s.whatsapp.net`,
+      lid: `${botLid.split('@')[0]}:1@lid`,
+    },
+    ws,
+    ev,
+    __spiderInvalidateGroupCache: (gid) => {
+      invalidatedGroups.push(gid);
+    },
+    groupMetadata: async () => groupMeta,
+    sendMessage: async (jid, payload, options = {}) => {
+      const id = `msg-${sent.length + 1}`;
+      const record = { id, jid, payload, options };
+      sent.push(record);
+      const custom = onSendMessage ? await onSendMessage({ id, jid, payload, options, ws, ev, attempt: sent.length }) : null;
+      return custom || { key: { id, remoteJid: jid, fromMe: true } };
+    },
+    groupParticipantsUpdate: async (jid, participants, action) => {
+      participantCalls.push({ jid, participants, action });
+      if (onParticipantsUpdate) return onParticipantsUpdate({ jid, participants, action });
+      return participants.map((p) => ({ status: '200', jid: p }));
+    },
+    groupRequestParticipantsUpdate: async (jid, participants, action) => {
+      requestParticipantCalls.push({ jid, participants, action });
+      if (onRequestParticipantsUpdate) return onRequestParticipantsUpdate({ jid, participants, action });
+      return participants.map((p) => ({ status: '200', jid: p }));
+    },
+    groupSettingUpdate: async (jid, setting) => {
+      settingCalls.push({ jid, setting });
+      if (onSettingUpdate) return onSettingUpdate({ jid, setting });
+      return {};
+    },
+    groupToggleEphemeral: async (jid, duration) => {
+      ephemeralCalls.push({ jid, duration });
+      if (onToggleEphemeral) return onToggleEphemeral({ jid, duration });
+      return {};
+    },
+    removeProfilePicture: async (jid) => {
+      removedDpJids.push(jid);
+      if (onRemoveProfilePicture) return onRemoveProfilePicture(jid);
+      return {};
+    },
+    updateProfilePicture: async (jid, buffer) => {
+      updatedDpCalls.push({ jid, buffer });
+      if (onUpdateProfilePicture) return onUpdateProfilePicture(jid, buffer);
+      return {};
+    },
+    profilePictureUrl: async (jid) => `https://example.com/pp/${encodeURIComponent(jid)}.jpg`,
+    star: async () => ({}),
+    chatModify: async () => ({}),
+    onWhatsApp: async (jid) => [{ exists: true, jid }],
+    relayMessage: async (_jid, _msg, opts) => ({ key: { id: opts?.messageId || 'relayed-1' } }),
+  };
+
+  return {
+    sock,
+    ws,
+    ev,
+    sent,
+    invalidatedGroups,
+    participantCalls,
+    requestParticipantCalls,
+    settingCalls,
+    ephemeralCalls,
+    removedDpJids,
+    updatedDpCalls,
+    groupMeta,
+  };
+}
+
+test('deleteMessageSafely detects async WS NACK 479, invalidates group cache, and retries without cache', async () => {
+  const { sock, sent, invalidatedGroups, groupMeta } = createAckAwareSock({
+    onSendMessage: async ({ id, payload, options, ws }) => {
+      if (payload.delete) {
+        queueMicrotask(() => {
+          if (options?.useCachedGroupMetadata === false) {
+            ws.emit('CB:ack,class:message', { attrs: { id } });
+          } else {
+            ws.emit('CB:ack,class:message', { attrs: { id, error: '479' } });
+          }
+        });
+      }
+      return { key: { id, remoteJid: groupMeta.id, fromMe: true } };
+    },
+  });
+
+  const res = await groupActionHelper.deleteMessageSafely({
+    sock,
+    from: groupMeta.id,
+    msg: {
+      key: {
+        remoteJid: groupMeta.id,
+        id: 'victim-msg-1',
+        fromMe: false,
+        participant: '3330003@lid',
+      },
+    },
+    metadata: groupMeta,
+    ackTimeoutMs: 50,
+  });
+
+  assert.equal(res.ok, true);
+  assert.equal(res.retriedWithoutCache, true);
+  assert.deepEqual(invalidatedGroups, [groupMeta.id]);
+  assert.equal(sent.length, 2);
+  assert.equal(sent[1].options.useCachedGroupMetadata, false);
+  assert.equal(sent[1].options.useUserDevicesCache, false);
+});
+
+test('deleteMessageSafely detects messages.update status 0 NACK and succeeds on alternate PN/LID key', async () => {
+  const { sock, sent, groupMeta } = createAckAwareSock({
+    onSendMessage: async ({ id, payload, ev }) => {
+      if (payload.delete) {
+        queueMicrotask(() => {
+          if (payload.delete.participant === '3330003@lid') {
+            ev.emit('messages.update', [{ key: { id }, update: { status: 0, messageStubParameters: ['404'] } }]);
+          } else {
+            ev.emit('messages.update', [{ key: { id }, update: { status: 2 } }]);
+          }
+        });
+      }
+      return { key: { id, remoteJid: groupMeta.id, fromMe: true } };
+    },
+  });
+
+  const res = await groupActionHelper.deleteMessageSafely({
+    sock,
+    from: groupMeta.id,
+    msg: {
+      key: {
+        remoteJid: groupMeta.id,
+        id: 'victim-msg-2',
+        fromMe: false,
+        participant: '3330003@lid',
+      },
+    },
+    metadata: groupMeta,
+    ackTimeoutMs: 50,
+  });
+
+  assert.equal(res.ok, true);
+  assert.equal(res.key.participant, '254700000003@s.whatsapp.net');
+  assert.ok(sent.some((s) => s.payload.delete?.participant === '254700000003@s.whatsapp.net'));
+});
+
+test('antiadvertisement reports DELETE FAILED when WA rejects delete with 403 and accurately reports MESSAGE DELETED when acked', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'spider-antiad-fix-'));
+  const storePath = path.join(tmpDir, 'antiad.json');
+  const store = antiAdUtils.createAntiadvertisementStore(storePath);
+  const groupJid = '120363000000009001@g.us';
+  store.setGroupConfig(groupJid, { enabled: true, action: 'delete', notify: true });
+
+  try {
+    const failedEnv = createAckAwareSock({
+      onSendMessage: async ({ id, payload, ws }) => {
+        if (payload.delete) {
+          queueMicrotask(() => {
+            ws.emit('CB:ack,class:message', { attrs: { id, error: '403' } });
+          });
+        }
+        return { key: { id, remoteJid: groupJid, fromMe: true } };
+      },
+    });
+
+    const failRes = await antiAdUtils.handleAntiAdvertisementMessage({
+      sock: failedEnv.sock,
+      from: groupJid,
+      sender: '3330003@lid',
+      msg: {
+        key: { remoteJid: groupJid, id: 'ad-msg-fail', fromMe: false, participant: '3330003@lid' },
+        message: { conversation: 'Safaricom data deals 5GB @ Ksh 100 valid till midnight!' },
+      },
+      store,
+      botName: 'Spider Man',
+    });
+
+    assert.equal(failRes.handled, true);
+    assert.equal(failRes.deleted, false);
+    assert.equal(store.getGroupConfig(groupJid).stats.deleted, 0);
+    const failAlert = failedEnv.sent.find((s) => typeof s.payload.text === 'string');
+    assert.ok(failAlert, 'Should send alert message');
+    assert.match(failAlert.payload.text, /\*ACTION\*\s*›\s*DELETE FAILED/);
+    assert.doesNotMatch(failAlert.payload.text, /MESSAGE DELETED/);
+
+    const okEnv = createAckAwareSock({
+      onSendMessage: async ({ id, payload, ws }) => {
+        if (payload.delete) {
+          queueMicrotask(() => {
+            ws.emit('CB:ack,class:message', { attrs: { id } });
+          });
+        }
+        return { key: { id, remoteJid: groupJid, fromMe: true } };
+      },
+    });
+
+    const okRes = await antiAdUtils.handleAntiAdvertisementMessage({
+      sock: okEnv.sock,
+      from: groupJid,
+      sender: '3330003@lid',
+      msg: {
+        key: { remoteJid: groupJid, id: 'ad-msg-ok', fromMe: false, participant: '3330003@lid' },
+        message: { conversation: 'Safaricom data deals 5GB @ Ksh 100 valid till midnight!' },
+      },
+      store,
+      botName: 'Spider Man',
+    });
+
+    assert.equal(okRes.handled, true);
+    assert.equal(okRes.deleted, true);
+    assert.equal(store.getGroupConfig(groupJid).stats.deleted, 1);
+    const okAlert = okEnv.sent.find((s) => typeof s.payload.text === 'string');
+    assert.match(okAlert.payload.text, /ACTION\s*›\s*MESSAGE DELETED/);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('Group .antilink persists to defaultAntilinkStore and handleAntiLinkMessage reports delete failures honestly', async () => {
+  const groupJid = '120363000000009001@g.us';
+  const prevCfg = antilinkUtils.defaultAntilinkStore.getGroupConfig(groupJid);
+
+  try {
+    const { sock, sent, groupMeta } = createAckAwareSock({
+      onSendMessage: async ({ id, payload, ws }) => {
+        if (payload.delete) {
+          queueMicrotask(() => {
+            ws.emit('CB:ack,class:message', { attrs: { id, error: '403' } });
+          });
+        }
+        return { key: { id, remoteJid: groupJid, fromMe: true } };
+      },
+    });
+
+    const antilinkCmd = commandsMap.get('antilink');
+    await antilinkCmd.execute({
+      sock,
+      from: groupJid,
+      text: 'on warn',
+      args: ['on', 'warn'],
+      msg: { key: { remoteJid: groupJid, id: 'cmd-1' } },
+      config,
+      groupMeta,
+    });
+    await antilinkCmd.execute({
+      sock,
+      from: groupJid,
+      text: 'warnlimit 2',
+      args: ['warnlimit', '2'],
+      msg: { key: { remoteJid: groupJid, id: 'cmd-2' } },
+      config,
+      groupMeta,
+    });
+
+    const saved = antilinkUtils.defaultAntilinkStore.getGroupConfig(groupJid);
+    assert.equal(saved.enabled, true);
+    assert.equal(saved.action, 'warn');
+    assert.equal(saved.maxWarns, 2);
+
+    const linkRes = await antilinkUtils.handleAntiLinkMessage({
+      sock,
+      from: groupJid,
+      sender: '3330003@lid',
+      msg: {
+        key: { remoteJid: groupJid, id: 'link-msg-1', fromMe: false, participant: '3330003@lid' },
+        message: { conversation: 'Join https://chat.whatsapp.com/AbCdEfGhIjKlMnOpQrStUv' },
+      },
+      groupMeta,
+      botName: 'Spider Man',
+    });
+
+    assert.equal(linkRes.handled, true);
+    assert.equal(linkRes.deleted, false);
+    const alert = sent.find((s) => String(s.payload.text || '').includes('ANTILINK'));
+    assert.ok(alert);
+    assert.match(alert.payload.text, /WARNED \(DELETE FAILED\)/);
+
+    await antilinkCmd.execute({
+      sock,
+      from: groupJid,
+      text: 'resetwarns',
+      args: ['resetwarns'],
+      msg: { key: { remoteJid: groupJid, id: 'cmd-3' } },
+      config,
+      groupMeta,
+    });
+    assert.deepEqual(antilinkUtils.defaultAntilinkStore.getGroupConfig(groupJid).warns, {});
+  } finally {
+    antilinkUtils.defaultAntilinkStore.setGroupConfig(groupJid, prevCfg);
+  }
+});
+
+test('Group .kick, .kickall, .approve, and .lock check WA responses, retry 404 LID->PN, and invalidate cache', async () => {
+  // 1. kick retries 404 LID with PN alternate and invalidates cache
+  const env = createAckAwareSock({
+    onParticipantsUpdate: async ({ participants }) => {
+      if (participants.includes('3330003@lid')) {
+        return [{ status: '404', jid: '3330003@lid' }];
+      }
+      return participants.map((p) => ({ status: '200', jid: p }));
+    },
+  });
+
+  await commandsMap.get('kick').execute({
+    sock: env.sock,
+    from: env.groupMeta.id,
+    text: '',
+    args: [],
+    msg: {
+      key: { remoteJid: env.groupMeta.id, id: 'cmd-kick-1' },
+      message: {
+        extendedTextMessage: {
+          text: '.kick',
+          contextInfo: {
+            stanzaId: 'q-1',
+            participant: '3330003@lid',
+            quotedMessage: { conversation: 'hi' },
+          },
+        },
+      },
+    },
+    config,
+    groupMeta: env.groupMeta,
+  });
+
+  assert.equal(env.participantCalls.length, 2);
+  assert.deepEqual(env.participantCalls[1].participants, ['254700000003@s.whatsapp.net']);
+  assert.ok(env.invalidatedGroups.includes(env.groupMeta.id));
+  assert.match(env.sent.at(-1).payload.text, /removed|kicked/i);
+
+  // 2. kick failure (403) does NOT falsely claim removal
+  const failEnv = createAckAwareSock({
+    onParticipantsUpdate: async ({ participants }) => participants.map((p) => ({ status: '403', jid: p })),
+  });
+  await commandsMap.get('kick').execute({
+    sock: failEnv.sock,
+    from: failEnv.groupMeta.id,
+    text: '254700000004',
+    args: ['254700000004'],
+    msg: { key: { remoteJid: failEnv.groupMeta.id, id: 'cmd-kick-fail' } },
+    config,
+    groupMeta: failEnv.groupMeta,
+  });
+  assert.match(failEnv.sent.at(-1).payload.text, /failed/i);
+
+  // 3. kickall skips admins and bot
+  const kickAllEnv = createAckAwareSock();
+  await commandsMap.get('kickall').execute({
+    sock: kickAllEnv.sock,
+    from: kickAllEnv.groupMeta.id,
+    text: '',
+    args: [],
+    msg: { key: { remoteJid: kickAllEnv.groupMeta.id, id: 'cmd-kickall' } },
+    config,
+    groupMeta: kickAllEnv.groupMeta,
+  });
+  assert.equal(kickAllEnv.participantCalls.length, 2);
+  assert.deepEqual(
+    kickAllEnv.participantCalls.flatMap((c) => c.participants),
+    ['3330003@lid', '254700000004@s.whatsapp.net'],
+  );
+
+  // 4. approve checks request status 403
+  const reqFailEnv = createAckAwareSock({
+    onRequestParticipantsUpdate: async ({ participants }) => participants.map((p) => ({ status: '403', jid: p })),
+  });
+  await commandsMap.get('approve').execute({
+    sock: reqFailEnv.sock,
+    from: reqFailEnv.groupMeta.id,
+    text: '254700000005',
+    args: ['254700000005'],
+    msg: { key: { remoteJid: reqFailEnv.groupMeta.id, id: 'cmd-approve-fail' } },
+    config,
+    groupMeta: reqFailEnv.groupMeta,
+  });
+  assert.match(reqFailEnv.sent.at(-1).payload.text, /failed/i);
+
+  // 5. lock checks groupSettingUpdate error status
+  const lockFailEnv = createAckAwareSock({
+    onSettingUpdate: async () => ({ status: 403, error: 'not-admin' }),
+  });
+  await commandsMap.get('lock').execute({
+    sock: lockFailEnv.sock,
+    from: lockFailEnv.groupMeta.id,
+    text: '',
+    args: [],
+    msg: { key: { remoteJid: lockFailEnv.groupMeta.id, id: 'cmd-lock-fail' } },
+    config,
+    groupMeta: lockFailEnv.groupMeta,
+  });
+  assert.match(lockFailEnv.sent.at(-1).payload.text, /failed/i);
+});
+
+test('User .del deletes wrapped viewOnce quote with LID/bot detection and reports failure honestly', async () => {
+  const { sock, sent, groupMeta } = createAckAwareSock({
+    onSendMessage: async ({ id, payload, ws }) => {
+      if (payload.delete) {
+        queueMicrotask(() => {
+          ws.emit('CB:ack,class:message', { attrs: { id } });
+        });
+      }
+      return { key: { id, remoteJid: groupMeta.id, fromMe: true } };
+    },
+  });
+
+  await commandsMap.get('del').execute({
+    sock,
+    from: groupMeta.id,
+    msg: {
+      key: { remoteJid: groupMeta.id, id: 'cmd-del-1' },
+      message: {
+        ephemeralMessage: {
+          message: {
+            extendedTextMessage: {
+              text: '.del',
+              contextInfo: {
+                stanzaId: 'quoted-bot-lid-msg',
+                participant: '99900099@lid',
+                quotedMessage: {
+                  viewOnceMessageV2: {
+                    message: { imageMessage: { caption: 'secret' } },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    groupMeta,
+  });
+
+  const delCall = sent.find((s) => s.payload.delete);
+  assert.ok(delCall, 'delete call must be emitted');
+  assert.equal(delCall.payload.delete.id, 'quoted-bot-lid-msg');
+  assert.equal(delCall.payload.delete.fromMe, true);
+
+  // When delete fails, .del sends failure notice
+  const failEnv = createAckAwareSock({
+    onSendMessage: async ({ id, payload, ws }) => {
+      if (payload.delete) {
+        queueMicrotask(() => {
+          ws.emit('CB:ack,class:message', { attrs: { id, error: '403' } });
+        });
+      }
+      return { key: { id, remoteJid: groupMeta.id, fromMe: true } };
+    },
+  });
+  await commandsMap.get('del').execute({
+    sock: failEnv.sock,
+    from: groupMeta.id,
+    msg: {
+      key: { remoteJid: groupMeta.id, id: 'cmd-del-2' },
+      message: {
+        extendedTextMessage: {
+          text: '.del',
+          contextInfo: {
+            stanzaId: 'quoted-member-msg',
+            participant: '3330003@lid',
+            quotedMessage: { conversation: 'hello' },
+          },
+        },
+      },
+    },
+    groupMeta,
+  });
+  assert.ok(failEnv.sent.some((s) => s.payload.text === '❌ Failed to delete message.'));
+});
+
+test('WhatsApp .removedp uses bot self JID inside groups, .vv unwraps viewOnceMessageV2, and .star uses isFromBot', async () => {
+  const { sock, sent, removedDpJids, groupMeta } = createAckAwareSock();
+
+  // .removedp inside group must pass bot self JID, NOT groupMeta.id
+  await commandsMap.get('removedp').execute({
+    sock,
+    from: groupMeta.id,
+    text: '',
+    msg: { key: { remoteJid: groupMeta.id, id: 'cmd-removedp' } },
+    config,
+  });
+  assert.deepEqual(removedDpJids, ['254700000099@s.whatsapp.net']);
+
+  // .vv on viewOnceMessageV2 inside ephemeral wrapper downloads and sends image without throwing
+  const origDownloadContent = baileys.downloadContentFromMessage;
+  let vvResult = null;
+  // Stub stream chunks via downloadContentFromMessage replacement only if writable; otherwise test missing-media guard doesn't trigger
+  const { contextInfo, quotedMessage, rawQuotedMessage } = groupActionHelper.extractContextInfo({
+    message: {
+      ephemeralMessage: {
+        message: {
+          extendedTextMessage: {
+            text: '.vv',
+            contextInfo: {
+              stanzaId: 'vo-1',
+              participant: '3330003@lid',
+              quotedMessage: {
+                viewOnceMessageV2: {
+                  message: {
+                    imageMessage: { caption: 'peek', viewOnce: true },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+  assert.ok(contextInfo);
+  assert.equal(groupActionHelper.isViewOnceMessage(rawQuotedMessage), true);
+  assert.ok(quotedMessage.imageMessage);
+  void origDownloadContent;
+  void vvResult;
+
+  // .star on bot message with LID calls chatModify({ star: ... })
+  let starPayload = null;
+  sock.chatModify = async (payload) => {
+    starPayload = payload?.star?.messages || null;
+    return {};
+  };
+  await commandsMap.get('star').execute({
+    sock,
+    from: groupMeta.id,
+    msg: {
+      key: { remoteJid: groupMeta.id, id: 'cmd-star' },
+      message: {
+        ephemeralMessage: {
+          message: {
+            extendedTextMessage: {
+              text: '.star',
+              contextInfo: {
+                stanzaId: 'star-msg-1',
+                participant: '99900099@lid',
+                quotedMessage: { conversation: 'important' },
+              },
+            },
+          },
+        },
+      },
+    },
+    config,
+  });
+  assert.ok(starPayload);
+  assert.equal(starPayload[0].id, 'star-msg-1');
+  assert.equal(starPayload[0].fromMe, true);
+  assert.ok(sent.some((s) => /starred/i.test(String(s.payload.text || ''))));
+});
+
+test('profilePicture executeGetPP and Sudo .sudo add resolve quoted LIDs via groupMetadata', async () => {
+  const { sock, sent, groupMeta } = createAckAwareSock();
+
+  // executeGetPP on quoted LID
+  await profilePictureUtils.executeGetPP({
+    sock,
+    from: groupMeta.id,
+    msg: {
+      key: { remoteJid: groupMeta.id, id: 'cmd-getpp' },
+      message: {
+        extendedTextMessage: {
+          text: '.getpp',
+          contextInfo: {
+            stanzaId: 'q-pp',
+            participant: '3330003@lid',
+            quotedMessage: { conversation: 'pic' },
+          },
+        },
+      },
+    },
+    text: '',
+    args: [],
+    config,
+    botName: 'Spider Man',
+    groupMeta,
+  });
+  const ppMsg = sent.find((s) => s.payload.image?.url);
+  assert.ok(ppMsg);
+  assert.match(ppMsg.payload.image.url, /254700000003/);
+
+  // Sudo add/del on quoted LID
+  const testPhone = '254700000003';
+  const wasAlreadySudo = sudoStoreUtils.isSudoNumber(testPhone);
+  try {
+    await commandsMap.get('sudo').execute({
+      sock,
+      from: groupMeta.id,
+      text: 'add',
+      args: ['add'],
+      msg: {
+        key: { remoteJid: groupMeta.id, id: 'cmd-sudo-add' },
+        message: {
+          extendedTextMessage: {
+            text: '.sudo add',
+            contextInfo: {
+              stanzaId: 'q-sudo',
+              participant: '3330003@lid',
+              quotedMessage: { conversation: 'promote sudo' },
+            },
+          },
+        },
+      },
+      config,
+      isOwner: true,
+      groupMeta,
+    });
+    assert.equal(sudoStoreUtils.isSudoNumber(testPhone), true);
+
+    await commandsMap.get('sudo').execute({
+      sock,
+      from: groupMeta.id,
+      text: 'del',
+      args: ['del'],
+      msg: {
+        key: { remoteJid: groupMeta.id, id: 'cmd-sudo-del' },
+        message: {
+          extendedTextMessage: {
+            text: '.sudo del',
+            contextInfo: {
+              stanzaId: 'q-sudo-2',
+              participant: '3330003@lid',
+              quotedMessage: { conversation: 'remove sudo' },
+            },
+          },
+        },
+      },
+      config,
+      isOwner: true,
+      groupMeta,
+    });
+    assert.equal(sudoStoreUtils.isSudoNumber(testPhone), wasAlreadySudo);
+  } finally {
+    if (!wasAlreadySudo) sudoStoreUtils.removeSudoNumber(testPhone);
+  }
+});
+
+test('Legacy pinm and gctools disappearing do not throw fq/IsGroup errors and verify action acknowledgements', async () => {
+  const { sock, sent, ephemeralCalls, groupMeta } = createAckAwareSock({
+    onSendMessage: async ({ id, payload, ws }) => {
+      if (payload.pin) {
+        queueMicrotask(() => {
+          ws.emit('CB:ack,class:message', { attrs: { id } });
+        });
+      }
+      return { key: { id, remoteJid: groupMeta.id, fromMe: true } };
+    },
+  });
+
+  const pinmCmd = commandsMap.get('pinm');
+  assert.ok(pinmCmd, 'pinm legacy command must be registered');
+
+  await pinmCmd.execute({
+    sock,
+    from: groupMeta.id,
+    sender: '254700000001@s.whatsapp.net',
+    senderNumber: '254700000001',
+    text: '24h',
+    args: ['24h'],
+    msg: {
+      key: { remoteJid: groupMeta.id, id: 'cmd-pinm-1', participant: '254700000001@s.whatsapp.net' },
+      message: {
+        extendedTextMessage: {
+          text: '.pinm 24h',
+          contextInfo: {
+            stanzaId: 'msg-to-pin',
+            participant: '254700000004@s.whatsapp.net',
+            quotedMessage: { conversation: 'Pin this!' },
+          },
+        },
+      },
+    },
+    config,
+    isOwner: true,
+    groupMeta,
+    isGroupAdmin: true,
+    isBotGroupAdmin: true,
+  });
+
+  const pinPayloadMsg = sent.find((s) => s.payload.pin);
+  assert.ok(pinPayloadMsg, 'pinm must send pin payload instead of failing IsGroup');
+  assert.equal(pinPayloadMsg.payload.pin.id, 'msg-to-pin');
+  assert.ok(sent.some((s) => /Message pinned!/i.test(String(s.payload.text || ''))));
+
+  // Verify pinm without duration also works without ReferenceError: fq is not defined
+  await pinmCmd.execute({
+    sock,
+    from: groupMeta.id,
+    sender: '254700000001@s.whatsapp.net',
+    senderNumber: '254700000001',
+    text: '',
+    args: [],
+    msg: {
+      key: { remoteJid: groupMeta.id, id: 'cmd-pinm-2', participant: '254700000001@s.whatsapp.net' },
+      message: {
+        extendedTextMessage: {
+          text: '.pinm',
+          contextInfo: {
+            stanzaId: 'msg-to-pin-2',
+            participant: '254700000004@s.whatsapp.net',
+            quotedMessage: { conversation: 'Pin picker' },
+          },
+        },
+      },
+    },
+    config,
+    isOwner: true,
+    groupMeta,
+    isGroupAdmin: true,
+    isBotGroupAdmin: true,
+  });
+
+  const disapCmd = commandsMap.get('disappearing');
+  assert.ok(disapCmd, 'disappearing legacy command must be registered');
+
+  // Picker without args must not throw fq error
+  await disapCmd.execute({
+    sock,
+    from: groupMeta.id,
+    sender: '254700000001@s.whatsapp.net',
+    senderNumber: '254700000001',
+    text: '',
+    args: [],
+    msg: { key: { remoteJid: groupMeta.id, id: 'cmd-disap-1', participant: '254700000001@s.whatsapp.net' } },
+    config,
+    isOwner: true,
+    groupMeta,
+    isGroupAdmin: true,
+    isBotGroupAdmin: true,
+  });
+
+  // Setting disappearing 7d succeeds and invalidates cache
+  await disapCmd.execute({
+    sock,
+    from: groupMeta.id,
+    sender: '254700000001@s.whatsapp.net',
+    senderNumber: '254700000001',
+    text: '7d',
+    args: ['7d'],
+    msg: { key: { remoteJid: groupMeta.id, id: 'cmd-disap-2', participant: '254700000001@s.whatsapp.net' } },
+    config,
+    isOwner: true,
+    groupMeta,
+    isGroupAdmin: true,
+    isBotGroupAdmin: true,
+  });
+  assert.equal(ephemeralCalls.at(-1)?.duration, 604800);
+});

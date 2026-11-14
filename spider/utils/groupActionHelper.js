@@ -208,11 +208,22 @@ export function isSendMessageFailure(result) {
     result.status != null &&
     result.status !== '' &&
     !Number.isNaN(Number(result.status)) &&
-    Number(result.status) >= 400
+    (Number(result.status) === 0 || Number(result.status) >= 400)
   ) {
     return true;
   }
   return false;
+}
+
+function normalizeParticipantField(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (raw.includes('@')) return cleanJid(raw);
+  const digits = raw.replace(/\D/g, '');
+  if (/^\d{7,16}$/.test(digits)) {
+    return `${digits}@s.whatsapp.net`;
+  }
+  return '';
 }
 
 function dedupeUserJids(list) {
@@ -236,6 +247,8 @@ export function collectParticipantAlternates(metadata, targetOrTargets = []) {
   const entry = resolved?.participant;
   const entryFields = entry
     ? [entry.id, entry.jid, entry.phoneNumber, entry.pn, entry.lid]
+        .map(normalizeParticipantField)
+        .filter(Boolean)
     : [];
 
   const matchedAll = [];
@@ -246,9 +259,10 @@ export function collectParticipantAlternates(metadata, targetOrTargets = []) {
 
     for (const p of metadata.participants) {
       if (!p || typeof p !== 'object') continue;
-      const fields = [p.id, p.jid, p.phoneNumber, p.pn, p.lid].filter(Boolean);
-      const hits = fields.some((f) => {
-        const c = cleanJid(f);
+      const fields = [p.id, p.jid, p.phoneNumber, p.pn, p.lid]
+        .map(normalizeParticipantField)
+        .filter(Boolean);
+      const hits = fields.some((c) => {
         if (targetClean.has(c.toLowerCase())) return true;
         const lid = extractLid(c);
         if (lid && targetLids.has(lid)) return true;
@@ -394,6 +408,209 @@ export function resolveQuotedDeleteTarget({ from, msg, sock = null, metadata = n
   };
 }
 
+function isRetryableAckError(errorCode) {
+  const codeStr = String(errorCode || '').trim();
+  if (!codeStr) return false;
+  if (/^(406|421|479|500|503)$/i.test(codeStr)) return true;
+  return /stale|addressing|sender-key|smax|group|cache/i.test(codeStr);
+}
+
+function removeEventListener(emitter, event, fn) {
+  if (!emitter || !fn) return;
+  try {
+    if (typeof emitter.off === 'function') {
+      emitter.off(event, fn);
+    } else if (typeof emitter.removeListener === 'function') {
+      emitter.removeListener(event, fn);
+    }
+  } catch {}
+}
+
+export async function sendWithAckCheck({
+  sock,
+  from,
+  payload,
+  sendOptions = undefined,
+  ackTimeoutMs = null,
+} = {}) {
+  if (!sock || typeof sock.sendMessage !== 'function' || !from || !payload) {
+    return { ok: false, error: 'invalid-send-arguments', retryableCache: false };
+  }
+
+  const hasWs = typeof sock.ws?.on === 'function';
+  const hasEv = typeof sock.ev?.on === 'function';
+
+  // Fast path for lightweight mocks without ws/ev emitters (zero delay, exact arg count)
+  if (!hasWs && !hasEv) {
+    try {
+      const res = sendOptions
+        ? await sock.sendMessage(from, payload, sendOptions)
+        : await sock.sendMessage(from, payload);
+      if (isSendMessageFailure(res)) {
+        return {
+          ok: false,
+          error: res?.error || `status:${res?.status ?? 'failed'}`,
+          status: res?.status,
+          retryableCache: isRetryableAckError(res?.error || res?.status),
+          result: res,
+        };
+      }
+      return { ok: true, acked: false, result: res };
+    } catch (err) {
+      return {
+        ok: false,
+        blocked: isAdminProtectedError(err),
+        error: err?.message || String(err),
+        retryableCache: isRetryableAckError(err?.code || err?.message),
+      };
+    }
+  }
+
+  const bufferedAcks = [];
+  const bufferedUpdates = [];
+  let sentMsgId = null;
+  let settled = false;
+  let resolveDecision = null;
+  let timer = null;
+
+  const finish = (outcome) => {
+    if (settled) return;
+    settled = true;
+    if (timer) clearTimeout(timer);
+    if (resolveDecision) resolveDecision(outcome);
+  };
+
+  const evaluateAckFrame = (frame) => {
+    const attrs = frame?.attrs || {};
+    if (!sentMsgId || attrs.id !== sentMsgId) return false;
+    if (attrs.error) {
+      const code = String(attrs.error);
+      finish({
+        ok: false,
+        acked: true,
+        error: code,
+        status: Number.isNaN(Number(code)) ? code : Number(code),
+        retryableCache: isRetryableAckError(code),
+      });
+      return true;
+    }
+    finish({ ok: true, acked: true });
+    return true;
+  };
+
+  const evaluateMsgUpdate = (updates) => {
+    if (!sentMsgId || !Array.isArray(updates)) return false;
+    for (const item of updates) {
+      if (item?.key?.id !== sentMsgId) continue;
+      const st = item?.update?.status;
+      const isErr =
+        st === 0 ||
+        (typeof st === 'string' && st.toUpperCase() === 'ERROR');
+      if (isErr) {
+        const stubErr = item?.update?.messageStubParameters?.[0];
+        const code = String(stubErr || 'ack-error');
+        finish({
+          ok: false,
+          acked: true,
+          error: code,
+          status: Number.isNaN(Number(code)) ? 0 : Number(code),
+          retryableCache: isRetryableAckError(code),
+        });
+        return true;
+      }
+      if (st != null && !Number.isNaN(Number(st)) && Number(st) >= 2) {
+        finish({ ok: true, acked: true });
+        return true;
+      }
+    }
+    return false;
+  };
+
+  const onAck = (frame) => {
+    if (settled) return;
+    if (!sentMsgId) {
+      bufferedAcks.push(frame);
+      return;
+    }
+    evaluateAckFrame(frame);
+  };
+
+  const onUpdate = (updates) => {
+    if (settled) return;
+    if (!sentMsgId) {
+      if (Array.isArray(updates)) bufferedUpdates.push(updates);
+      return;
+    }
+    evaluateMsgUpdate(updates);
+  };
+
+  if (hasWs) sock.ws.on('CB:ack,class:message', onAck);
+  if (hasEv) sock.ev.on('messages.update', onUpdate);
+
+  try {
+    let res;
+    try {
+      res = sendOptions
+        ? await sock.sendMessage(from, payload, sendOptions)
+        : await sock.sendMessage(from, payload);
+    } catch (err) {
+      return {
+        ok: false,
+        blocked: isAdminProtectedError(err),
+        error: err?.message || String(err),
+        retryableCache: isRetryableAckError(err?.code || err?.message),
+      };
+    }
+
+    if (isSendMessageFailure(res)) {
+      return {
+        ok: false,
+        error: res?.error || `status:${res?.status ?? 'failed'}`,
+        status: res?.status,
+        retryableCache: isRetryableAckError(res?.error || res?.status),
+        result: res,
+      };
+    }
+
+    sentMsgId = res?.key?.id || null;
+    if (!sentMsgId) {
+      return { ok: true, acked: false, result: res };
+    }
+
+    const decisionPromise = new Promise((resolve) => {
+      resolveDecision = resolve;
+    });
+
+    for (const frame of bufferedAcks) {
+      if (evaluateAckFrame(frame)) break;
+    }
+    if (!settled) {
+      for (const batch of bufferedUpdates) {
+        if (evaluateMsgUpdate(batch)) break;
+      }
+    }
+
+    if (!settled) {
+      const waitMs =
+        typeof ackTimeoutMs === 'number' && ackTimeoutMs >= 0
+          ? ackTimeoutMs
+          : hasWs
+            ? 2500
+            : 400;
+      timer = setTimeout(() => {
+        finish({ ok: true, timedOut: true, acked: false });
+      }, waitMs);
+    }
+
+    const decision = await decisionPromise;
+    return { ...decision, result: res };
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (hasWs) removeEventListener(sock.ws, 'CB:ack,class:message', onAck);
+    if (hasEv) removeEventListener(sock.ev, 'messages.update', onUpdate);
+  }
+}
+
 export async function deleteMessageSafely({
   sock,
   from,
@@ -402,6 +619,7 @@ export async function deleteMessageSafely({
   senderCandidates = [],
   metadata = null,
   allowFromMeFallback = false,
+  ackTimeoutMs = null,
 } = {}) {
   if (!sock || typeof sock.sendMessage !== 'function' || !from || !msg?.key?.id) {
     return { ok: false, key: null, attempts: 0, error: 'missing-delete-key' };
@@ -466,23 +684,111 @@ export async function deleteMessageSafely({
 
   let attempts = 0;
   let lastError = null;
-  for (const key of keysToTry) {
+  let cacheInvalidated = false;
+
+  for (let idx = 0; idx < keysToTry.length; idx += 1) {
+    const key = keysToTry[idx];
     attempts += 1;
-    try {
-      const res = await sock.sendMessage(from, { delete: key });
-      if (!isSendMessageFailure(res)) {
-        return { ok: true, key, attempts, result: res };
-      }
-      lastError = res?.error || `status:${res?.status ?? 'failed'}`;
-    } catch (err) {
-      lastError = err?.message || String(err);
-      if (isAdminProtectedError(err)) {
-        return { ok: false, blocked: true, key, attempts, error: lastError };
+    const initialSendOptions = cacheInvalidated
+      ? { useCachedGroupMetadata: false, useUserDevicesCache: false }
+      : undefined;
+
+    const firstTry = await sendWithAckCheck({
+      sock,
+      from,
+      payload: { delete: key },
+      sendOptions: initialSendOptions,
+      ackTimeoutMs,
+    });
+
+    if (firstTry.ok) {
+      return { ok: true, key, attempts, result: firstTry.result, acked: Boolean(firstTry.acked) };
+    }
+
+    lastError = firstTry.error || 'delete-failed';
+    if (firstTry.blocked) {
+      return { ok: false, blocked: true, key, attempts, error: lastError };
+    }
+
+    if (isGroup && !cacheInvalidated) {
+      cacheInvalidated = true;
+      try {
+        await sock.__spiderInvalidateGroupCache?.(from);
+      } catch {}
+
+      if (firstTry.retryableCache) {
+        attempts += 1;
+        const freshTry = await sendWithAckCheck({
+          sock,
+          from,
+          payload: { delete: key },
+          sendOptions: { useCachedGroupMetadata: false, useUserDevicesCache: false },
+          ackTimeoutMs,
+        });
+        if (freshTry.ok) {
+          return {
+            ok: true,
+            key,
+            attempts,
+            result: freshTry.result,
+            acked: Boolean(freshTry.acked),
+            retriedWithoutCache: true,
+          };
+        }
+        lastError = freshTry.error || lastError;
+        if (freshTry.blocked) {
+          return { ok: false, blocked: true, key, attempts, error: lastError };
+        }
       }
     }
   }
 
   return { ok: false, key: keysToTry[0] || null, attempts, error: lastError || 'delete-failed' };
+}
+
+export async function pinMessageSafely({
+  sock,
+  from,
+  key,
+  type = 1,
+  time = 86400,
+  ackTimeoutMs = null,
+} = {}) {
+  if (!sock || typeof sock.sendMessage !== 'function' || !from || !key?.id) {
+    return { ok: false, error: 'missing-pin-key' };
+  }
+
+  const payload = { pin: key, type, time };
+  const firstTry = await sendWithAckCheck({
+    sock,
+    from,
+    payload,
+    ackTimeoutMs,
+  });
+  if (firstTry.ok) {
+    return { ok: true, result: firstTry.result, acked: Boolean(firstTry.acked) };
+  }
+
+  if (String(from).endsWith('@g.us')) {
+    try {
+      await sock.__spiderInvalidateGroupCache?.(from);
+    } catch {}
+    if (firstTry.retryableCache) {
+      const retryTry = await sendWithAckCheck({
+        sock,
+        from,
+        payload,
+        sendOptions: { useCachedGroupMetadata: false, useUserDevicesCache: false },
+        ackTimeoutMs,
+      });
+      if (retryTry.ok) {
+        return { ok: true, result: retryTry.result, acked: Boolean(retryTry.acked), retriedWithoutCache: true };
+      }
+      return { ok: false, error: retryTry.error || firstTry.error || 'pin-failed' };
+    }
+  }
+
+  return { ok: false, error: firstTry.error || 'pin-failed' };
 }
 
 export async function safeDeleteTempMessage(sock, from, tempMsg) {
