@@ -1,4 +1,4 @@
-![Spider Man](https://raw.githubusercontent.com/LilGabrielDev/Spider-Man/main/spider/assets/spider-man.jpg)
+![Spider Man](spider/assets/spider-man.jpg)
 
 # SPIDER-MAN MD
 
