@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { commands } from '../commands/Ping.js';
 
-test('ping reports ACK latency in milliseconds in its final Pong response', async () => {
+test('ping reports local dispatch latency instead of WhatsApp ACK latency', async () => {
   const ping = commands.find((command) => command.name === 'ping');
   const sent = [];
   const msg = { key: { id: 'ping-test', remoteJid: 'test@s.whatsapp.net' } };
@@ -23,6 +23,8 @@ test('ping reports ACK latency in milliseconds in its final Pong response', asyn
   assert.equal(sent[0][1].text, 'Pinging...');
   assert.match(sent[1][1].text, /Pong!/);
   assert.match(sent[1][1].text, /Speed: \d+ ms/);
+  const latency = Number(sent[1][1].text.match(/Speed: (\d+) ms/)[1]);
+  assert.ok(latency < 100, `expected local latency under 100 ms, got ${latency} ms`);
   assert.equal(sent[0][2].quoted, msg);
   assert.equal(sent[1][2].quoted, msg);
 });
