@@ -1,6 +1,6 @@
 ![Spider Man](https://raw.githubusercontent.com/LilGabrielDev/Spider-Man/main/spider/assets/spider-man.jpg)
 
-# SPIDER MAN MD
+# SPIDER-MAN MD
 
 [![PAIR CODE](https://img.shields.io/badge/PAIR%20CODE-7C3AED?style=for-the-badge&logo=whatsapp&logoColor=white)](https://ultra-guru-pair-1.onrender.com/pair)
 [![SCAN QR](https://img.shields.io/badge/SCAN%20QR-111827?style=for-the-badge&logo=qrcode&logoColor=white)](https://ultra-guru-pair-1.onrender.com/qr)
