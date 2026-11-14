@@ -269,6 +269,51 @@ test('deleteMessageSafely requires a server ack and routes the revoke to the ori
   assert.equal(sent[0].payload.delete.remoteJid, groupMeta.id);
 });
 
+test('deleteMessageSafely does not treat a resolved send without a correlatable message ID as confirmed', async () => {
+  const { sock, groupMeta } = createAckAwareSock({
+    onSendMessage: async () => ({}),
+  });
+  const res = await groupActionHelper.deleteMessageSafely({
+    sock,
+    from: groupMeta.id,
+    msg: {
+      key: {
+        remoteJid: groupMeta.id,
+        id: 'missing-ack-id-victim',
+        fromMe: false,
+        participant: '3330003@lid',
+      },
+    },
+    metadata: null,
+    ackTimeoutMs: 0,
+  });
+
+  assert.equal(res.ok, false);
+  assert.equal(res.error, 'delete-unconfirmed');
+});
+
+test('deleteMessageSafely does not claim confirmation when the socket exposes no ACK event channel', async () => {
+  const groupJid = '120363000000009001@g.us';
+  const sock = {
+    sendMessage: async (jid) => ({ key: { id: 'untracked-revoke', remoteJid: jid, fromMe: true } }),
+  };
+  const res = await groupActionHelper.deleteMessageSafely({
+    sock,
+    from: groupJid,
+    msg: {
+      key: {
+        remoteJid: groupJid,
+        id: 'untracked-victim',
+        fromMe: false,
+        participant: '3330003@lid',
+      },
+    },
+  });
+
+  assert.equal(res.ok, false);
+  assert.equal(res.error, 'delete-unconfirmed');
+});
+
 test('participant update parsing rejects unknown or incomplete responses', () => {
   const first = '254700000001@s.whatsapp.net';
   const second = '254700000002@s.whatsapp.net';
