@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "start": "node \"spider/index.js\"",
+    "install:panel": "npm install --legacy-peer-deps",
     "dev": "node \"spider/index.js\"",
     "build": "node --check spider/index.js spider/config.js spider/native-mocks.js",
     "lint": "node --check spider/index.js spider/config.js spider/native-mocks.js",
