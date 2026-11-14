@@ -180,6 +180,10 @@ export function collectSenderIdentities(msg, extraIds = []) {
     ...toList(extraIds),
     msg?.key?.participant,
     msg?.key?.participantAlt,
+    msg?.key?.participantPn,
+    msg?.key?.senderPn,
+    msg?.key?.senderLid,
+    msg?.participant,
     msg?.key?.remoteJidAlt,
   ];
 

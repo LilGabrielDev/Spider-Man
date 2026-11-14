@@ -7,6 +7,12 @@ import {
   collectSenderIdentities,
   resolveGroupRolesAsync,
 } from './groupRoleResolver.js';
+import {
+  deleteMessageSafely,
+  executeGroupSettingUpdate,
+  executeParticipantsAction,
+  resolveSenderDisplayAndMention,
+} from './groupActionHelper.js';
 
 export const ANTIFLOOD_ACTIONS = Object.freeze(['delete', 'warn', 'kick', 'warnkick', 'mute']);
 
@@ -491,8 +497,9 @@ export async function handleAntiFloodMessage({
     return { handled: false, reason: 'owner-exempt' };
   }
 
-  const senderJid = sender || msg.key?.participant || '';
-  if (isSenderWhitelisted(senderJid, groupConfig.whitelist, getPhoneFromJid)) {
+  const senderCandidates = collectSenderIdentities(msg, [sender]);
+  const senderJid = senderCandidates[0] || sender || msg.key?.participant || '';
+  if (senderCandidates.some((cand) => isSenderWhitelisted(cand, groupConfig.whitelist, getPhoneFromJid))) {
     return { handled: false, reason: 'whitelisted' };
   }
 
@@ -526,7 +533,6 @@ export async function handleAntiFloodMessage({
     }
   }
 
-  const senderCandidates = collectSenderIdentities(msg, [sender]);
   const botCandidates = collectBotIdentities(sock);
   const { senderRole, botRole } = await resolveGroupRolesAsync({
     metadata,
@@ -554,25 +560,37 @@ export async function handleAntiFloodMessage({
     };
   }
 
-  const targetJid = cleanJid(senderRole.targetJid || senderJid) || senderJid;
-  const targetUser = extractPhone(targetJid) || String(targetJid).split('@')[0] || 'member';
+  const {
+    targetJid,
+    mentionJid,
+    targetUser,
+    candidates: resolvedCandidates,
+  } = resolveSenderDisplayAndMention({
+    senderRole,
+    senderJid,
+    senderCandidates,
+    metadata,
+    getPhoneFn: getPhoneFromJid,
+  });
 
-  let deleted = false;
-  if (msg.key?.id) {
-    try {
-      await sock.sendMessage(from, { delete: buildDeleteKey(from, msg, targetJid) });
-      deleted = true;
-    } catch {
-      deleted = false;
-    }
-  }
+  const delRes = msg.key?.id
+    ? await deleteMessageSafely({
+        sock,
+        from,
+        msg,
+        targetJid,
+        senderCandidates: resolvedCandidates,
+        metadata,
+      })
+    : { ok: false };
+  const deleted = delRes.ok;
 
   let kicked = false;
   let warned = false;
   let muted = false;
   let warnCount = 0;
   let maxWarns = groupConfig.maxWarns;
-  let actionLabel = deleted ? 'MESSAGE DELETED' : 'FLOOD DETECTED';
+  let actionLabel = deleted ? 'MESSAGE DELETED' : 'DELETE FAILED';
   let warnText = '';
   let shouldAlert = floodCheck.alertCooldownElapsed;
 
@@ -582,26 +600,28 @@ export async function handleAntiFloodMessage({
     warned = true;
     warnCount = warnResult.count;
     maxWarns = warnResult.maxWarns;
-    actionLabel = deleted ? 'DELETED & WARNED' : 'WARNED';
+    actionLabel = deleted ? 'DELETED & WARNED' : 'WARNED (DELETE FAILED)';
     warnText = `${warnCount}/${maxWarns}`;
     tracker.resetSender(from, senderJid, getPhoneFromJid);
     shouldAlert = true;
   } else if (mode === 'kick') {
-    if (targetJid && typeof sock.groupParticipantsUpdate === 'function') {
-      try {
-        await sock.groupParticipantsUpdate(from, [targetJid], 'remove');
-        kicked = true;
-      } catch {
-        kicked = false;
-      }
-    }
+    const kickRes = targetJid
+      ? await executeParticipantsAction({
+          sock,
+          from,
+          participants: [targetJid],
+          action: 'remove',
+          metadata,
+        })
+      : { ok: false };
+    kicked = kickRes.ok;
     actionLabel = kicked
       ? deleted
         ? 'DELETED & KICKED'
-        : 'KICKED'
+        : 'KICKED (DELETE FAILED)'
       : deleted
         ? 'DELETED (KICK FAILED)'
-        : 'KICK FAILED';
+        : 'KICK & DELETE FAILED';
     tracker.resetSender(from, senderJid, getPhoneFromJid);
     shouldAlert = true;
   } else if (mode === 'warnkick') {
@@ -614,35 +634,43 @@ export async function handleAntiFloodMessage({
     shouldAlert = true;
 
     if (warnCount >= maxWarns) {
-      if (targetJid && typeof sock.groupParticipantsUpdate === 'function') {
-        try {
-          await sock.groupParticipantsUpdate(from, [targetJid], 'remove');
-          kicked = true;
-          store.resetWarns(from, targetJid);
-        } catch {
-          kicked = false;
-        }
+      const kickRes = targetJid
+        ? await executeParticipantsAction({
+            sock,
+            from,
+            participants: [targetJid],
+            action: 'remove',
+            metadata,
+          })
+        : { ok: false };
+      kicked = kickRes.ok;
+      if (kicked) {
+        store.resetWarns(from, targetJid);
       }
-      actionLabel = kicked ? 'MAX WARNS · KICKED' : 'MAX WARNS REACHED';
+      actionLabel = kicked
+        ? deleted
+          ? 'DELETED · MAX WARNS · KICKED'
+          : 'MAX WARNS · KICKED (DELETE FAILED)'
+        : deleted
+          ? 'DELETED · MAX WARNS (KICK FAILED)'
+          : 'MAX WARNS (KICK & DELETE FAILED)';
     } else {
-      actionLabel = deleted ? 'DELETED & WARNED' : 'WARNED';
+      actionLabel = deleted ? 'DELETED & WARNED' : 'WARNED (DELETE FAILED)';
     }
   } else if (mode === 'mute') {
-    if (typeof sock.groupSettingUpdate === 'function') {
-      try {
-        await sock.groupSettingUpdate(from, 'announcement');
-        muted = true;
-      } catch {
-        muted = false;
-      }
-    }
+    const muteRes = await executeGroupSettingUpdate({
+      sock,
+      from,
+      setting: 'announcement',
+    });
+    muted = muteRes.ok;
     actionLabel = muted
       ? deleted
         ? 'DELETED & GROUP MUTED'
-        : 'GROUP MUTED'
+        : 'GROUP MUTED (DELETE FAILED)'
       : deleted
         ? 'DELETED (MUTE FAILED)'
-        : 'MUTE FAILED';
+        : 'MUTE & DELETE FAILED';
     tracker.resetSender(from, senderJid, getPhoneFromJid);
     shouldAlert = true;
   }
@@ -666,7 +694,7 @@ export async function handleAntiFloodMessage({
           rateText: `${floodCheck.count} msgs / ${groupConfig.windowSec}s (limit ${groupConfig.limit})`,
           warnText,
         }),
-        mentions: targetJid ? [targetJid] : [],
+        mentions: mentionJid ? [mentionJid] : [],
       });
     } catch {}
   }
