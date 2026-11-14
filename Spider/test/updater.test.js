@@ -8,6 +8,7 @@ import {
   UPDATE_STATE_FILENAME,
   applyZipArchiveToWorkspace,
   detectHostingEnvironment,
+  detectHostingEnvironmentAsync,
   getCurrentCommitSha,
   readUpdateState,
   runBotUpdate,
@@ -56,7 +57,7 @@ test('detectHostingEnvironment detects Heroku, Deploy Hooks, Katabump, Bot-Hosti
 
   assert.deepEqual(detectHostingEnvironment({ P_SERVER_UUID: 'uuid-123' }), {
     mode: 'self',
-    label: 'Katabump / Panel',
+    label: 'Pterodactyl Panel',
   });
 
   assert.deepEqual(detectHostingEnvironment({ HOST_PROVIDER: 'bot-hosting' }), {
@@ -78,6 +79,29 @@ test('detectHostingEnvironment detects Heroku, Deploy Hooks, Katabump, Bot-Hosti
     mode: 'self',
     label: 'Panel',
   });
+});
+
+test('detectHostingEnvironmentAsync ignores HOSTING_URL promo links', async () => {
+  assert.deepEqual(
+    await detectHostingEnvironmentAsync({
+      HOSTING_URL: 'https://cheap.bothosting.lilgabrieltech.top',
+      P_SERVER_UUID: 'panel-1',
+    }),
+    {
+      mode: 'self',
+      label: 'Pterodactyl Panel',
+    },
+  );
+  assert.deepEqual(
+    await detectHostingEnvironmentAsync({
+      HOSTING_URL: 'https://cheap.bothosting.lilgabrieltech.top',
+      K_SERVICE: 'cloud-run-svc',
+    }),
+    {
+      mode: 'self',
+      label: 'Google Cloud Run',
+    },
+  );
 });
 
 test('shouldPreserveRelativePath protects runtime secrets, sessions, databases, and logs', () => {
@@ -207,7 +231,7 @@ test('runBotUpdate supports Katabump/Panel direct updates, checkOnly, up_to_date
       execImpl: execMock,
     });
     assert.equal(checkResult.status, 'update_available');
-    assert.equal(checkResult.host.label, 'Katabump / Panel');
+    assert.equal(checkResult.host.label, 'Pterodactyl Panel');
     assert.equal(execCalls.length, 0);
 
     const selfResult = await runBotUpdate({
