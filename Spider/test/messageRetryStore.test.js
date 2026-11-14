@@ -1,12 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import {
+  configureMessageRetryStore,
+  flushMessageRetryStore,
   getMessageForRetry,
   installMessageRetryStore,
+  registerChatAlias,
   rememberMessage,
+  resetMessageRetryStore,
+  setChatAliasResolver,
 } from '../../spider/anti.js';
+import {
+  createBaileysCacheStore,
+  startResourceMaintenance,
+} from '../../spider/utils/resourceGuard.js';
 
 const groupA = '120363000000000001@g.us';
 const groupB = '120363000000000002@g.us';
@@ -28,20 +38,85 @@ test('retry cache returns original content by remote chat and message ID', async
 test('retry cache immediately captures sendMessage and relayMessage payloads', async () => {
   const id = `send-${Date.now()}-${Math.random()}`;
   const relayedId = `relay-${Date.now()}-${Math.random()}`;
+  const relayedStringId = `relay-str-${Date.now()}-${Math.random()}`;
   const sentContent = { conversation: 'sent with sendMessage' };
   const relayedContent = { extendedTextMessage: { text: 'sent with relayMessage' } };
+  const relayedNoOptContent = { extendedTextMessage: { text: 'relayed without explicit id' } };
+  let preRelayLookup;
   const sock = {
     sendMessage: async (jid) => ({ key: { remoteJid: jid, id, fromMe: true }, message: sentContent }),
-    relayMessage: async () => ({ key: { remoteJid: groupA, id: relayedId, fromMe: true } }),
+    relayMessage: async (jid, _msg, opts = {}) => {
+      if (opts.messageId === relayedId) {
+        preRelayLookup = await getMessageForRetry({ remoteJid: jid, id: relayedId });
+        return { key: { remoteJid: groupA, id: relayedId, fromMe: true } };
+      }
+      return relayedStringId;
+    },
   };
 
   assert.equal(installMessageRetryStore(sock), true);
   assert.equal(installMessageRetryStore(sock), true, 'install should be idempotent');
   await sock.sendMessage(groupA, sentContent);
   await sock.relayMessage(groupA, relayedContent, { messageId: relayedId });
+  await sock.relayMessage(groupA, relayedNoOptContent);
 
+  assert.deepEqual(preRelayLookup, relayedContent, 'explicit messageId should be cached before relay completes');
   assert.deepEqual(await getMessageForRetry({ remoteJid: groupA, id }), sentContent);
   assert.deepEqual(await getMessageForRetry({ remoteJid: groupA, id: relayedId }), relayedContent);
+  assert.deepEqual(await getMessageForRetry({ remoteJid: groupA, id: relayedStringId }), relayedNoOptContent);
+});
+
+test('retry cache resolves device-suffixed JIDs and PN/LID aliases without leaking across groups', async () => {
+  const pn = '254711111111@s.whatsapp.net';
+  const pnDevice = '254711111111:3@s.whatsapp.net';
+  const lid = '998877665544@lid';
+  const lidDevice = '998877665544:2@lid';
+  const msgId = `alias-${Date.now()}-${Math.random()}`;
+  const payload = { conversation: 'hello linked device' };
+
+  rememberMessage({ key: { remoteJid: pnDevice, id: msgId, fromMe: true }, message: payload });
+  registerChatAlias(pn, lid);
+
+  assert.deepEqual(await getMessageForRetry({ remoteJid: pn, id: msgId }), payload);
+  assert.deepEqual(await getMessageForRetry({ remoteJid: lid, id: msgId }), payload);
+  assert.deepEqual(await getMessageForRetry({ remoteJid: lidDevice, id: msgId }), payload);
+  assert.equal(await getMessageForRetry({ remoteJid: '254799999999@s.whatsapp.net', id: msgId }), undefined);
+
+  const dynamicId = `dyn-${Date.now()}-${Math.random()}`;
+  const dynamicPn = '254722222222@s.whatsapp.net';
+  const dynamicLid = '112233445566@lid';
+  setChatAliasResolver(async (jid) => (jid === dynamicLid ? [dynamicPn] : []));
+  rememberMessage({ key: { remoteJid: dynamicPn, id: dynamicId, fromMe: true }, message: payload });
+  assert.deepEqual(await getMessageForRetry({ remoteJid: dynamicLid, id: dynamicId }), payload);
+  setChatAliasResolver(null);
+});
+
+test('configureMessageRetryStore persists binary message fields and restores across restarts', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'spider-retry-store-'));
+  const storePath = path.join(tmpDir, 'retry-message-store.json');
+  const msgId = `persist-${Date.now()}`;
+  const mediaKey = Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 8]);
+  const msgContent = { imageMessage: { caption: 'persisted media', mediaKey } };
+
+  try {
+    resetMessageRetryStore();
+    configureMessageRetryStore({ persistPath: storePath, maxMessages: 50 });
+    rememberMessage({ key: { remoteJid: groupA, id: msgId, fromMe: true }, message: msgContent });
+    flushMessageRetryStore();
+
+    // Simulate process restart with fresh memory maps
+    resetMessageRetryStore();
+    assert.equal(await getMessageForRetry({ remoteJid: groupA, id: msgId }), undefined);
+
+    const loaded = configureMessageRetryStore({ persistPath: storePath, maxMessages: 50 });
+    assert.ok(loaded >= 1);
+    const restored = await getMessageForRetry({ remoteJid: groupA, id: msgId });
+    assert.equal(restored?.imageMessage?.caption, 'persisted media');
+    assert.deepEqual(Uint8Array.from(restored.imageMessage.mediaKey), mediaKey);
+  } finally {
+    resetMessageRetryStore();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });
 
 test('serializes concurrent sends per chat while keeping different chats parallel', async () => {
@@ -71,12 +146,40 @@ test('serializes concurrent sends per chat while keeping different chats paralle
   assert.equal(events.indexOf(`start:${groupA}:two`) > events.indexOf(`end:${groupA}:one`), true);
 });
 
-test('live Baileys socket wires getMessage and caches upserted and own-sent messages', () => {
+test('resourceGuard preserves protected retry/LID caches during aggressive memory trim', () => {
+  const ephemeral = createBaileysCacheStore({ maxEntries: 10, ttlMs: 60_000 });
+  const retryCache = createBaileysCacheStore({ maxEntries: 10, ttlMs: 60_000 });
+  ephemeral.set('temp', 1);
+  retryCache.set('msg-1:user', 2);
+
+  const maint = startResourceMaintenance({
+    caches: [ephemeral],
+    protectedCaches: [retryCache],
+    quiet: true,
+    intervalMs: 60_000,
+  });
+  try {
+    maint.runNow({ forceMemoryTrim: true });
+    assert.equal(ephemeral.get('temp'), undefined);
+    assert.equal(retryCache.get('msg-1:user'), 2);
+  } finally {
+    maint.stop();
+  }
+});
+
+test('live Baileys socket wires getMessage, signal key cache, placeholder resend, and caches upserted and own-sent messages', () => {
   const source = fs.readFileSync(path.resolve(process.cwd(), 'spider/index.js'), 'utf8');
   assert.match(source, /'getMessage':getMessageForRetry/);
   assert.match(source, /'emitOwnEvents':!!\[\]/);
   assert.match(source, /'shouldSyncHistoryMessage':\(\)=>!!\[\]/);
+  assert.match(source, /makeCacheableSignalKeyStore\(/);
+  assert.match(source, /'placeholderResendCache':placeholderResendCache/);
+  assert.match(source, /'enableAutoSessionRecreation':!!\[\]/);
+  assert.match(source, /'enableRecentMessageCache':!!\[\]/);
+  assert.match(source, /configureMessageRetryStore\(/);
   assert.match(source, /installMessageRetryStore\(sock\)/);
+  assert.match(source, /'lid-mapping\.update'/);
+  assert.match(source, /'messages\.update'/);
   assert.match(source, /messaging-history\.set/);
   assert.match(source, /rememberMessage\(_0x16a3b2\);/);
 });
