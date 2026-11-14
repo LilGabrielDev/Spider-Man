@@ -16,7 +16,7 @@ Pair your device, then add the `SESSION` or `SESSION_ID` sent to your WhatsApp a
 
 ## Features
 
-- **Multi-Device WhatsApp Client**: Connects using `SESSION` (base64 `creds.json`) or `SESSION_ID` (`GURU~` gzipped base64 or plain base64).
+- **Multi-Device WhatsApp Client**: Connects using `SESSION` (base64 `creds.json`) or `SESSION_ID` (`LIL~` gzipped base64 or plain base64).
 - **Modular Commands & Legacy Compatibility**: Loads native commands from `Spider/commands/` alongside compatible legacy plugins via `Spider/utils/legacyPlugins.js`.
 - **Group & Security Controls**: Admin protection (`ADMIN_PROTECTION`), owner-only command enforcement, rate limiting, and emergency lockdown state (`spider/utils/securityStore.js`).
 - **Automations**: Anti-delete, anti-edit, anti-call, auto-read, auto-react, status auto-view/like, chat presence, and view-once auto-save.

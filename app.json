@@ -54,7 +54,7 @@
       "required": false
     },
     "SESSION_ID": {
-      "description": "GURU~gzip-base64 session or plain base64-encoded creds.json; both formats are accepted",
+      "description": "LIL~gzip-base64 session or plain base64-encoded creds.json; both formats are accepted",
       "required": false
     },
     "USER_LID": {
