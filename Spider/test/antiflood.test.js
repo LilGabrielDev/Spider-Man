@@ -291,8 +291,10 @@ test('handleAntiFloodMessage enforces delete, warnkick, kick, mute, and respects
     });
     assert.equal(del1.handled, true);
     assert.equal(del1.deleted, true);
+    assert.equal(del1.warningMessage, 'No flooding or spamming allowed in this group!');
     assert.equal(env.sent.length, 2); // delete + 1 alert card
     assert.match(env.sent[1].payload.text, /MESSAGE DELETED/);
+    assert.match(env.sent[1].payload.text, /\*WARNING\*\s*›\s*No flooding or spamming allowed in this group!/);
 
     const del2 = await antifloodUtils.handleAntiFloodMessage({
       sock: env.sock,

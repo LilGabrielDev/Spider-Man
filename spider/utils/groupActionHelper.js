@@ -185,6 +185,101 @@ export function isFromBot(candidateOrList, sock) {
   return false;
 }
 
+export async function resolveLidPnAlternatesAsync(sock, targetOrTargets = []) {
+  const seeds = dedupeUserJids(Array.isArray(targetOrTargets) ? targetOrTargets : [targetOrTargets]);
+  if (seeds.length === 0) return [];
+
+  const lidMapping = sock?.signalRepository?.lidMapping;
+  if (!lidMapping || typeof lidMapping !== 'object') {
+    return seeds;
+  }
+
+  const discovered = [];
+  const pnsToLookup = [];
+
+  for (const jid of seeds) {
+    const lid = extractLid(jid);
+    if (lid) {
+      if (typeof lidMapping.getPNForLID === 'function') {
+        try {
+          const pn = await lidMapping.getPNForLID(lid);
+          const normalized = normalizeParticipantField(pn);
+          if (normalized) discovered.push(normalized);
+        } catch {}
+      }
+      continue;
+    }
+
+    const phone = extractPhoneDigits(jid);
+    if (phone) {
+      const pnJid = `${phone}@s.whatsapp.net`;
+      pnsToLookup.push(pnJid);
+      if (typeof lidMapping.getLIDForPN === 'function') {
+        try {
+          const lidRes = await lidMapping.getLIDForPN(pnJid);
+          const normalized = normalizeParticipantField(lidRes);
+          if (normalized) discovered.push(normalized);
+        } catch {}
+      }
+    }
+  }
+
+  if (pnsToLookup.length > 0 && typeof lidMapping.getKnownLIDsForPNs === 'function') {
+    try {
+      const known = await lidMapping.getKnownLIDsForPNs(pnsToLookup);
+      if (Array.isArray(known)) {
+        for (const entry of known) {
+          const lidNorm = normalizeParticipantField(entry?.lid);
+          const pnNorm = normalizeParticipantField(entry?.pn);
+          if (lidNorm) discovered.push(lidNorm);
+          if (pnNorm) discovered.push(pnNorm);
+        }
+      }
+    } catch {}
+  }
+
+  return dedupeUserJids([...seeds, ...discovered]);
+}
+
+function inferAddressingMode(metadata, msg = null, { preferGroupParticipants = false } = {}) {
+  const explicit = String(
+    metadata?.addressingMode || msg?.key?.addressingMode || '',
+  ).trim().toLowerCase();
+  if (explicit === 'lid' || explicit === 'pn') return explicit;
+
+  if (preferGroupParticipants && Array.isArray(metadata?.participants)) {
+    let lidCount = 0;
+    let pnCount = 0;
+    for (const p of metadata.participants) {
+      if (!p?.id) continue;
+      if (extractLid(p.id)) lidCount += 1;
+      else if (String(p.id).toLowerCase().endsWith('@s.whatsapp.net')) pnCount += 1;
+    }
+    if (lidCount > 0 && lidCount >= pnCount) return 'lid';
+    if (pnCount > 0 && pnCount > lidCount) return 'pn';
+  }
+
+  return '';
+}
+
+function orderParticipantsByAddressingMode(candidates, { metadata = null, msg = null, preferGroupParticipants = false } = {}) {
+  const list = dedupeUserJids(candidates);
+  if (list.length <= 1) return list;
+
+  const mode = inferAddressingMode(metadata, msg, { preferGroupParticipants });
+  if (mode === 'lid') {
+    const lids = list.filter((j) => Boolean(extractLid(j)));
+    const others = list.filter((j) => !extractLid(j));
+    return [...lids, ...others];
+  }
+  if (mode === 'pn') {
+    const pns = list.filter((j) => String(j).toLowerCase().endsWith('@s.whatsapp.net'));
+    const others = list.filter((j) => !String(j).toLowerCase().endsWith('@s.whatsapp.net'));
+    return [...pns, ...others];
+  }
+  return list;
+}
+
 export function isAdminProtectedError(err) {
   const code = String(err?.code || '').toUpperCase();
   const message = String(err?.message || '');
@@ -383,12 +478,82 @@ export function resolveQuotedDeleteTarget({ from, msg, sock = null, metadata = n
 
   const rawParticipant = contextInfo?.participant || contextInfo?.remoteJid || '';
   const isGroup = String(from || '').endsWith('@g.us');
-  const candidates = dedupeUserJids([
-    rawParticipant,
-    ...collectParticipantAlternates(metadata, [rawParticipant]),
-  ]);
+  const candidates = orderParticipantsByAddressingMode(
+    [
+      rawParticipant,
+      ...collectParticipantAlternates(metadata, [rawParticipant]),
+    ],
+    { metadata, msg, preferGroupParticipants: isGroup },
+  );
 
   const botMatch = rawParticipant ? isFromBot([rawParticipant, ...candidates], sock) : false;
+  const fromMe = isGroup ? botMatch : botMatch || !rawParticipant;
+
+  return {
+    stanzaId,
+    fromMe,
+    participant: candidates[0] || '',
+    candidates,
+    allowFromMeFallback: true,
+    msg: {
+      key: {
+        remoteJid: from,
+        fromMe,
+        id: stanzaId,
+        ...(candidates[0] ? { participant: candidates[0] } : {}),
+      },
+    },
+  };
+}
+
+export async function resolveQuotedDeleteTargetAsync({ from, msg, sock = null, metadata = null } = {}) {
+  const { contextInfo, rawQuotedMessage } = extractContextInfo(msg);
+  const stanzaId = contextInfo?.stanzaId || '';
+  if (!stanzaId && !rawQuotedMessage) {
+    return null;
+  }
+
+  const rawParticipant = contextInfo?.participant || contextInfo?.remoteJid || '';
+  const isGroup = String(from || '').endsWith('@g.us');
+
+  const metaAlternates = collectParticipantAlternates(metadata, [rawParticipant]);
+  const signalAlternates = await resolveLidPnAlternatesAsync(sock, [
+    rawParticipant,
+    ...metaAlternates,
+  ]);
+  const fullAlternates = collectParticipantAlternates(metadata, [
+    rawParticipant,
+    ...metaAlternates,
+    ...signalAlternates,
+  ]);
+  const candidates = orderParticipantsByAddressingMode(
+    [rawParticipant, ...metaAlternates, ...signalAlternates, ...fullAlternates],
+    { metadata, msg, preferGroupParticipants: isGroup },
+  );
+
+  let botMatch = false;
+  if (candidates.length > 0) {
+    botMatch = isFromBot(candidates, sock);
+    if (!botMatch && sock) {
+      const botIdentities = collectBotIdentities(sock);
+      const botResolved = await resolveLidPnAlternatesAsync(sock, [
+        ...botIdentities,
+        ...collectParticipantAlternates(metadata, botIdentities),
+      ]);
+      const candSet = new Set(candidates.map((c) => c.toLowerCase()));
+      const candLids = new Set(candidates.map((c) => extractLid(c)).filter(Boolean));
+      const candPhones = new Set(candidates.map((c) => extractPhoneDigits(c)).filter(Boolean));
+      botMatch = botResolved.some((b) => {
+        if (candSet.has(b.toLowerCase())) return true;
+        const lid = extractLid(b);
+        if (lid && candLids.has(lid)) return true;
+        const phone = extractPhoneDigits(b);
+        if (phone && candPhones.has(phone)) return true;
+        return false;
+      });
+    }
+  }
+
   const fromMe = isGroup ? botMatch : botMatch || !rawParticipant;
 
   return {
@@ -611,6 +776,29 @@ export async function sendWithAckCheck({
   }
 }
 
+function selectDistinctFormatAlternates(winningKey, allCandidates) {
+  const list = dedupeUserJids(allCandidates);
+  if (list.length <= 1) return [];
+
+  const winningParticipant = cleanJid(winningKey?.participant || '');
+  const winLower = winningParticipant.toLowerCase();
+  const winIsLid = Boolean(extractLid(winningParticipant));
+  const winIsPn = winningParticipant.toLowerCase().endsWith('@s.whatsapp.net');
+
+  const alternates = [];
+  if (!winIsLid) {
+    const lidAlt = list.find((c) => Boolean(extractLid(c)) && c.toLowerCase() !== winLower);
+    if (lidAlt) alternates.push(lidAlt);
+  }
+  if (!winIsPn) {
+    const pnAlt = list.find(
+      (c) => c.toLowerCase().endsWith('@s.whatsapp.net') && c.toLowerCase() !== winLower,
+    );
+    if (pnAlt) alternates.push(pnAlt);
+  }
+  return alternates;
+}
+
 export async function deleteMessageSafely({
   sock,
   from,
@@ -619,6 +807,7 @@ export async function deleteMessageSafely({
   senderCandidates = [],
   metadata = null,
   allowFromMeFallback = false,
+  broadcastAlternates = false,
   ackTimeoutMs = null,
 } = {}) {
   if (!sock || typeof sock.sendMessage !== 'function' || !from || !msg?.key?.id) {
@@ -627,7 +816,7 @@ export async function deleteMessageSafely({
 
   const isGroup = String(from).endsWith('@g.us');
   const fromMe = Boolean(msg.key.fromMe);
-  const rawParticipantCandidates = dedupeUserJids([
+  const seedCandidates = dedupeUserJids([
     msg.key.participant,
     msg.key.participantAlt,
     msg.key.participantPn,
@@ -636,28 +825,36 @@ export async function deleteMessageSafely({
     msg.participant,
     targetJid,
     ...(Array.isArray(senderCandidates) ? senderCandidates : []),
-    ...collectParticipantAlternates(metadata, [
-      msg.key.participant,
-      msg.key.participantAlt,
-      msg.key.participantPn,
-      targetJid,
-      ...(Array.isArray(senderCandidates) ? senderCandidates : []),
-    ]),
   ]);
+  const metaAlternates = collectParticipantAlternates(metadata, seedCandidates);
+  const signalAlternates = isGroup
+    ? await resolveLidPnAlternatesAsync(sock, [...seedCandidates, ...metaAlternates])
+    : [];
+  const postMetaAlternates =
+    signalAlternates.length > 0
+      ? collectParticipantAlternates(metadata, [...seedCandidates, ...metaAlternates, ...signalAlternates])
+      : [];
 
-  if (isGroup && !fromMe && rawParticipantCandidates.length === 0) {
+  const rawParticipantCandidates = orderParticipantsByAddressingMode(
+    [...seedCandidates, ...metaAlternates, ...signalAlternates, ...postMetaAlternates],
+    { metadata, msg },
+  );
+
+  if (isGroup && !fromMe && rawParticipantCandidates.length === 0 && !allowFromMeFallback) {
     return { ok: false, key: null, attempts: 0, error: 'missing-group-participant' };
   }
 
   const keysToTry = [];
   if (rawParticipantCandidates.length > 0) {
-    for (const participant of rawParticipantCandidates) {
-      keysToTry.push({
-        remoteJid: from,
-        fromMe,
-        id: msg.key.id,
-        participant,
-      });
+    if (!(isGroup && !fromMe && rawParticipantCandidates.length === 0)) {
+      for (const participant of rawParticipantCandidates) {
+        keysToTry.push({
+          remoteJid: from,
+          fromMe,
+          id: msg.key.id,
+          participant,
+        });
+      }
     }
     if (allowFromMeFallback) {
       keysToTry.push({
@@ -666,13 +863,27 @@ export async function deleteMessageSafely({
         id: msg.key.id,
         participant: rawParticipantCandidates[0],
       });
+      const fallbackAlts = selectDistinctFormatAlternates(
+        { participant: rawParticipantCandidates[0] },
+        rawParticipantCandidates,
+      );
+      for (const altParticipant of fallbackAlts) {
+        keysToTry.push({
+          remoteJid: from,
+          fromMe: !fromMe,
+          id: msg.key.id,
+          participant: altParticipant,
+        });
+      }
     }
   } else {
-    keysToTry.push({
-      remoteJid: from,
-      fromMe,
-      id: msg.key.id,
-    });
+    if (!(isGroup && !fromMe)) {
+      keysToTry.push({
+        remoteJid: from,
+        fromMe,
+        id: msg.key.id,
+      });
+    }
     if (allowFromMeFallback) {
       keysToTry.push({
         remoteJid: from,
@@ -682,14 +893,25 @@ export async function deleteMessageSafely({
     }
   }
 
+  if (keysToTry.length === 0) {
+    return { ok: false, key: null, attempts: 0, error: 'missing-group-participant' };
+  }
+
   let attempts = 0;
   let lastError = null;
   let cacheInvalidated = false;
 
+  if (isGroup && broadcastAlternates) {
+    try {
+      await sock.__spiderInvalidateGroupCache?.(from);
+    } catch {}
+  }
+
   for (let idx = 0; idx < keysToTry.length; idx += 1) {
     const key = keysToTry[idx];
     attempts += 1;
-    const initialSendOptions = cacheInvalidated
+    const forceFreshGroupSend = isGroup && (cacheInvalidated || broadcastAlternates);
+    const initialSendOptions = forceFreshGroupSend
       ? { useCachedGroupMetadata: false, useUserDevicesCache: false }
       : undefined;
 
@@ -701,45 +923,82 @@ export async function deleteMessageSafely({
       ackTimeoutMs,
     });
 
+    let winningResult = null;
+    let winningAcked = false;
+    let retriedWithoutCache = false;
+
     if (firstTry.ok) {
-      return { ok: true, key, attempts, result: firstTry.result, acked: Boolean(firstTry.acked) };
-    }
+      winningResult = firstTry.result;
+      winningAcked = Boolean(firstTry.acked);
+    } else {
+      lastError = firstTry.error || 'delete-failed';
+      if (firstTry.blocked) {
+        return { ok: false, blocked: true, key, attempts, error: lastError };
+      }
 
-    lastError = firstTry.error || 'delete-failed';
-    if (firstTry.blocked) {
-      return { ok: false, blocked: true, key, attempts, error: lastError };
-    }
+      if (isGroup && !cacheInvalidated) {
+        cacheInvalidated = true;
+        try {
+          await sock.__spiderInvalidateGroupCache?.(from);
+        } catch {}
 
-    if (isGroup && !cacheInvalidated) {
-      cacheInvalidated = true;
-      try {
-        await sock.__spiderInvalidateGroupCache?.(from);
-      } catch {}
-
-      if (firstTry.retryableCache) {
-        attempts += 1;
-        const freshTry = await sendWithAckCheck({
-          sock,
-          from,
-          payload: { delete: key },
-          sendOptions: { useCachedGroupMetadata: false, useUserDevicesCache: false },
-          ackTimeoutMs,
-        });
-        if (freshTry.ok) {
-          return {
-            ok: true,
-            key,
-            attempts,
-            result: freshTry.result,
-            acked: Boolean(freshTry.acked),
-            retriedWithoutCache: true,
-          };
-        }
-        lastError = freshTry.error || lastError;
-        if (freshTry.blocked) {
-          return { ok: false, blocked: true, key, attempts, error: lastError };
+        if (firstTry.retryableCache && !forceFreshGroupSend) {
+          attempts += 1;
+          const freshTry = await sendWithAckCheck({
+            sock,
+            from,
+            payload: { delete: key },
+            sendOptions: { useCachedGroupMetadata: false, useUserDevicesCache: false },
+            ackTimeoutMs,
+          });
+          if (freshTry.ok) {
+            winningResult = freshTry.result;
+            winningAcked = Boolean(freshTry.acked);
+            retriedWithoutCache = true;
+          } else {
+            lastError = freshTry.error || lastError;
+            if (freshTry.blocked) {
+              return { ok: false, blocked: true, key, attempts, error: lastError };
+            }
+          }
         }
       }
+    }
+
+    if (winningResult !== null || firstTry.ok) {
+      let alternateKeysSent = 0;
+      if (isGroup && broadcastAlternates && rawParticipantCandidates.length > 1) {
+        const distinctAlternates = selectDistinctFormatAlternates(key, rawParticipantCandidates);
+        for (const altParticipant of distinctAlternates) {
+          attempts += 1;
+          try {
+            const altKey = {
+              remoteJid: from,
+              fromMe: Boolean(key.fromMe),
+              id: msg.key.id,
+              participant: altParticipant,
+            };
+            const altTry = await sendWithAckCheck({
+              sock,
+              from,
+              payload: { delete: altKey },
+              sendOptions: { useCachedGroupMetadata: false, useUserDevicesCache: false },
+              ackTimeoutMs,
+            });
+            if (altTry.ok) alternateKeysSent += 1;
+          } catch {}
+        }
+      }
+
+      return {
+        ok: true,
+        key,
+        attempts,
+        alternateKeysSent,
+        result: winningResult,
+        acked: winningAcked,
+        ...(retriedWithoutCache ? { retriedWithoutCache: true } : {}),
+      };
     }
   }
 

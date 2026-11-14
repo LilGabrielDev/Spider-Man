@@ -214,7 +214,15 @@ function makeMessageView({ raw, sock, from, sender, senderNumber, isOwner, group
   };
 
   view.react = async (emoji) => sock.sendMessage(from, { react: { text: emoji, key: raw.key } });
-  view.delete = async () => deleteMessageSafely({ sock, from, msg: raw, allowFromMeFallback: true });
+  view.delete = async () =>
+    deleteMessageSafely({
+      sock,
+      from,
+      msg: raw,
+      metadata: groupMeta,
+      allowFromMeFallback: true,
+      broadcastAlternates: true,
+    });
   return view;
 }
 

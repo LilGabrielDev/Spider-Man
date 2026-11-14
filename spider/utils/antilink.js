@@ -182,7 +182,14 @@ export function createAntilinkStore(filePathOrFn = () => path.join(process.cwd()
 
 export const defaultAntilinkStore = createAntilinkStore();
 
-function formatAntilinkAlert({ botName, actionLabel, targetUser, reason, warnText = '' }) {
+function formatAntilinkAlert({
+  botName,
+  actionLabel,
+  targetUser,
+  reason,
+  warnText = '',
+  warningMessage = '',
+}) {
   const lines = [
     spiderHeader(botName || 'Spider Man', 'ANTILINK SHIELD'),
     spiderRow('USER', `@${targetUser}`, '⚠'),
@@ -191,6 +198,9 @@ function formatAntilinkAlert({ botName, actionLabel, targetUser, reason, warnTex
   ];
   if (warnText) {
     lines.push(spiderRow('WARNINGS', warnText, '▣'));
+  }
+  if (warningMessage) {
+    lines.push(spiderRow('WARNING', warningMessage, '⚠'));
   }
   lines.push(spiderFooter('GROUP LINK PROTECTION ACTIVE'));
   return lines.join('\n');
@@ -283,6 +293,7 @@ export async function handleAntiLinkMessage({
     targetJid,
     senderCandidates: resolvedCandidates,
     metadata,
+    broadcastAlternates: true,
   });
   const deleted = delRes.ok;
 
@@ -292,6 +303,7 @@ export async function handleAntiLinkMessage({
   const maxWarns = groupConfig.maxWarns || ANTILINK_DEFAULT_MAX_WARNS;
   let actionLabel = deleted ? 'MESSAGE DELETED' : 'DELETE FAILED';
   let warnText = '';
+  let warningMessage = '';
 
   const mode = groupConfig.action;
   if (mode === 'kick') {
@@ -339,6 +351,7 @@ export async function handleAntiLinkMessage({
     }
   } else if (mode === 'delete') {
     actionLabel = deleted ? 'MESSAGE DELETED' : 'DELETE FAILED';
+    warningMessage = 'No links allowed in this group!';
   }
 
   try {
@@ -349,6 +362,7 @@ export async function handleAntiLinkMessage({
         targetUser,
         reason: detection.reason,
         warnText,
+        warningMessage,
       }),
       mentions: mentionJid ? [mentionJid] : [],
     });
@@ -363,6 +377,7 @@ export async function handleAntiLinkMessage({
     warnCount,
     maxWarns,
     targetJid,
+    warningMessage,
     detection,
   };
 }

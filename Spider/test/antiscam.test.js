@@ -307,7 +307,9 @@ test('handleAntiScamMessage enforces delete, kick, warn, warnkick, and respects 
       id: 'scam-1',
       participant: scammer,
     });
+    assert.equal(res.warningMessage, 'No scam or phishing messages allowed in this group!');
     assert.match(env.sent[1].payload.text, /MESSAGE DELETED/);
+    assert.match(env.sent[1].payload.text, /\*WARNING\*\s*›\s*No scam or phishing messages allowed in this group!/);
 
     // 2. Kick mode: deletes message AND kicks user
     store.setGroupConfig(groupJid, { enabled: true, action: 'kick', notify: true });
