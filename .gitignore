@@ -13,3 +13,4 @@ logs/
 data/
 temp/
 tmp/
+.spider-update.json

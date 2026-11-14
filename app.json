@@ -116,11 +116,11 @@
       "required": false
     },
     "HEROKU_API_KEY": {
-      "description": "Private Heroku Platform API token required for the owner-only .update command; never commit or share this value",
+      "description": "Optional Heroku Platform API token when running .update on Heroku; not needed on Katabump, panels, or VPS hosts",
       "required": false
     },
     "HEROKU_APP_NAME": {
-      "description": "Heroku app name that the owner-only .update command is allowed to build and release",
+      "description": "Optional Heroku app name when running .update on Heroku; not needed on Katabump, panels, or VPS hosts",
       "required": false
     },
     "UPDATE_REPOSITORY": {
