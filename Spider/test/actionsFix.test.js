@@ -269,6 +269,36 @@ test('deleteMessageSafely requires a server ack and routes the revoke to the ori
   assert.equal(sent[0].payload.delete.remoteJid, groupMeta.id);
 });
 
+test('deleteMessageSafely preserves the raw original participant JID before normalized aliases', async () => {
+  const { sock, sent, groupMeta } = createAckAwareSock({
+    onSendMessage: async ({ id, jid, payload, ws }) => {
+      if (payload.delete) {
+        queueMicrotask(() => ws.emit('CB:ack,class:message', { attrs: { id } }));
+      }
+      return { key: { id, remoteJid: jid, fromMe: true } };
+    },
+  });
+  const originalParticipant = '3330003:17@s.whatsapp.net';
+  const result = await groupActionHelper.deleteMessageSafely({
+    sock,
+    from: groupMeta.id,
+    msg: {
+      key: {
+        remoteJid: groupMeta.id,
+        id: 'device-addressed-victim',
+        fromMe: false,
+        participant: originalParticipant,
+      },
+    },
+    metadata: groupMeta,
+    ackTimeoutMs: 0,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(sent[0].payload.delete.participant, originalParticipant);
+  assert.equal(sent[0].payload.delete.fromMe, false);
+});
+
 test('deleteMessageSafely does not treat a resolved send without a correlatable message ID as confirmed', async () => {
   const { sock, groupMeta } = createAckAwareSock({
     onSendMessage: async () => ({}),
