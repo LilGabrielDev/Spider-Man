@@ -458,6 +458,8 @@ const PROTECTED_AUTH_PREFIXES = [
   'app-state-sync-version-',
   'lid-mapping-',
   'device-list-',
+  'retry-message-store.json',
+  '.spider-retry-store.json',
 ];
 
 const TEMP_SESSION_FILE_PATTERN =
@@ -687,6 +689,7 @@ export function startResourceMaintenance({
   tmpDir = os.tmpdir(),
   tempDirs = [],
   caches = [],
+  protectedCaches = [],
   intervalMs,
   maxAgeMs,
   tempMaxAgeMs,
@@ -739,7 +742,7 @@ export function startResourceMaintenance({
         cwd,
         tmpDir,
         tempDirs,
-        caches,
+        caches: [...caches, ...protectedCaches],
         maxAgeMs: passMaxAgeMs,
         tempMaxAgeMs: passTempAgeMs,
         maxSenderKeys,
@@ -761,6 +764,11 @@ export function startResourceMaintenance({
           try {
             if (typeof cache?.flushAll === 'function') cache.flushAll();
             else if (typeof cache?.clear === 'function') cache.clear();
+          } catch {}
+        }
+        for (const cache of protectedCaches) {
+          try {
+            cache?.prune?.(nowMs);
           } catch {}
         }
         try {
