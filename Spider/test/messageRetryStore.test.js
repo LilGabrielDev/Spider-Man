@@ -44,6 +44,33 @@ test('retry cache immediately captures sendMessage and relayMessage payloads', a
   assert.deepEqual(await getMessageForRetry({ remoteJid: groupA, id: relayedId }), relayedContent);
 });
 
+test('serializes concurrent sends per chat while keeping different chats parallel', async () => {
+  const events = [];
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const sock = {
+    sendMessage: async (jid, message) => {
+      events.push(`start:${jid}:${message.text}`);
+      await wait(5);
+      events.push(`end:${jid}:${message.text}`);
+      return { key: { remoteJid: jid, id: `${jid}-${message.text}`, fromMe: true }, message };
+    },
+  };
+
+  installMessageRetryStore(sock);
+  await Promise.all([
+    sock.sendMessage(groupA, { text: 'one' }),
+    sock.sendMessage(groupA, { text: 'two' }),
+    sock.sendMessage(groupB, { text: 'other' }),
+  ]);
+
+  assert.deepEqual(events.slice(0, 3), [
+    `start:${groupA}:one`,
+    `start:${groupB}:other`,
+    `end:${groupA}:one`,
+  ]);
+  assert.equal(events.indexOf(`start:${groupA}:two`) > events.indexOf(`end:${groupA}:one`), true);
+});
+
 test('live Baileys socket wires getMessage and caches upserted and own-sent messages', () => {
   const source = fs.readFileSync(path.resolve(process.cwd(), 'spider/index.js'), 'utf8');
   assert.match(source, /'getMessage':getMessageForRetry/);
