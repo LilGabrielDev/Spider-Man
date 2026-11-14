@@ -1,6 +1,6 @@
 {
   "name": "spider-man-md",
-  "version": "3.0.0",
+  "version": "1.0.0",
   "description": "SPIDER-MAN MD WhatsApp Multi-Device Bot",
   "main": "spider/index.js",
   "type": "module",
