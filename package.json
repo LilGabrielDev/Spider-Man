@@ -1,21 +1,21 @@
 {
-  "name": "black-panther-md",
+  "name": "spider-man-md",
   "version": "3.0.0",
-  "description": "Black Panther WhatsApp Multi-Device Bot",
-  "main": "black/index.js",
+  "description": "Spider Man WhatsApp Multi-Device Bot",
+  "main": "spider/index.js",
   "type": "module",
   "scripts": {
-    "start": "node \"black/index.js\"",
-    "dev": "node \"black/index.js\"",
-    "build": "node --check black/index.js black/config.js black/native-mocks.js",
-    "lint": "node --check black/index.js black/config.js black/native-mocks.js",
-    "test": "node --test Panther/test/*.test.js"
+    "start": "node \"spider/index.js\"",
+    "dev": "node \"spider/index.js\"",
+    "build": "node --check spider/index.js spider/config.js spider/native-mocks.js",
+    "lint": "node --check spider/index.js spider/config.js spider/native-mocks.js",
+    "test": "node --test Spider/test/*.test.js"
   },
   "engines": {
     "node": ">=20.x <=24.x",
     "npm": ">=9.x"
   },
-  "author": "Black Panther",
+  "author": "Spider Man",
   "license": "MIT",
   "repository": {
     "type": "git",
