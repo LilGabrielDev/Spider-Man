@@ -3,12 +3,15 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { resolveShortSession } from "./spider/session-resolver.js";
 import { RESTART_EXIT_CODE } from "./spider/utils/runtimeControl.js";
-import { cleanupDiskArtifacts, getWorkerMemoryExecArgv } from "./spider/utils/resourceGuard.js";
+import {
+    clearTemporarySessionsAndCache,
+    getWorkerMemoryExecArgv,
+} from "./spider/utils/resourceGuard.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKER_SCRIPT = path.join(__dirname, "spider", "index.js");
 
-cleanupDiskArtifacts({ cwd: __dirname, maxAgeMs: 60 * 1000 });
+clearTemporarySessionsAndCache({ cwd: __dirname, maxAgeMs: 60 * 1000, tempMaxAgeMs: 60 * 1000 });
 
 try {
     await resolveShortSession();
@@ -84,7 +87,7 @@ function startWorker() {
 
         if (restartRequested || code === RESTART_EXIT_CODE) {
             console.log("🔄 [SUPERVISOR] Reloading Spider Man bot worker without stopping panel process...");
-            cleanupDiskArtifacts({ cwd: __dirname });
+            clearTemporarySessionsAndCache({ cwd: __dirname });
             try {
                 await resolveShortSession();
             } catch (error) {
