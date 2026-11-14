@@ -1,1 +1,1 @@
-require("./spider/index.js");
+import "./spider/index.js";
