@@ -1,6 +1,6 @@
 {
-  "name": "BLACK PANTHER MD",
-  "description": "Black Panther WhatsApp Multi-Device Bot",
+  "name": "SPIDER-MAN MD",
+  "description": "SPIDER-MAN MD WhatsApp Multi-Device Bot",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
