@@ -13,7 +13,7 @@
     "test": "node --test Spider/test/*.test.js"
   },
   "engines": {
-    "node": ">=20.x <=24.x",
+    "node": ">=20",
     "npm": ">=9.x"
   },
   "author": "Spider Man",
