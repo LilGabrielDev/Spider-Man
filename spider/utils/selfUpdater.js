@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import AdmZip from 'adm-zip';
+import { detectHostingProvider } from './hostDetector.js';
 
 export const DEFAULT_REPOSITORY = 'LilGabrielDev/Spider-Man';
 export const UPDATE_STATE_FILENAME = '.spider-update.json';
@@ -47,13 +48,13 @@ export function normalizeRepository(rawRepo, config) {
 }
 
 export function detectHostingEnvironment(env = process.env) {
-  const explicit = String(env.HOST_PROVIDER || env.HOSTING_PROVIDER || '')
-    .trim()
-    .toLowerCase();
-
   if (env.HEROKU_API_KEY && env.HEROKU_APP_NAME) {
     return { mode: 'heroku', label: 'Heroku' };
   }
+
+  const explicit = String(env.HOST_PROVIDER || env.HOSTING_PROVIDER || '')
+    .trim()
+    .toLowerCase();
 
   const deployHookUrl = String(
     env.DEPLOY_HOOK_URL || env.RENDER_DEPLOY_HOOK_URL || '',
@@ -63,14 +64,10 @@ export function detectHostingEnvironment(env = process.env) {
     return { mode: 'deploy_hook', label, deployHookUrl };
   }
 
-  let label = 'Panel';
-  if (explicit === 'katabump' || env.KATABUMP) label = 'Katabump.com';
-  else if (explicit === 'bot-hosting' || explicit === 'bothosting') label = 'Bot-Hosting.net';
-  else if (explicit === 'optiklink') label = 'Optiklink.com';
-  else if (explicit === 'railway' || env.RAILWAY_STATIC_URL || env.RAILWAY_ENVIRONMENT) label = 'Railway';
-  else if (explicit === 'koyeb' || env.KOYEB_ENV) label = 'Koyeb';
-  else if (explicit === 'render' || env.RENDER) label = 'Render';
-  else if (env.P_SERVER_UUID || env.SERVER_PORT || env.SERVER_MEMORY) label = 'Katabump / Panel';
+  const label = detectHostingProvider({
+    env,
+    probeSystem: env === process.env,
+  });
 
   return { mode: 'self', label };
 }
