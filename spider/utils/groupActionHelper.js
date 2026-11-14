@@ -840,12 +840,13 @@ export async function deleteMessageSafely({
     [...seedCandidates, ...metaAlternates, ...signalAlternates, ...postMetaAlternates],
     { metadata, msg },
   );
-  const originalParticipant = cleanJid(msg.key.participant || '');
-  const rawParticipantCandidates = originalParticipant
+  const originalParticipantRaw = String(msg.key.participant || '').trim();
+  const originalParticipant = cleanJid(originalParticipantRaw);
+  const rawParticipantCandidates = originalParticipantRaw
     ? [
-        originalParticipant,
+        originalParticipantRaw,
         ...orderedParticipantCandidates.filter(
-          (candidate) => candidate.toLowerCase() !== originalParticipant.toLowerCase(),
+          (candidate) => cleanJid(candidate).toLowerCase() !== originalParticipant.toLowerCase(),
         ),
       ]
     : orderedParticipantCandidates;
