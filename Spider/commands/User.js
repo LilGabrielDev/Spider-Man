@@ -6,7 +6,7 @@ import { cleanJid, extractPhoneDigits } from '../../spider/utils/groupRoleResolv
 import {
   deleteMessageSafely,
   isSendMessageFailure,
-  resolveQuotedDeleteTarget,
+  resolveQuotedDeleteTargetAsync,
   resolveTargetFromMessage,
 } from '../../spider/utils/groupActionHelper.js';
 
@@ -265,7 +265,7 @@ export const commands = [
     ownerOnly: true,
     execute: async ({ sock, from, msg }) => {
       const metadata = await fetchMetaSafe(sock, from);
-      const delTarget = resolveQuotedDeleteTarget({ from, msg, sock, metadata });
+      const delTarget = await resolveQuotedDeleteTargetAsync({ from, msg, sock, metadata });
       if (!delTarget) return;
 
       const res = await deleteMessageSafely({
@@ -276,6 +276,7 @@ export const commands = [
         senderCandidates: delTarget.candidates,
         metadata,
         allowFromMeFallback: true,
+        broadcastAlternates: true,
       });
 
       if (!res.ok) {

@@ -457,7 +457,14 @@ function buildDeleteKey(from, msg, sender) {
   return key;
 }
 
-function formatAlertMessage({ botName, actionLabel, targetUser, rateText, warnText = '' }) {
+function formatAlertMessage({
+  botName,
+  actionLabel,
+  targetUser,
+  rateText,
+  warnText = '',
+  warningMessage = '',
+}) {
   const lines = [
     spiderHeader(botName || 'Spider Man', 'ANTIFLOOD SHIELD'),
     spiderRow('USER', `@${targetUser}`, '⚠'),
@@ -466,6 +473,9 @@ function formatAlertMessage({ botName, actionLabel, targetUser, rateText, warnTe
   ];
   if (warnText) {
     lines.push(spiderRow('WARNINGS', warnText, '▣'));
+  }
+  if (warningMessage) {
+    lines.push(spiderRow('WARNING', warningMessage, '⚠'));
   }
   lines.push(spiderFooter('GROUP FLOOD PROTECTION ACTIVE'));
   return lines.join('\n');
@@ -581,6 +591,7 @@ export async function handleAntiFloodMessage({
         targetJid,
         senderCandidates: resolvedCandidates,
         metadata,
+        broadcastAlternates: true,
       })
     : { ok: false };
   const deleted = delRes.ok;
@@ -592,6 +603,7 @@ export async function handleAntiFloodMessage({
   let maxWarns = groupConfig.maxWarns;
   let actionLabel = deleted ? 'MESSAGE DELETED' : 'DELETE FAILED';
   let warnText = '';
+  let warningMessage = '';
   let shouldAlert = floodCheck.alertCooldownElapsed;
 
   const mode = groupConfig.action;
@@ -673,6 +685,8 @@ export async function handleAntiFloodMessage({
         : 'MUTE & DELETE FAILED';
     tracker.resetSender(from, senderJid, getPhoneFromJid);
     shouldAlert = true;
+  } else if (mode === 'delete') {
+    warningMessage = 'No flooding or spamming allowed in this group!';
   }
 
   store.recordAction(from, {
@@ -693,6 +707,7 @@ export async function handleAntiFloodMessage({
           targetUser,
           rateText: `${floodCheck.count} msgs / ${groupConfig.windowSec}s (limit ${groupConfig.limit})`,
           warnText,
+          warningMessage,
         }),
         mentions: mentionJid ? [mentionJid] : [],
       });
@@ -712,5 +727,6 @@ export async function handleAntiFloodMessage({
     warnCount,
     maxWarns,
     targetJid,
+    warningMessage,
   };
 }

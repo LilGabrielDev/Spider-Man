@@ -380,8 +380,10 @@ test('handleAntiAdvertisementMessage enforces delete, kick, warnkick, mute, and 
       id: 'ad-1',
       participant: advertiser,
     });
+    assert.equal(res.warningMessage, 'No advertisements or promotions allowed in this group!');
     assert.match(env.sent[1].payload.text, /ANTI-ADVERTISEMENT SHIELD/);
     assert.match(env.sent[1].payload.text, /MESSAGE DELETED/);
+    assert.match(env.sent[1].payload.text, /\*WARNING\*\s*›\s*No advertisements or promotions allowed in this group!/);
 
     // 2. Kick mode: deletes and removes advertiser
     store.setGroupConfig(groupJid, { enabled: true, action: 'kick', notify: true });

@@ -310,9 +310,11 @@ test('antiadvertisement reports DELETE FAILED when WA rejects delete with 403 an
 
     assert.equal(okRes.handled, true);
     assert.equal(okRes.deleted, true);
+    assert.equal(okRes.warningMessage, 'No advertisements or promotions allowed in this group!');
     assert.equal(store.getGroupConfig(groupJid).stats.deleted, 1);
     const okAlert = okEnv.sent.find((s) => typeof s.payload.text === 'string');
-    assert.match(okAlert.payload.text, /ACTION\s*›\s*MESSAGE DELETED/);
+    assert.match(okAlert.payload.text, /\*ACTION\*\s*›\s*MESSAGE DELETED/);
+    assert.match(okAlert.payload.text, /\*WARNING\*\s*›\s*No advertisements or promotions allowed in this group!/);
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
@@ -387,6 +389,48 @@ test('Group .antilink persists to defaultAntilinkStore and handleAntiLinkMessage
       groupMeta,
     });
     assert.deepEqual(antilinkUtils.defaultAntilinkStore.getGroupConfig(groupJid).warns, {});
+
+    // Delete mode sends explicit "No links allowed" warning
+    const delEnv = createAckAwareSock({
+      onSendMessage: async ({ id, payload, ws }) => {
+        if (payload.delete) {
+          queueMicrotask(() => {
+            ws.emit('CB:ack,class:message', { attrs: { id } });
+          });
+        }
+        return { key: { id, remoteJid: groupJid, fromMe: true } };
+      },
+    });
+
+    await antilinkCmd.execute({
+      sock: delEnv.sock,
+      from: groupJid,
+      text: 'on delete',
+      args: ['on', 'delete'],
+      msg: { key: { remoteJid: groupJid, id: 'cmd-4' } },
+      config,
+      groupMeta,
+    });
+
+    const delLinkRes = await antilinkUtils.handleAntiLinkMessage({
+      sock: delEnv.sock,
+      from: groupJid,
+      sender: '3330003@lid',
+      msg: {
+        key: { remoteJid: groupJid, id: 'link-msg-del', fromMe: false, participant: '3330003@lid' },
+        message: { conversation: 'Visit https://example.com' },
+      },
+      groupMeta,
+      botName: 'Spider Man',
+    });
+
+    assert.equal(delLinkRes.handled, true);
+    assert.equal(delLinkRes.deleted, true);
+    assert.equal(delLinkRes.warningMessage, 'No links allowed in this group!');
+    const delAlert = delEnv.sent.find((s) => String(s.payload.text || '').includes('ANTILINK SHIELD'));
+    assert.ok(delAlert);
+    assert.match(delAlert.payload.text, /\*ACTION\*\s*›\s*MESSAGE DELETED/);
+    assert.match(delAlert.payload.text, /\*WARNING\*\s*›\s*No links allowed in this group!/);
   } finally {
     antilinkUtils.defaultAntilinkStore.setGroupConfig(groupJid, prevCfg);
   }
@@ -844,4 +888,168 @@ test('Legacy pinm and gctools disappearing do not throw fq/IsGroup errors and ve
     isBotGroupAdmin: true,
   });
   assert.equal(ephemeralCalls.at(-1)?.duration, 604800);
+});
+
+test('User .del and group shields broadcast both LID and PN revokes with fresh group/device cache', async () => {
+  // 1. .del in LID-addressed group when quote carries PN participant prioritizes LID first AND still broadcasts PN alternate
+  const lidGroupMeta = {
+    id: '120363000000009099@g.us',
+    subject: 'LID Group',
+    addressingMode: 'lid',
+    owner: '1110001@lid',
+    participants: [
+      { id: '1110001@lid', phoneNumber: '254700000001@s.whatsapp.net', admin: 'superadmin' },
+      { id: '3330003@lid', phoneNumber: '254700000003@s.whatsapp.net', admin: null },
+      { id: '99900099@lid', phoneNumber: '254700000099@s.whatsapp.net', admin: 'admin' },
+    ],
+  };
+
+  const lidEnv = createAckAwareSock({
+    metadata: lidGroupMeta,
+    onSendMessage: async ({ id, payload, ws }) => {
+      if (payload.delete) {
+        queueMicrotask(() => {
+          ws.emit('CB:ack,class:message', { attrs: { id } });
+        });
+      }
+      return { key: { id, remoteJid: lidGroupMeta.id, fromMe: true } };
+    },
+  });
+
+  await commandsMap.get('del').execute({
+    sock: lidEnv.sock,
+    from: lidGroupMeta.id,
+    msg: {
+      key: { remoteJid: lidGroupMeta.id, id: 'cmd-del-lid-pn' },
+      message: {
+        extendedTextMessage: {
+          text: '.del',
+          contextInfo: {
+            stanzaId: 'victim-quote-pn',
+            participant: '254700000003@s.whatsapp.net',
+            quotedMessage: { conversation: 'delete me' },
+          },
+        },
+      },
+    },
+  });
+
+  const delCalls = lidEnv.sent.filter((s) => s.payload.delete);
+  assert.equal(delCalls.length, 2, 'must broadcast revoke for both LID and PN even when server ACKs first');
+  assert.equal(delCalls[0].payload.delete.participant, '3330003@lid');
+  assert.equal(delCalls[1].payload.delete.participant, '254700000003@s.whatsapp.net');
+  assert.equal(delCalls[0].options.useCachedGroupMetadata, false);
+  assert.equal(delCalls[0].options.useUserDevicesCache, false);
+  assert.ok(lidEnv.invalidatedGroups.includes(lidGroupMeta.id));
+
+  // 2. signalRepository.lidMapping resolves missing LID<->PN pairs when metadata omits them, including bot LID -> fromMe: true
+  const sparseMeta = {
+    id: '120363000000009088@g.us',
+    subject: 'Sparse Meta Group',
+    addressingMode: 'lid',
+    participants: [
+      { id: '5550005@lid', admin: null },
+      { id: '88800088@lid', admin: 'admin' },
+    ],
+  };
+  const sparseEnv = createAckAwareSock({
+    botId: '254700000088@s.whatsapp.net',
+    botLid: '',
+    metadata: sparseMeta,
+    onSendMessage: async ({ id, payload, ws }) => {
+      if (payload.delete) {
+        queueMicrotask(() => {
+          ws.emit('CB:ack,class:message', { attrs: { id } });
+        });
+      }
+      return { key: { id, remoteJid: sparseMeta.id, fromMe: true } };
+    },
+  });
+  sparseEnv.sock.user = { id: '254700000088:1@s.whatsapp.net' };
+  sparseEnv.sock.signalRepository = {
+    lidMapping: {
+      getPNForLID: async (lid) => {
+        if (lid === '5550005@lid') return '254700000005@s.whatsapp.net';
+        if (lid === '88800088@lid') return '254700000088@s.whatsapp.net';
+        return null;
+      },
+      getKnownLIDsForPNs: async (pns) =>
+        pns.includes('254700000088@s.whatsapp.net')
+          ? [{ pn: '254700000088@s.whatsapp.net', lid: '88800088@lid' }]
+          : [],
+    },
+  };
+
+  await commandsMap.get('del').execute({
+    sock: sparseEnv.sock,
+    from: sparseMeta.id,
+    msg: {
+      key: { remoteJid: sparseMeta.id, id: 'cmd-del-bot-mapped' },
+      message: {
+        extendedTextMessage: {
+          text: '.del',
+          contextInfo: {
+            stanzaId: 'bot-msg-via-signal',
+            participant: '88800088@lid',
+            quotedMessage: { conversation: 'bot message' },
+          },
+        },
+      },
+    },
+  });
+
+  const mappedBotDels = sparseEnv.sent.filter((s) => s.payload.delete);
+  assert.equal(mappedBotDels.length, 2);
+  assert.equal(mappedBotDels[0].payload.delete.fromMe, true);
+  assert.deepEqual(
+    mappedBotDels.map((d) => d.payload.delete.participant).sort(),
+    ['254700000088@s.whatsapp.net', '88800088@lid'],
+  );
+
+  // 3. Antilink shield also broadcasts both LID and PN revokes in mixed groups
+  const linkGroup = lidGroupMeta.id;
+  const prevCfg = antilinkUtils.defaultAntilinkStore.getGroupConfig(linkGroup);
+  try {
+    antilinkUtils.defaultAntilinkStore.setGroupConfig(linkGroup, {
+      enabled: true,
+      action: 'delete',
+      notify: true,
+    });
+    const shieldEnv = createAckAwareSock({
+      metadata: lidGroupMeta,
+      onSendMessage: async ({ id, payload, ws }) => {
+        if (payload.delete) {
+          queueMicrotask(() => {
+            ws.emit('CB:ack,class:message', { attrs: { id } });
+          });
+        }
+        return { key: { id, remoteJid: linkGroup, fromMe: true } };
+      },
+    });
+    const shieldRes = await antilinkUtils.handleAntiLinkMessage({
+      sock: shieldEnv.sock,
+      from: linkGroup,
+      sender: '3330003@lid',
+      msg: {
+        key: {
+          remoteJid: linkGroup,
+          id: 'link-mixed-1',
+          fromMe: false,
+          participant: '3330003@lid',
+        },
+        message: { conversation: 'https://chat.whatsapp.com/AbCdEfGhIjKlMnOpQrStUv' },
+      },
+      groupMeta: lidGroupMeta,
+      botName: 'Spider Man',
+    });
+    assert.equal(shieldRes.deleted, true);
+    const shieldDels = shieldEnv.sent.filter((s) => s.payload.delete);
+    assert.equal(shieldDels.length, 2);
+    assert.deepEqual(
+      shieldDels.map((d) => d.payload.delete.participant),
+      ['3330003@lid', '254700000003@s.whatsapp.net'],
+    );
+  } finally {
+    antilinkUtils.defaultAntilinkStore.setGroupConfig(linkGroup, prevCfg);
+  }
 });

@@ -230,6 +230,8 @@ test('Admin .update command keeps unsupervised panel processes online without ca
     assert.match(sentMessages[1], /Reloaded 55 commands live — bot stayed online/);
     assert.doesNotMatch(sentMessages[1], /\bcommit\b/i);
     assert.doesNotMatch(sentMessages[1], new RegExp(commitSha.slice(0, 7)));
+    assert.doesNotMatch(sentMessages[1], /Files updated/i);
+    assert.doesNotMatch(sentMessages[1], /Runtime files preserved/i);
 
     await updateCommand.execute({
       sock: {
@@ -348,6 +350,8 @@ test('Admin .update command triggers supervised worker restart handler without c
     assert.match(sentMessages[0], /Reloading the bot process cleanly in-place/);
     assert.doesNotMatch(sentMessages[0], /\bcommit\b/i);
     assert.doesNotMatch(sentMessages[0], new RegExp(commitSha.slice(0, 7)));
+    assert.doesNotMatch(sentMessages[0], /Files updated/i);
+    assert.doesNotMatch(sentMessages[0], /Runtime files preserved/i);
     assert.equal(restartCalls, 0);
 
     t.mock.timers.tick(1500);
