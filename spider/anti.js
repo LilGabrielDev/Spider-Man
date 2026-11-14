@@ -49,20 +49,32 @@ export function installMessageRetryStore(sock) {
   if (wrappedSockets.has(sock)) return true;
 
   const originalSendMessage = sock.sendMessage.bind(sock);
-  sock.sendMessage = async (...args) => {
+  const sendQueues = new Map();
+  const enqueueMessage = (jid, operation) => {
+    const chatId = String(jid || '');
+    const previous = sendQueues.get(chatId) || Promise.resolve();
+    const task = previous.catch(() => {}).then(operation);
+    const tail = task.catch(() => {});
+    sendQueues.set(chatId, tail);
+    task.finally(() => {
+      if (sendQueues.get(chatId) === tail) sendQueues.delete(chatId);
+    }).catch(() => {});
+    return task;
+  };
+  sock.sendMessage = (...args) => enqueueMessage(args[0], async () => {
     const sentMessage = await originalSendMessage(...args);
     rememberMessage(sentMessage);
     return sentMessage;
-  };
+  });
 
   if (typeof sock.relayMessage === 'function') {
     const originalRelayMessage = sock.relayMessage.bind(sock);
-    sock.relayMessage = async (jid, message, options = {}) => {
+    sock.relayMessage = (jid, message, options = {}) => enqueueMessage(jid, async () => {
       const result = await originalRelayMessage(jid, message, options);
       const id = options?.messageId || result?.key?.id;
       if (id) rememberMessage({ key: { remoteJid: jid, id, fromMe: true }, message });
       return result;
-    };
+    });
   }
 
   wrappedSockets.add(sock);
