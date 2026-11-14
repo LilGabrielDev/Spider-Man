@@ -471,12 +471,21 @@ export const commands = [
     ownerOnly: true,
     groupOnly: true,
     adminOnly: true,
+    botAdminOnly: true,
     execute: async ({ sock, from, msg }) => {
       if (!from.endsWith('@g.us')) {
         const groupOnlyMsg = await t(from, 'group', 'groupOnly');
         return sock.sendMessage(from, { text: groupOnlyMsg }, { quoted: msg });
       }
-      const metadata = await sock.groupMetadata(from);
+
+      const metadata = await fetchMetaSafe(sock, from);
+      if (!Array.isArray(metadata?.participants)) {
+        return sock.sendMessage(
+          from,
+          { text: '❌ Could not fetch group members. No one was removed.' },
+          { quoted: msg },
+        );
+      }
       const nonAdmins = (metadata?.participants || [])
         .filter((p) => {
           if (isParticipantAdminEntry(p)) return false;
@@ -486,11 +495,20 @@ export const commands = [
         .map((p) => p.id || p.jid || p.phoneNumber || p.pn)
         .filter(Boolean);
 
+      if (nonAdmins.length === 0) {
+        return sock.sendMessage(
+          from,
+          { text: 'ℹ️ There are no non-admin members to remove.' },
+          { quoted: msg },
+        );
+      }
+
       const warnMsg = await t(from, 'kickall', 'warning');
       await sock.sendMessage(from, { text: warnMsg }, { quoted: msg });
       await new Promise((resolve) => setTimeout(resolve, 5000));
 
       let removedCount = 0;
+      let failedCount = 0;
       for (const participantJid of nonAdmins) {
         const res = await executeParticipantsAction({
           sock,
@@ -500,11 +518,19 @@ export const commands = [
           metadata,
         });
         if (res.ok) removedCount += 1;
+        else failedCount += 1;
         await new Promise((resolve) => setTimeout(resolve, 500));
       }
       if (removedCount > 0) {
         await invalidateGroupCacheSafe(sock, from);
       }
+      await sock.sendMessage(
+        from,
+        {
+          text: `✅ *KICK ALL COMPLETE*\nRemoved: ${removedCount}/${nonAdmins.length}\nFailed: ${failedCount}`,
+        },
+        { quoted: msg },
+      );
     },
   },
   {

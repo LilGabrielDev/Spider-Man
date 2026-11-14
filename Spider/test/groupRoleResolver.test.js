@@ -277,6 +277,17 @@ test('groupAdminActionDecision protects admins across LID, :device, and ownerPn 
     }).allowed,
     true,
   );
+
+  for (const unavailableMetadata of [null, {}, { participants: null }, { participants: [] }]) {
+    const decision = groupAdminActionDecision({
+      enabled: true,
+      action: 'remove',
+      targets: ['999000111222@lid'],
+      metadata: unavailableMetadata,
+    });
+    assert.equal(decision.allowed, false);
+    assert.equal(decision.reason, 'group-metadata-unavailable');
+  }
 });
 
 test('syncLidMappingsFromMetadata learns pairs and spider/index.js hooks groupRoleResolver + cache invalidation', () => {
