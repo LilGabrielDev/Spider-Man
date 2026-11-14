@@ -148,12 +148,29 @@ export function createAntilinkStore(filePathOrFn = () => path.join(process.cwd()
       save();
       return { count: nextCount, maxWarns: current.maxWarns };
     },
-    resetWarns(groupJid, targetJid = null) {
+    resetWarns(groupJid, targetJid = null, senderCandidates = []) {
       ensureLoaded();
       const current = cache.groups[groupJid];
       if (!current) return;
-      if (targetJid) {
-        delete current.warns[cleanJid(targetJid)];
+      if (targetJid || (Array.isArray(senderCandidates) && senderCandidates.length > 0)) {
+        const keys = [targetJid, ...(Array.isArray(senderCandidates) ? senderCandidates : [])]
+          .filter(Boolean)
+          .map((j) => cleanJid(j));
+        const phones = new Set(
+          keys
+            .filter((k) => k.endsWith('@s.whatsapp.net'))
+            .map((k) => k.split('@')[0]),
+        );
+        for (const k of keys) {
+          delete current.warns[k];
+        }
+        if (phones.size > 0) {
+          for (const existing of Object.keys(current.warns)) {
+            if (existing.endsWith('@s.whatsapp.net') && phones.has(existing.split('@')[0])) {
+              delete current.warns[existing];
+            }
+          }
+        }
       } else {
         current.warns = {};
       }
@@ -246,7 +263,12 @@ export async function handleAntiLinkMessage({
     return { handled: false, reason: 'bot-not-admin', detection };
   }
 
-  const { targetJid, mentionJid, targetUser } = resolveSenderDisplayAndMention({
+  const {
+    targetJid,
+    mentionJid,
+    targetUser,
+    candidates: resolvedCandidates,
+  } = resolveSenderDisplayAndMention({
     senderRole,
     senderJid: sender || msg.key?.participant || msg.key?.participantAlt || '',
     senderCandidates,
@@ -259,7 +281,7 @@ export async function handleAntiLinkMessage({
     from,
     msg,
     targetJid,
-    senderCandidates,
+    senderCandidates: resolvedCandidates,
     metadata,
   });
   const deleted = delRes.ok;
@@ -276,7 +298,7 @@ export async function handleAntiLinkMessage({
     const kickRes = await executeParticipantsAction({
       sock,
       from,
-      participants: targetJid ? [targetJid] : senderCandidates,
+      participants: targetJid ? [targetJid] : resolvedCandidates,
       action: 'remove',
       metadata,
     });
@@ -284,12 +306,12 @@ export async function handleAntiLinkMessage({
     actionLabel = kicked
       ? deleted
         ? 'DELETED & KICKED'
-        : 'KICKED'
+        : 'KICKED (DELETE FAILED)'
       : deleted
         ? 'DELETED (KICK FAILED)'
-        : 'KICK FAILED';
+        : 'KICK & DELETE FAILED';
   } else if (mode === 'warn') {
-    const warnResult = store.addWarn(from, targetJid || senderCandidates[0]);
+    const warnResult = store.addWarn(from, targetJid || resolvedCandidates[0]);
     warned = true;
     warnCount = warnResult.count;
     warnText = `${warnCount}/${warnResult.maxWarns}`;
@@ -297,21 +319,21 @@ export async function handleAntiLinkMessage({
       const kickRes = await executeParticipantsAction({
         sock,
         from,
-        participants: targetJid ? [targetJid] : senderCandidates,
+        participants: targetJid ? [targetJid] : resolvedCandidates,
         action: 'remove',
         metadata,
       });
       kicked = kickRes.ok;
       if (kicked) {
-        store.resetWarns(from, targetJid || senderCandidates[0]);
+        store.resetWarns(from, targetJid || resolvedCandidates[0], resolvedCandidates);
       }
       actionLabel = kicked
         ? deleted
           ? 'DELETED · MAX WARNS · KICKED'
-          : 'MAX WARNS · KICKED'
+          : 'MAX WARNS · KICKED (DELETE FAILED)'
         : deleted
           ? 'DELETED · MAX WARNS (KICK FAILED)'
-          : 'MAX WARNS · KICK FAILED';
+          : 'MAX WARNS (KICK & DELETE FAILED)';
     } else {
       actionLabel = deleted ? 'DELETED & WARNED' : 'WARNED (DELETE FAILED)';
     }

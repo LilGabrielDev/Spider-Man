@@ -1,1 +1,87 @@
-function _0x22b9(){const _0x57c576=['toLowerCase','list','length','sendMessage','join','message','extendedTextMessage','replace','ALLOWED_USERS','sudo'];_0x22b9=function(){return _0x57c576;};return _0x22b9();}import{normalizeJid,saveSudoList,MESSAGES}from'../france/index.js';import{loadSudoList}from'../../spider/utils/sudoStore.js';function _0x58e6(_0x22b9cf,_0x58e6cf){_0x22b9cf=_0x22b9cf-0x0;const _0x4bd819=_0x22b9();let _0x2f0806=_0x4bd819[_0x22b9cf];return _0x2f0806;}import{t,translate,translateAIResponse,getUserLang}from'../france/translator.js';export const commands=[{'name':'sudo','description':'Add,\x20remove,\x20or\x20list\x20users\x20with\x20sudo\x20access.','category':'Owner','ownerOnly':!![],'execute':async({sock:_0x4b68e3,from:_0x5e7ca9,text:_0x2afcbc,msg:_0x329d24,args:_0x1a0bd0=[]})=>{const _0x54bff8=_0x58e6;if(!(global[_0x54bff8(0x8)]instanceof Set)){global[_0x54bff8(0x8)]=loadSudoList();}const _0x62870b=_0x1a0bd0[0x0]?.[_0x54bff8(0x0)]();if(_0x62870b===_0x54bff8(0x1)){const _0x356bc6=[...global['ALLOWED_USERS']];if(_0x356bc6[_0x54bff8(0x2)]===0x0){const _0x3f691a=await t(_0x5e7ca9,'sudo','listEmpty');return _0x4b68e3[_0x54bff8(0x3)](_0x5e7ca9,{'text':_0x3f691a},{'quoted':_0x329d24});}const _0x14e67b=await t(_0x5e7ca9,'sudo','listHeader');const _0x2c0c14=_0x14e67b+_0x356bc6['map']((_0x468d01,_0x3752e0)=>_0x3752e0+0x1+'.\x20+'+_0x468d01)[_0x54bff8(0x4)]('\x0a');return _0x4b68e3['sendMessage'](_0x5e7ca9,{'text':_0x2c0c14},{'quoted':_0x329d24});}const _0x59047b=_0x329d24[_0x54bff8(0x5)]?.['extendedTextMessage']?.['contextInfo']?.['participant']||_0x329d24['message']?.[_0x54bff8(0x6)]?.['contextInfo']?.['remoteJidAlt'];if(!_0x59047b){const _0x39f368=await t(_0x5e7ca9,'sudo','noReply');return _0x4b68e3['sendMessage'](_0x5e7ca9,{'text':_0x39f368},{'quoted':_0x329d24});}const _0x485b8b=normalizeJid(_0x59047b);const _0x41dd36=_0x485b8b['split']('@')[0x0];if(_0x62870b==='add'){global['ALLOWED_USERS']['add'](_0x41dd36);saveSudoList(global['ALLOWED_USERS']);const _0x4d2af9=await t(_0x5e7ca9,'sudo','added');return _0x4b68e3['sendMessage'](_0x5e7ca9,{'text':_0x4d2af9[_0x54bff8(0x7)]('{number}',_0x41dd36)},{'quoted':_0x329d24});}else if(_0x62870b==='del'){global[_0x54bff8(0x8)]['delete'](_0x41dd36);saveSudoList(global['ALLOWED_USERS']);const _0x1dfaa2=await t(_0x5e7ca9,'sudo','removed');return _0x4b68e3[_0x54bff8(0x3)](_0x5e7ca9,{'text':_0x1dfaa2['replace']('{number}',_0x41dd36)},{'quoted':_0x329d24});}else{const _0x40cea9=await t(_0x5e7ca9,_0x54bff8(0x9),'invalid');return _0x4b68e3['sendMessage'](_0x5e7ca9,{'text':_0x40cea9},{'quoted':_0x329d24});}}}];
+import { normalizeJid, saveSudoList } from '../france/index.js';
+import { loadSudoList } from '../../spider/utils/sudoStore.js';
+import { t } from '../france/translator.js';
+import { extractPhoneDigits } from '../../spider/utils/groupRoleResolver.js';
+import { resolveTargetFromMessage } from '../../spider/utils/groupActionHelper.js';
+
+export const commands = [
+  {
+    name: 'sudo',
+    description: 'Add, remove, or list users with sudo access.',
+    category: 'Owner',
+    ownerOnly: true,
+    execute: async ({ sock, from, text = '', msg, args = [] }) => {
+      if (!(global.ALLOWED_USERS instanceof Set)) {
+        global.ALLOWED_USERS = loadSudoList();
+      }
+      const tokens = (Array.isArray(args) && args.length > 0
+        ? args.map((item) => String(item || '').trim())
+        : String(text || '').trim().split(/\s+/)
+      ).filter(Boolean);
+      const subCommand = String(tokens[0] || '').toLowerCase();
+
+      if (subCommand === 'list') {
+        const users = [...global.ALLOWED_USERS];
+        if (users.length === 0) {
+          const emptyMsg = await t(from, 'sudo', 'listEmpty');
+          return sock.sendMessage(from, { text: emptyMsg }, { quoted: msg });
+        }
+        const header = await t(from, 'sudo', 'listHeader');
+        const listText = header + users.map((u, idx) => `${idx + 1}. +${u}`).join('\n');
+        return sock.sendMessage(from, { text: listText }, { quoted: msg });
+      }
+
+      const restTokens = tokens.slice(1);
+      let metadata = null;
+      if (from && String(from).endsWith('@g.us')) {
+        try {
+          metadata = await sock?.groupMetadata?.(from);
+        } catch {}
+      }
+
+      const resolved = resolveTargetFromMessage({
+        sock,
+        from,
+        msg,
+        text: restTokens.join(' '),
+        args: restTokens,
+        metadata,
+      });
+      const fallbackRaw =
+        msg?.message?.extendedTextMessage?.contextInfo?.participant ||
+        msg?.message?.extendedTextMessage?.contextInfo?.remoteJidAlt ||
+        '';
+      const targetJid = resolved.targetJid || fallbackRaw;
+
+      if (!targetJid) {
+        const noReply = await t(from, 'sudo', 'noReply');
+        return sock.sendMessage(from, { text: noReply }, { quoted: msg });
+      }
+
+      const number =
+        resolved.phone ||
+        extractPhoneDigits(targetJid) ||
+        normalizeJid(targetJid).split('@')[0];
+
+      if (!number) {
+        const noReply = await t(from, 'sudo', 'noReply');
+        return sock.sendMessage(from, { text: noReply }, { quoted: msg });
+      }
+
+      if (subCommand === 'add') {
+        global.ALLOWED_USERS.add(number);
+        saveSudoList(global.ALLOWED_USERS);
+        const addedMsg = await t(from, 'sudo', 'added');
+        return sock.sendMessage(from, { text: addedMsg.replace('{number}', number) }, { quoted: msg });
+      }
+      if (subCommand === 'del') {
+        global.ALLOWED_USERS.delete(number);
+        saveSudoList(global.ALLOWED_USERS);
+        const removedMsg = await t(from, 'sudo', 'removed');
+        return sock.sendMessage(from, { text: removedMsg.replace('{number}', number) }, { quoted: msg });
+      }
+      const invalidMsg = await t(from, 'sudo', 'invalid');
+      return sock.sendMessage(from, { text: invalidMsg }, { quoted: msg });
+    },
+  },
+];

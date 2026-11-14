@@ -1,1 +1,112 @@
-const _0x2b5b8e=_0x13ae;import _0x45ee64 from'fs';import _0xd3f701 from'path';import{tmpdir as _0xzipTmpdir}from'os';function _0x13ae(_0x84c258,_0x13ae46){_0x84c258=_0x84c258-0x0;const _0x1a9acf=_0x84c2();let _0x4de97d=_0x1a9acf[_0x84c258];return _0x4de97d;}function _0x84c2(){const _0x3dc702=['zip','botzip','exportbot','BOT_NAME','creating','sendMessage','-Backup-','key','caption','application/zip','\x0aSize:\x20','code','ENOENT','warn','.git','uploads','glob','**/*','cwd','map','finalize','Backup\x20error:','powered','{error}','message'];_0x84c2=function(){return _0x3dc702;};return _0x84c2();}import{fileURLToPath}from'url';import{ZipArchive}from'archiver';import{t,translate,translateAIResponse,getUserLang}from'../france/translator.js';const __filename=fileURLToPath(import.meta.url);const __dirname=_0xd3f701['dirname'](__filename);export const commands=[{'name':_0x2b5b8e(0x0),'aliases':[_0x2b5b8e(0x1),'downloadbot','getbot',_0x2b5b8e(0x2),'zipbot'],'description':'Download\x20the\x20entire\x20bot\x20as\x20a\x20ZIP\x20file\x20(Owner\x20only)','category':'Owner','ownerOnly':!![],'execute':async({sock:_0x1c3973,from:_0x50eda7,text:_0x1bd417,msg:_0x19723f,config:_0x349c9d})=>{const _0x4ebf53=_0x2b5b8e;const _0x8bca00=_0x349c9d[_0x4ebf53(0x3)]||'Spider\x20Man';const _0x319166=await t(_0x50eda7,'zip',_0x4ebf53(0x4));const _0x4d70fe=await _0x1c3973[_0x4ebf53(0x5)](_0x50eda7,{'text':_0x319166},{'quoted':_0x19723f});const _0x45d6c3=new Date()['toISOString']()['replace'](/[:.]/g,'-');const _0xa8cc68=_0x8bca00+_0x4ebf53(0x6)+_0x45d6c3+'.zip';const _0x4f7296=_0xd3f701['join'](_0xzipTmpdir(),_0xa8cc68);try{const _0x39187b=_0x45ee64['createWriteStream'](_0x4f7296);const _0x52d999=new ZipArchive({'zlib':{'level':0x9}});_0x39187b['on']('close',async()=>{const _0x1d548e=_0x4ebf53;try{const _0x1d2f39=_0x52d999['pointer']();const _0x58ceda=(_0x1d2f39/0x400/0x400)['toFixed'](0x2);await _0x1c3973[_0x1d548e(0x5)](_0x50eda7,{'delete':_0x4d70fe[_0x1d548e(0x7)]});if(_0x1d2f39>0x32*0x400*0x400){const _0x55d311=await t(_0x50eda7,'zip','tooLarge');const _0x5df70f=await t(_0x50eda7,'zip','powered');await _0x1c3973['sendMessage'](_0x50eda7,{'text':_0x55d311['replace']('{size}',_0x58ceda)+'\x0a\x0a'+_0x5df70f+'\x20'+_0x8bca00},{'quoted':_0x19723f});return;}const _0xbca56a=await t(_0x50eda7,'zip','success');const _0xca1684=await t(_0x50eda7,'zip','powered');await _0x1c3973['sendMessage'](_0x50eda7,{'text':_0xbca56a+'\x0a\x0a📦\x20'+_0xa8cc68+'\x0a💾\x20'+_0x58ceda+'\x20MB\x0a📅\x20'+new Date()['toLocaleString']()+'\x0a\x0a'+_0xca1684+'\x20'+_0x8bca00},{'quoted':_0x19723f});const _0x20c65f=await t(_0x50eda7,_0x1d548e(0x0),_0x1d548e(0x8));await _0x1c3973[_0x1d548e(0x5)](_0x50eda7,{'document':_0x45ee64['readFileSync'](_0x4f7296),'fileName':_0xa8cc68,'mimetype':_0x1d548e(0x9),'caption':_0x20c65f+_0x1d548e(0xa)+_0x58ceda+'MB'},{'quoted':_0x19723f});}finally{try{if(_0x45ee64['existsSync'](_0x4f7296))_0x45ee64['unlinkSync'](_0x4f7296);}catch{}}});_0x52d999['on']('warning',function(_0x4f7a30){const _0xadf813=_0x4ebf53;if(_0x4f7a30[_0xadf813(0xb)]===_0xadf813(0xc)){console[_0xadf813(0xd)]('Archive\x20warning:',_0x4f7a30);}else{throw _0x4f7a30;}});_0x52d999['on']('error',function(_0x2cf208){throw _0x2cf208;});_0x52d999['pipe'](_0x39187b);const _0x3aeaa6=['node_modules',_0x4ebf53(0xe),'temp','tmp','logs','sessions','backups',_0x4ebf53(0xf),'cache'];const _0x21f030=['.env','*.log','*.zip','session.json','creds.json','package-lock.json'];_0x52d999[_0x4ebf53(0x10)](_0x4ebf53(0x11),{'cwd':process[_0x4ebf53(0x12)](),'ignore':_0x3aeaa6[_0x4ebf53(0x13)](_0xeb4df7=>_0xeb4df7+'/**')['concat'](_0x21f030),'dot':![]});await _0x52d999[_0x4ebf53(0x14)]();}catch(_0x42390f){console['error'](_0x4ebf53(0x15),_0x42390f);await _0x1c3973[_0x4ebf53(0x5)](_0x50eda7,{'delete':_0x4d70fe['key']});const _0x3dc7f0=await t(_0x50eda7,'zip','error');const _0x675607=await t(_0x50eda7,'zip',_0x4ebf53(0x16));await _0x1c3973[_0x4ebf53(0x5)](_0x50eda7,{'text':_0x3dc7f0['replace'](_0x4ebf53(0x17),_0x42390f[_0x4ebf53(0x18)])+'\x0a\x0a'+_0x675607+'\x20'+_0x8bca00},{'quoted':_0x19723f});if(_0x45ee64['existsSync'](_0x4f7296)){_0x45ee64['unlinkSync'](_0x4f7296);}}}}];
+import fs from 'fs';
+import path from 'path';
+import { tmpdir as _0xzipTmpdir } from 'os';
+import { fileURLToPath } from 'url';
+import { ZipArchive } from 'archiver';
+import { t } from '../france/translator.js';
+import { safeDeleteTempMessage } from '../../spider/utils/groupActionHelper.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+export const commands = [
+  {
+    name: 'zip',
+    aliases: ['botzip', 'downloadbot', 'getbot', 'exportbot', 'zipbot'],
+    description: 'Download the entire bot as a ZIP file (Owner only)',
+    category: 'Owner',
+    ownerOnly: true,
+    execute: async ({ sock, from, msg, config }) => {
+      const botName = config.BOT_NAME || 'Spider Man';
+      const creatingMsg = await t(from, 'zip', 'creating');
+      const tempMsg = await sock.sendMessage(from, { text: creatingMsg }, { quoted: msg });
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const fileName = `${botName}-Backup-${timestamp}.zip`;
+      const zipPath = path.join(_0xzipTmpdir(), fileName);
+
+      try {
+        const output = fs.createWriteStream(zipPath);
+        const archive = new ZipArchive({ zlib: { level: 9 } });
+
+        output.on('close', async () => {
+          try {
+            const bytes = archive.pointer();
+            const sizeMb = (bytes / 1024 / 1024).toFixed(2);
+            await safeDeleteTempMessage(sock, from, tempMsg);
+
+            if (bytes > 50 * 1024 * 1024) {
+              const tooLarge = await t(from, 'zip', 'tooLarge');
+              const powered = await t(from, 'zip', 'powered');
+              await sock.sendMessage(
+                from,
+                { text: `${tooLarge.replace('{size}', sizeMb)}\n\n${powered} ${botName}` },
+                { quoted: msg },
+              );
+              return;
+            }
+
+            const successMsg = await t(from, 'zip', 'success');
+            const powered = await t(from, 'zip', 'powered');
+            await sock.sendMessage(
+              from,
+              { text: `${successMsg}\n\n📦 ${fileName}\n💾 ${sizeMb} MB\n📅 ${new Date().toLocaleString()}\n\n${powered} ${botName}` },
+              { quoted: msg },
+            );
+
+            const captionPrefix = await t(from, 'zip', 'caption');
+            await sock.sendMessage(
+              from,
+              {
+                document: fs.readFileSync(zipPath),
+                fileName,
+                mimetype: 'application/zip',
+                caption: `${captionPrefix}\nSize: ${sizeMb}MB`,
+              },
+              { quoted: msg },
+            );
+          } finally {
+            try {
+              if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
+            } catch {}
+          }
+        });
+
+        archive.on('warning', (err) => {
+          if (err.code === 'ENOENT') {
+            console.warn('Archive warning:', err);
+          } else {
+            throw err;
+          }
+        });
+        archive.on('error', (err) => {
+          throw err;
+        });
+
+        archive.pipe(output);
+        const ignoreDirs = ['node_modules', '.git', 'temp', 'tmp', 'logs', 'sessions', 'backups', 'uploads', 'cache'];
+        const ignoreFiles = ['.env', '*.log', '*.zip', 'session.json', 'creds.json', 'package-lock.json'];
+        archive.glob('**/*', {
+          cwd: process.cwd(),
+          ignore: ignoreDirs.map((dir) => `${dir}/**`).concat(ignoreFiles),
+          dot: false,
+        });
+        await archive.finalize();
+      } catch (err) {
+        console.error('Backup error:', err);
+        await safeDeleteTempMessage(sock, from, tempMsg);
+        const errorMsg = await t(from, 'zip', 'error');
+        const powered = await t(from, 'zip', 'powered');
+        await sock.sendMessage(
+          from,
+          { text: `${errorMsg.replace('{error}', err.message)}\n\n${powered} ${botName}` },
+          { quoted: msg },
+        );
+        if (fs.existsSync(zipPath)) {
+          try {
+            fs.unlinkSync(zipPath);
+          } catch {}
+        }
+      }
+    },
+  },
+];

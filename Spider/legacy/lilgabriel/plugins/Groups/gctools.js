@@ -1,1 +1,277 @@
-function _0x35c4(_0x4a8fae,_0x35c428){_0x4a8fae=_0x4a8fae-0x0;const _0x29ef6a=_0x4a8f();let _0x20a1ac=_0x29ef6a[_0x4a8fae];return _0x20a1ac;}const _0x5d74f6=_0x35c4;import{generateWAMessageFromContent}from'@whiskeysockets/baileys';import _0x7f4d2f from'../../utils/botUtil/middleware.js';import{getDeviceMode}from'../../lib/deviceMode.js';const H=_0x2820aa=>'⚡\x20──「\x20'+_0x2820aa+'\x20」──\x0a├';function _0x4a8f(){const _0x4a5500=['map','join','relayMessage','sendMessage','newgc','groupcreate','ERROR','📌\x20Tag\x20members\x20to\x20add\x20them','\x20\x20.ngc\x20Spider\x20Squad\x20@user','chat','GROUP\x20CREATED','✅\x20*Name:*\x20','catch','message','ginfo','gcinfo','gmetadata','gcmeta','isGroup','reactKey','groupMetadata','desc','Unknown','endsWith','resolvePhoneFromLidAsync','split','creation','en-GB','participants','length','7\x20days','👑\x20*Owner:*\x20','👥\x20*Members:*\x20','⏳\x20*Disappearing:*\x20','Add\x20the\x20WhatsApp\x20AI\x20bot\x20to\x20this\x20group','❌\x20Owner\x20only\x20command.','❌\x20Use\x20this\x20inside\x20a\x20group.','aiGroupAddBot','✅\x20WhatsApp\x20AI\x20bot\x20has\x20been\x20added\x20to\x20this\x20group!','disappear','disap','vanish','gcvanish','Set\x20disappearing\x20messages.\x20No\x20args\x20=\x20show\x20picker.','⏳\x20Pick\x20a\x20timer\x20for\x20this\x20group:','\x20\x20⏰\x2024h\x20—\x2024\x20hours','\x20\x20🗓️\x2090d\x20—\x2090\x20days','Disable\x20disappearing\x20messages','📅\x207\x20Days','disappearing\x207d','Messages\x20vanish\x20after\x2090\x20days','Off','⏳\x20*Set\x20to:*\x20'];_0x4a8f=function(){return _0x4a5500;};return _0x4a8f();}const F='└──✦\x20𝐒𝐏𝐈𝐃𝐄𝐑\x20𝐌𝐀𝐍\x20┃\x20ᴹᴰ\x20✦──';const box=(_0x50a3f3,_0x165b2d)=>H(_0x50a3f3)+'\x0a'+_0x165b2d[_0x5d74f6(0x0)](_0x4bb6dc=>'▢\x20'+_0x4bb6dc)[_0x5d74f6(0x1)]('\x0a')+'\x0a│\x0a'+F;async function sendSelectButtons(_0x2bdb26,_0x395cd0,_0x58202b,_0x332796,_0x2e3600,_0x47d453){const _0x2d7532=_0x5d74f6;try{const _0x10d6aa=generateWAMessageFromContent(_0x395cd0,{'interactiveMessage':{'body':{'text':_0x332796},'footer':{'text':''},'nativeFlowMessage':{'buttons':[{'name':'single_select','buttonParamsJson':JSON['stringify']({'title':_0x2e3600,'sections':[{'title':'Options','rows':_0x47d453}]})}]}}});await _0x2bdb26[_0x2d7532(0x2)](_0x395cd0,_0x10d6aa['message'],{'messageId':_0x10d6aa['key']['id']});}catch{await _0x2bdb26[_0x2d7532(0x3)](_0x395cd0,{'text':_0x332796});}}export default[{'name':'ngc','aliases':[_0x5d74f6(0x4),_0x5d74f6(0x5),'creategc','newgroup','creategroup'],'description':'Create\x20a\x20new\x20WhatsApp\x20group','run':async _0x4bb4e0=>{const _0x55db94=_0x5d74f6;const {client:_0x430149,m:_0x49d7f1,text:_0x3f7f95,isOwner:_0x252d63,isSudo:_0x49174b}=_0x4bb4e0;if(!_0x252d63&&!_0x49174b){return _0x430149[_0x55db94(0x3)](_0x49d7f1['chat'],{'text':box(_0x55db94(0x6),['❌\x20Owner\x20only\x20command.'])});}const _0x4c9e0f=_0x3f7f95?.['trim']();if(!_0x4c9e0f){return _0x430149['sendMessage'](_0x49d7f1['chat'],{'text':box('USAGE',['📋\x20.ngc\x20<group\x20name>',_0x55db94(0x7),'',_0x55db94(0x8),'\x20\x20.newgc\x20My\x20Group'])});}await _0x430149['sendMessage'](_0x49d7f1['chat'],{'react':{'text':'⌛','key':_0x49d7f1['reactKey']}});try{const _0x201106=_0x49d7f1['mentionedJid']?.['filter'](_0x5ba3ec=>_0x5ba3ec!==_0x430149['user']?.['id'])||[];const _0x5c4895=await _0x430149['groupCreate'](_0x4c9e0f,_0x201106);const _0x28f0ee=_0x5c4895?.['id']||_0x5c4895?.['gid']||'';let _0x2fc0e4='';if(_0x28f0ee){try{const _0x337731=await _0x430149['groupInviteCode'](_0x28f0ee);if(_0x337731)_0x2fc0e4='https://chat.whatsapp.com/'+_0x337731;}catch{}}await _0x430149['sendMessage'](_0x49d7f1['chat'],{'react':{'text':'✅','key':_0x49d7f1['reactKey']}});await _0x430149['sendMessage'](_0x49d7f1[_0x55db94(0x9)],{'text':box(_0x55db94(0xa),[_0x55db94(0xb)+_0x4c9e0f,'👥\x20*Members\x20added:*\x20'+_0x201106['length'],'🔗\x20*JID:*\x20'+_0x28f0ee,..._0x2fc0e4?['🔑\x20*Link:*\x20'+_0x2fc0e4]:[]])});}catch(_0x517b1c){await _0x430149['sendMessage'](_0x49d7f1['chat'],{'react':{'text':'❌','key':_0x49d7f1['reactKey']}})[_0x55db94(0xc)](()=>{});await _0x430149[_0x55db94(0x3)](_0x49d7f1['chat'],{'text':box(_0x55db94(0x6),['❌\x20'+_0x517b1c[_0x55db94(0xd)]])});}}},{'name':_0x5d74f6(0xe),'aliases':['groupinfo',_0x5d74f6(0xf),'groupmeta',_0x5d74f6(0x10),_0x5d74f6(0x11)],'description':'Show\x20group\x20info\x20and\x20metadata','run':async _0x2bb90e=>{await _0x7f4d2f(_0x2bb90e,async()=>{const _0x7a305a=_0x35c4;const {client:_0x3f8954,m:_0x31de01}=_0x2bb90e;if(!_0x31de01[_0x7a305a(0x12)]){return _0x3f8954[_0x7a305a(0x3)](_0x31de01[_0x7a305a(0x9)],{'text':box('ERROR',['❌\x20Use\x20this\x20inside\x20a\x20group.'])});}await _0x3f8954['sendMessage'](_0x31de01['chat'],{'react':{'text':'⌛','key':_0x31de01[_0x7a305a(0x13)]}});try{const _0x292c79=await _0x3f8954[_0x7a305a(0x14)](_0x31de01['chat']);const _0x14db10=_0x292c79?.['subject']||'Unknown';const _0x144029=_0x292c79?.[_0x7a305a(0x15)]||_0x292c79?.['description']||'None';const _0x299f62=_0x292c79?.['owner']||'';let _0x130203=_0x7a305a(0x16);if(_0x299f62){if(_0x299f62[_0x7a305a(0x17)]('@lid')){const _0xa216a=_0x299f62['split']('@')[0x0]['split'](':')[0x0];const _0x383346=globalThis['lidPhoneCache']?.['get'](_0xa216a);if(_0x383346){_0x130203='+'+_0x383346;}else{const _0xcb8c3c=globalThis[_0x7a305a(0x18)]?await globalThis['resolvePhoneFromLidAsync'](_0x299f62)['catch'](()=>null):null;_0x130203=_0xcb8c3c?'+'+_0xcb8c3c:'+'+_0xa216a;}}else{_0x130203='+'+_0x299f62[_0x7a305a(0x19)]('@')[0x0];}}const _0x1af411=_0x292c79?.[_0x7a305a(0x1a)]?new Date(_0x292c79['creation']*0x3e8)['toLocaleDateString'](_0x7a305a(0x1b)):'Unknown';const _0x2a3427=_0x292c79?.['participants']?.['length']??0x0;const _0x64576=(_0x292c79?.[_0x7a305a(0x1c)]||[])['filter'](_0x4d7c99=>_0x4d7c99['admin'])[_0x7a305a(0x1d)];const _0x2bcc64=_0x292c79?.['ephemeralDuration'];const _0x2c1e45=_0x2bcc64?_0x2bcc64===0x15180?'24\x20hours':_0x2bcc64===0x93a80?_0x7a305a(0x1e):_0x2bcc64===0x76a700?'90\x20days':_0x2bcc64+'s':'Off';await _0x3f8954['sendMessage'](_0x31de01['chat'],{'react':{'text':'📋','key':_0x31de01[_0x7a305a(0x13)]}});await _0x3f8954['sendMessage'](_0x31de01['chat'],{'text':box('GROUP\x20INFO',['📛\x20*Name:*\x20'+_0x14db10,_0x7a305a(0x1f)+_0x130203,'📅\x20*Created:*\x20'+_0x1af411,_0x7a305a(0x20)+_0x2a3427,'🛡️\x20*Admins:*\x20'+_0x64576,_0x7a305a(0x21)+_0x2c1e45,'📝\x20*Desc:*\x20'+_0x144029['slice'](0x0,0x50)+(_0x144029['length']>0x50?'...':'')])});}catch(_0x293556){await _0x3f8954['sendMessage'](_0x31de01['chat'],{'react':{'text':'❌','key':_0x31de01['reactKey']}})['catch'](()=>{});await _0x3f8954['sendMessage'](_0x31de01['chat'],{'text':box(_0x7a305a(0x6),['❌\x20'+_0x293556['message']])});}});}},{'name':'wabot','aliases':['addaibot','addwabot','gcaibot','addwhatsappbot'],'description':_0x5d74f6(0x22),'run':async _0x44d125=>{const _0x446db1=_0x5d74f6;const {client:_0x16b625,m:_0x23957c,isOwner:_0x32ace8,isSudo:_0x2bc331}=_0x44d125;if(!_0x32ace8&&!_0x2bc331){return _0x16b625['sendMessage'](_0x23957c['chat'],{'text':box('ERROR',[_0x446db1(0x23)])});}if(!_0x23957c['isGroup']){return _0x16b625['sendMessage'](_0x23957c['chat'],{'text':box('ERROR',[_0x446db1(0x24)])});}await _0x16b625['sendMessage'](_0x23957c[_0x446db1(0x9)],{'react':{'text':'⌛','key':_0x23957c['reactKey']}});try{await _0x16b625[_0x446db1(0x25)](_0x23957c[_0x446db1(0x9)]);await _0x16b625[_0x446db1(0x3)](_0x23957c['chat'],{'react':{'text':'✅','key':_0x23957c[_0x446db1(0x13)]}});await _0x16b625['sendMessage'](_0x23957c['chat'],{'text':box('AI\x20BOT\x20ADDED',[_0x446db1(0x26)])});}catch(_0x4ca610){await _0x16b625['sendMessage'](_0x23957c[_0x446db1(0x9)],{'react':{'text':'❌','key':_0x23957c['reactKey']}})['catch'](()=>{});await _0x16b625[_0x446db1(0x3)](_0x23957c[_0x446db1(0x9)],{'text':box(_0x446db1(0x6),['❌\x20'+_0x4ca610['message']])});}}},{'name':'disappearing','aliases':[_0x5d74f6(0x27),_0x5d74f6(0x28),'dsp','gvanish','timer','ephemeral',_0x5d74f6(0x29),_0x5d74f6(0x2a)],'description':_0x5d74f6(0x2b),'run':async _0x1d4175=>{await _0x7f4d2f(_0x1d4175,async()=>{const _0x5b1801=_0x35c4;const {client:_0x3d6105,m:_0x1888de,args:_0x327d12,prefix:_0x28bb83}=_0x1d4175;if(!_0x1888de[_0x5b1801(0x12)]){return _0x3d6105[_0x5b1801(0x3)](_0x1888de['chat'],{'text':box('ERROR',['❌\x20Use\x20this\x20inside\x20a\x20group.'])});}const _0x55ece2={'off':0x0,'0':0x0,'no':0x0,'none':0x0,'disable':0x0,'24h':0x15180,'24':0x15180,'1d':0x15180,'day':0x15180,'7d':0x93a80,'7':0x93a80,'week':0x93a80,'1w':0x93a80,'90d':0x76a700,'90':0x76a700,'3m':0x76a700,'month':0x76a700};const _0x220918=(_0x327d12?.[0x0]||'')['toLowerCase']();if(!_0x220918||!(_0x220918 in _0x55ece2)){const _0x12874b=_0x28bb83||'.';const _0x1d3614=box('DISAPPEARING\x20MESSAGES',[_0x5b1801(0x2c),'','\x20\x20🚫\x20off\x20\x20—\x20Disable',_0x5b1801(0x2d),'\x20\x20📅\x207d\x20\x20—\x207\x20days',_0x5b1801(0x2e)]);const _0xf83223=await getDeviceMode();if(_0xf83223==='ios'){return _0x3d6105['sendMessage'](_0x1888de[_0x5b1801(0x9)],{'text':_0x1d3614});}return sendSelectButtons(_0x3d6105,_0x1888de[_0x5b1801(0x9)],fq,_0x1d3614,'Set\x20Timer',[{'header':'🚫\x20Off','title':_0x5b1801(0x2f),'id':_0x12874b+'disappearing\x20off'},{'header':'⏰\x2024\x20Hours','title':'Messages\x20vanish\x20after\x2024h','id':_0x12874b+'disappearing\x2024h'},{'header':_0x5b1801(0x30),'title':'Messages\x20vanish\x20after\x207\x20days','id':_0x12874b+_0x5b1801(0x31)},{'header':'🗓️\x2090\x20Days','title':_0x5b1801(0x32),'id':_0x12874b+'disappearing\x2090d'}]);}const _0x2f19f6=_0x55ece2[_0x220918];const _0x263537=_0x2f19f6===0x0?_0x5b1801(0x33):_0x2f19f6===0x15180?'24\x20hours':_0x2f19f6===0x93a80?_0x5b1801(0x1e):'90\x20days';await _0x3d6105['sendMessage'](_0x1888de['chat'],{'react':{'text':'⌛','key':_0x1888de['reactKey']}});try{await _0x3d6105['groupToggleEphemeral'](_0x1888de['chat'],_0x2f19f6);await _0x3d6105['sendMessage'](_0x1888de['chat'],{'react':{'text':'✅','key':_0x1888de['reactKey']}});await _0x3d6105[_0x5b1801(0x3)](_0x1888de['chat'],{'text':box('DISAPPEARING\x20MESSAGES',[_0x5b1801(0x34)+_0x263537])});}catch(_0x2cafca){await _0x3d6105[_0x5b1801(0x3)](_0x1888de['chat'],{'react':{'text':'❌','key':_0x1888de['reactKey']}})['catch'](()=>{});await _0x3d6105[_0x5b1801(0x3)](_0x1888de[_0x5b1801(0x9)],{'text':box('ERROR',['❌\x20'+_0x2cafca['message']])});}});}}];
+import { generateWAMessageFromContent } from '@whiskeysockets/baileys';
+import {
+  isFromBot,
+  isSendMessageFailure,
+  normalizeTargetJidInput,
+} from '../../../../../spider/utils/groupActionHelper.js';
+
+const H = (title) => `⚡ ──「 ${title} 」──\n├`;
+const F = '└──✦ 𝐒𝐏𝐈𝐃𝐄𝐑 𝐌𝐀𝐍 ┃ ᴹᴰ ✦──';
+const box = (title, rows) => `${H(title)}\n${rows.map((r) => `▢ ${r}`).join('\n')}\n│\n${F}`;
+
+async function withAdminCheck(context, fn) {
+  const { client, m, isGroup, isAdmin, isBotAdmin } = context;
+  if (!isGroup && !String(m?.chat || '').endsWith('@g.us')) {
+    return client.sendMessage(m.chat, { text: box('ERROR', ['❌ Use this inside a group.']) });
+  }
+  if (!isAdmin) {
+    return client.sendMessage(m.chat, { text: box('ERROR', ['❌ Group admin only command.']) });
+  }
+  if (!isBotAdmin) {
+    return client.sendMessage(m.chat, { text: box('ERROR', ['❌ Bot needs admin permissions.']) });
+  }
+  return fn();
+}
+
+async function sendSelectButtons(client, chat, _m, bodyText, title, rows) {
+  try {
+    const interactive = generateWAMessageFromContent(chat, {
+      interactiveMessage: {
+        body: { text: bodyText },
+        footer: { text: '' },
+        nativeFlowMessage: {
+          buttons: [
+            {
+              name: 'single_select',
+              buttonParamsJson: JSON.stringify({
+                title,
+                sections: [{ title: 'Options', rows }],
+              }),
+            },
+          ],
+        },
+      },
+    });
+    await client.relayMessage(chat, interactive.message, { messageId: interactive.key.id });
+  } catch {
+    await client.sendMessage(chat, { text: bodyText });
+  }
+}
+
+export default [
+  {
+    name: 'ngc',
+    aliases: ['newgc', 'groupcreate', 'creategc', 'newgroup', 'creategroup'],
+    description: 'Create a new WhatsApp group',
+    run: async (context) => {
+      const { client, m, text, isOwner, isSudo } = context;
+      if (!isOwner && !isSudo) {
+        return client.sendMessage(m.chat, { text: box('ERROR', ['❌ Owner only command.']) });
+      }
+      const subject = text?.trim();
+      if (!subject) {
+        return client.sendMessage(m.chat, {
+          text: box('USAGE', [
+            '📋 .ngc <group name>',
+            '📌 Tag members to add them',
+            '',
+            '  .ngc Spider Squad @user',
+            '  .newgc My Group',
+          ]),
+        });
+      }
+
+      await client.sendMessage(m.chat, { react: { text: '⌛', key: m.reactKey } }).catch(() => {});
+      try {
+        const members = (m.mentionedJid || [])
+          .map((id) => normalizeTargetJidInput(id))
+          .filter((id) => id && !isFromBot(id, client));
+        const created = await client.groupCreate(subject, members);
+        if (isSendMessageFailure(created)) {
+          throw new Error(created?.error || 'Failed to create group');
+        }
+        const gid = created?.id || created?.gid || '';
+        if (!gid) {
+          throw new Error('WhatsApp did not return a group JID');
+        }
+        let inviteUrl = '';
+        try {
+          const code = await client.groupInviteCode(gid);
+          if (code) inviteUrl = `https://chat.whatsapp.com/${code}`;
+        } catch {}
+
+        await client.sendMessage(m.chat, { react: { text: '✅', key: m.reactKey } }).catch(() => {});
+        await client.sendMessage(m.chat, {
+          text: box('GROUP CREATED', [
+            `✅ *Name:* ${subject}`,
+            `👥 *Members added:* ${members.length}`,
+            `🔗 *JID:* ${gid}`,
+            ...(inviteUrl ? [`🔑 *Link:* ${inviteUrl}`] : []),
+          ]),
+        });
+      } catch (err) {
+        await client.sendMessage(m.chat, { react: { text: '❌', key: m.reactKey } }).catch(() => {});
+        await client.sendMessage(m.chat, { text: box('ERROR', [`❌ ${err.message}`]) });
+      }
+    },
+  },
+  {
+    name: 'ginfo',
+    aliases: ['groupinfo', 'gcinfo', 'groupmeta', 'gmetadata', 'gcmeta'],
+    description: 'Show group info and metadata',
+    run: async (context) => {
+      await withAdminCheck(context, async () => {
+        const { client, m } = context;
+        if (!m.isGroup) {
+          return client.sendMessage(m.chat, { text: box('ERROR', ['❌ Use this inside a group.']) });
+        }
+
+        await client.sendMessage(m.chat, { react: { text: '⌛', key: m.reactKey } }).catch(() => {});
+        try {
+          const meta = await client.groupMetadata(m.chat);
+          const subject = meta?.subject || 'Unknown';
+          const desc = meta?.desc || meta?.description || 'None';
+          const ownerJid = meta?.owner || '';
+          let ownerDisplay = 'Unknown';
+          if (ownerJid) {
+            if (ownerJid.endsWith('@lid')) {
+              const lid = ownerJid.split('@')[0].split(':')[0];
+              const cached = globalThis.lidPhoneCache?.get(lid);
+              if (cached) {
+                ownerDisplay = `+${cached}`;
+              } else {
+                const resolved = globalThis.resolvePhoneFromLidAsync
+                  ? await globalThis.resolvePhoneFromLidAsync(ownerJid).catch(() => null)
+                  : null;
+                ownerDisplay = resolved ? `+${resolved}` : `+${lid}`;
+              }
+            } else {
+              ownerDisplay = `+${ownerJid.split('@')[0]}`;
+            }
+          }
+
+          const createdDate = meta?.creation
+            ? new Date(meta.creation * 1000).toLocaleDateString('en-GB')
+            : 'Unknown';
+          const memberCount = meta?.participants?.length ?? 0;
+          const adminCount = (meta?.participants || []).filter((p) => p.admin).length;
+          const ephem = meta?.ephemeralDuration;
+          const ephemLabel = ephem
+            ? ephem === 86400
+              ? '24 hours'
+              : ephem === 604800
+                ? '7 days'
+                : ephem === 7776000
+                  ? '90 days'
+                  : `${ephem}s`
+            : 'Off';
+
+          await client.sendMessage(m.chat, { react: { text: '📋', key: m.reactKey } }).catch(() => {});
+          await client.sendMessage(m.chat, {
+            text: box('GROUP INFO', [
+              `📛 *Name:* ${subject}`,
+              `👑 *Owner:* ${ownerDisplay}`,
+              `📅 *Created:* ${createdDate}`,
+              `👥 *Members:* ${memberCount}`,
+              `🛡️ *Admins:* ${adminCount}`,
+              `⏳ *Disappearing:* ${ephemLabel}`,
+              `📝 *Desc:* ${desc.slice(0, 80)}${desc.length > 80 ? '...' : ''}`,
+            ]),
+          });
+        } catch (err) {
+          await client.sendMessage(m.chat, { react: { text: '❌', key: m.reactKey } }).catch(() => {});
+          await client.sendMessage(m.chat, { text: box('ERROR', [`❌ ${err.message}`]) });
+        }
+      });
+    },
+  },
+  {
+    name: 'wabot',
+    aliases: ['addaibot', 'addwabot', 'gcaibot', 'addwhatsappbot'],
+    description: 'Add the WhatsApp AI bot to this group',
+    run: async (context) => {
+      const { client, m, isOwner, isSudo } = context;
+      if (!isOwner && !isSudo) {
+        return client.sendMessage(m.chat, { text: box('ERROR', ['❌ Owner only command.']) });
+      }
+      if (!m.isGroup) {
+        return client.sendMessage(m.chat, { text: box('ERROR', ['❌ Use this inside a group.']) });
+      }
+      await client.sendMessage(m.chat, { react: { text: '⌛', key: m.reactKey } }).catch(() => {});
+      try {
+        const res = await client.aiGroupAddBot(m.chat);
+        if (isSendMessageFailure(res)) {
+          throw new Error(res?.error || 'Failed to add WhatsApp AI bot');
+        }
+        await client.sendMessage(m.chat, { react: { text: '✅', key: m.reactKey } }).catch(() => {});
+        await client.sendMessage(m.chat, {
+          text: box('AI BOT ADDED', ['✅ WhatsApp AI bot has been added to this group!']),
+        });
+      } catch (err) {
+        await client.sendMessage(m.chat, { react: { text: '❌', key: m.reactKey } }).catch(() => {});
+        await client.sendMessage(m.chat, { text: box('ERROR', [`❌ ${err.message}`]) });
+      }
+    },
+  },
+  {
+    name: 'disappearing',
+    aliases: ['disappear', 'disap', 'dsp', 'vanish', 'gvanish', 'timer', 'ephemeral', 'vanish', 'gcvanish'],
+    description: 'Set disappearing messages. No args = show picker.',
+    run: async (context) => {
+      await withAdminCheck(context, async () => {
+        const { client, m, args, prefix } = context;
+        if (!m.isGroup) {
+          return client.sendMessage(m.chat, { text: box('ERROR', ['❌ Use this inside a group.']) });
+        }
+
+        const durations = {
+          off: 0,
+          '0': 0,
+          no: 0,
+          none: 0,
+          disable: 0,
+          '24h': 86400,
+          '24': 86400,
+          '1d': 86400,
+          day: 86400,
+          '7d': 604800,
+          '7': 604800,
+          week: 604800,
+          '1w': 604800,
+          '90d': 7776000,
+          '90': 7776000,
+          '3m': 7776000,
+          month: 7776000,
+        };
+
+        const key = (args?.[0] || '').toLowerCase();
+        if (!key || !(key in durations)) {
+          const p = prefix || '.';
+          const boxText = box('DISAPPEARING MESSAGES', [
+            '⏳ Pick a timer for this group:',
+            '',
+            '  🚫 off  — Disable',
+            '  ⏰ 24h — 24 hours',
+            '  📅 7d  — 7 days',
+            '  🗓️ 90d — 90 days',
+          ]);
+          return sendSelectButtons(client, m.chat, m, boxText, 'Set Timer', [
+            { header: '🚫 Off', title: 'Disable disappearing messages', id: `${p}disappearing off` },
+            { header: '⏰ 24 Hours', title: 'Messages vanish after 24h', id: `${p}disappearing 24h` },
+            { header: '📅 7 Days', title: 'Messages vanish after 7 days', id: `${p}disappearing 7d` },
+            { header: '🗓️ 90 Days', title: 'Messages vanish after 90 days', id: `${p}disappearing 90d` },
+          ]);
+        }
+
+        const sec = durations[key];
+        const label =
+          sec === 0 ? 'Off' : sec === 86400 ? '24 hours' : sec === 604800 ? '7 days' : '90 days';
+        await client.sendMessage(m.chat, { react: { text: '⌛', key: m.reactKey } }).catch(() => {});
+        try {
+          const res = await client.groupToggleEphemeral(m.chat, sec);
+          if (isSendMessageFailure(res)) {
+            throw new Error(res?.error || 'Failed to update disappearing messages');
+          }
+          await client.__spiderInvalidateGroupCache?.(m.chat);
+          await client.sendMessage(m.chat, { react: { text: '✅', key: m.reactKey } }).catch(() => {});
+          await client.sendMessage(m.chat, {
+            text: box('DISAPPEARING MESSAGES', [`⏳ *Set to:* ${label}`]),
+          });
+        } catch (err) {
+          await client.sendMessage(m.chat, { react: { text: '❌', key: m.reactKey } }).catch(() => {});
+          await client.sendMessage(m.chat, { text: box('ERROR', [`❌ ${err.message}`]) });
+        }
+      });
+    },
+  },
+];

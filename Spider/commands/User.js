@@ -1,1 +1,301 @@
-const a0_0xc74cd0=a0_0x5ebc;(function(_0x1c799a,_0xa9565a){const _0x105a43=a0_0x5ebc,_0x43cc60=_0x1c799a();while(!![]){try{const _0x18e83d=parseInt(_0x105a43(0x1cc))/0x1*(-parseInt(_0x105a43(0x1b7))/0x2)+parseInt(_0x105a43(0x19b))/0x3*(-parseInt(_0x105a43(0x19c))/0x4)+-parseInt(_0x105a43(0x1ac))/0x5+parseInt(_0x105a43(0x179))/0x6+-parseInt(_0x105a43(0x1c6))/0x7*(parseInt(_0x105a43(0x177))/0x8)+-parseInt(_0x105a43(0x1a1))/0x9*(parseInt(_0x105a43(0x1c2))/0xa)+parseInt(_0x105a43(0x183))/0xb;if(_0x18e83d===_0xa9565a)break;else _0x43cc60['push'](_0x43cc60['shift']());}catch(_0x2bbada){_0x43cc60['push'](_0x43cc60['shift']());}}}(a0_0x1d81,0x9b7b3));const _0x11a0e4=_0x1eef;function _0x1eef(_0x4bf1b7,_0x1b4db1){_0x4bf1b7=_0x4bf1b7-0x0;const _0x3aeeb1=_0x5ee4();let _0x2a0845=_0x3aeeb1[_0x4bf1b7];return _0x2a0845;}function a0_0x1d81(){const _0x5988c9=['toLocaleDateString','query','restartMessage','Unknown','fetchStatus',':*\x20','Block\x20a\x20WhatsApp\x20user','8UWlMlM','{jid}','Toggle\x20automatic\x20bio','unblockError','getppDefaultImage','split','autobio','sendMessage','autobioAlreadyOff','subject','restart','30JWDdUw','*\x0a\x0a*','pushName','autobioDisabled','23548BWMode','log','@s.whatsapp.net','length',':*\x20@','mygroupsItem','151435jdUKVY','json','profilePictureUrl','setbioError','whoisFooter','https://nekos.life/api/v2/fact','Restart\x20bot','from','2168GUZdfL','Unblock\x20a\x20WhatsApp\x20user','2986356ZrvaRw','[WHOIS]\x20Status\x20array:','mygroupsHeader','find','participant','getpp','values','extendedTextMessage','includes','groupFetchAllParticipating','43384374oaeSEI','whoisSetOn','No\x20status','block','user','unblockSuccess','blockProtected','whois','image','exit','Delete\x20a\x20replied\x20message','autobioUsage','unblock','en-GB','utf-8','User\x20information','unblockProtected','setbioNoText','{subject}','contextInfo','participants','notify','List\x20all\x20groups','USER','1608927HnpVtS','8KDuFPT','setAt','blockNoTarget','status','stanzaId','3073131WFljOL','updateBlockStatus','off','setbio','set','whoisName','replace','{id}','[WHOIS]\x20fetchStatus\x20error:','\x0a🕒\x20*','Get\x20profile\x20picture','952650bBuhgU','onWhatsApp','message','\x0a\x0a📅\x20*'];a0_0x1d81=function(){return _0x5988c9;};return a0_0x1d81();}import{S_WHATSAPP_NET}from'@whiskeysockets/baileys';function _0x5ee4(){const _0x204850=a0_0x5ebc,_0x32937e=[_0x204850(0x1b6),'participant',_0x204850(0x1ae),_0x204850(0x180),_0x204850(0x196),_0x204850(0x1c8),_0x204850(0x187),_0x204850(0x189),'blockSuccess',_0x204850(0x19a),_0x204850(0x1be),_0x204850(0x1ba),_0x204850(0x194),'autobioAlreadyOn',_0x204850(0x1a5),'autobioEnabled',_0x204850(0x1c5),_0x204850(0x1ab),_0x204850(0x1ce),_0x204850(0x1bb),_0x204850(0x192),_0x204850(0x1bc),_0x204850(0x18b),_0x204850(0x185),_0x204850(0x1c7),_0x204850(0x19d),'en-GB',_0x204850(0x1c4),_0x204850(0x1ad),'notify',_0x204850(0x1a6),_0x204850(0x184),_0x204850(0x1d0),'mygroups',_0x204850(0x182),_0x204850(0x17b),_0x204850(0x1a7),_0x204850(0x1c0),_0x204850(0x1c9),_0x204850(0x18d),_0x204850(0x175)];return _0x5ee4=function(){return _0x32937e;},_0x5ee4();}function a0_0x5ebc(_0x24efcd,_0x411c53){_0x24efcd=_0x24efcd-0x174;const _0x1d814b=a0_0x1d81();let _0x5ebc1b=_0x1d814b[_0x24efcd];return _0x5ebc1b;}import*as a0_0x2c8638 from'jimp';import{Sticker,StickerTypes}from'wa-sticker-formatter';import{formatJid,getSenderJid,MESSAGES,protectOwner}from'../france/index.js';import{t,translate,translateAIResponse,getUserLang}from'../france/translator.js';let isStatusFetching=![],fetchInterval=null;export const commands=[{'name':a0_0xc74cd0(0x186),'description':_0x11a0e4(0x0),'category':'USER','ownerOnly':!![],'execute':async({sock:_0x5d0ed2,from:_0x54370d,text:_0x5406a8,msg:_0xea4994})=>{const _0x55b60f=a0_0xc74cd0,_0x892993=_0x11a0e4;let _0x2e78db;if(_0xea4994[_0x55b60f(0x1ae)]?.['extendedTextMessage']?.['contextInfo']?.[_0x892993(0x1)])_0x2e78db=_0xea4994[_0x892993(0x2)][_0x892993(0x3)][_0x892993(0x4)][_0x55b60f(0x17d)];else{if(_0x5406a8)_0x2e78db=_0x5406a8['includes'](_0x892993(0x5))?_0x5406a8:formatJid(_0x5406a8);else{const _0x3edd71=await t(_0x54370d,_0x892993(0x6),_0x55b60f(0x19e));return _0x5d0ed2['sendMessage'](_0x54370d,{'text':_0x3edd71},{'quoted':_0xea4994});}}if(protectOwner(_0x2e78db)){const _0xc55594=await t(_0x54370d,_0x55b60f(0x187),_0x892993(0x7));return _0x5d0ed2[_0x55b60f(0x1be)](_0x54370d,{'text':_0xc55594},{'quoted':_0xea4994});}try{await _0x5d0ed2['updateBlockStatus'](_0x2e78db,_0x55b60f(0x186));const _0xeeff1b=await t(_0x54370d,_0x892993(0x6),_0x892993(0x8));await _0x5d0ed2[_0x55b60f(0x1be)](_0x54370d,{'text':_0xeeff1b['replace'](_0x55b60f(0x1b8),_0x2e78db)},{'quoted':_0xea4994});}catch{const _0x310e12=await t(_0x54370d,_0x892993(0x6),'blockError');await _0x5d0ed2['sendMessage'](_0x54370d,{'text':_0x310e12},{'quoted':_0xea4994});}}},{'name':a0_0xc74cd0(0x18f),'description':a0_0xc74cd0(0x178),'category':_0x11a0e4(0x9),'ownerOnly':!![],'execute':async({sock:_0x511477,from:_0x4290d2,text:_0x55575f,msg:_0x26a60e})=>{const _0x55eb8e=a0_0xc74cd0,_0x48bb10=_0x11a0e4;let _0xe8fc30;if(_0x26a60e[_0x48bb10(0x2)]?.['extendedTextMessage']?.[_0x48bb10(0x4)]?.[_0x55eb8e(0x17d)])_0xe8fc30=_0x26a60e[_0x55eb8e(0x1ae)][_0x48bb10(0x3)][_0x55eb8e(0x196)][_0x48bb10(0x1)];else{if(_0x55575f)_0xe8fc30=_0x55575f[_0x55eb8e(0x181)](_0x48bb10(0x5))?_0x55575f:formatJid(_0x55575f);else{const _0x3be328=await t(_0x4290d2,'user','unblockNoTarget');return _0x511477[_0x48bb10(0xa)](_0x4290d2,{'text':_0x3be328},{'quoted':_0x26a60e});}}if(protectOwner(_0xe8fc30)){const _0x185ab8=await t(_0x4290d2,_0x55eb8e(0x187),_0x55eb8e(0x193));return _0x511477['sendMessage'](_0x4290d2,{'text':_0x185ab8},{'quoted':_0x26a60e});}try{await _0x511477[_0x55eb8e(0x1a2)](_0xe8fc30,'unblock');const _0x537b13=await t(_0x4290d2,_0x55eb8e(0x187),_0x55eb8e(0x188));await _0x511477[_0x55eb8e(0x1be)](_0x4290d2,{'text':_0x537b13[_0x55eb8e(0x1a7)](_0x55eb8e(0x1b8),_0xe8fc30)},{'quoted':_0x26a60e});}catch{const _0x16f3bb=await t(_0x4290d2,_0x55eb8e(0x187),_0x48bb10(0xb));await _0x511477[_0x55eb8e(0x1be)](_0x4290d2,{'text':_0x16f3bb},{'quoted':_0x26a60e});}}},{'name':a0_0xc74cd0(0x1a4),'description':'Set\x20WhatsApp\x20bio','category':_0x11a0e4(0x9),'ownerOnly':!![],'execute':async({sock:_0x6219e1,from:_0x10234b,text:_0x3c3a79,msg:_0x116e1a})=>{const _0x51a7e5=a0_0xc74cd0,_0x108222=_0x11a0e4;if(!_0x3c3a79){const _0x25c224=await t(_0x10234b,_0x51a7e5(0x187),_0x108222(0xc));return _0x6219e1[_0x51a7e5(0x1be)](_0x10234b,{'text':_0x25c224},{'quoted':_0x116e1a});}try{await _0x6219e1[_0x51a7e5(0x1b1)]({'tag':'iq','attrs':{'to':S_WHATSAPP_NET,'type':_0x51a7e5(0x1a5),'xmlns':_0x51a7e5(0x19f)},'content':[{'tag':_0x51a7e5(0x19f),'attrs':{},'content':Buffer[_0x51a7e5(0x176)](_0x3c3a79,_0x51a7e5(0x191))}]});const _0x539d72=await t(_0x10234b,_0x108222(0x6),'setbioSuccess');await _0x6219e1[_0x51a7e5(0x1be)](_0x10234b,{'text':_0x539d72},{'quoted':_0x116e1a});}catch{const _0x593ebe=await t(_0x10234b,_0x51a7e5(0x187),_0x51a7e5(0x1cf));await _0x6219e1[_0x51a7e5(0x1be)](_0x10234b,{'text':_0x593ebe},{'quoted':_0x116e1a});}}},{'name':a0_0xc74cd0(0x1bd),'description':a0_0xc74cd0(0x1b9),'category':'USER','ownerOnly':!![],'execute':async({sock:_0x449a57,from:_0x1e98b2,text:_0x1d623b,msg:_0x3f184c})=>{const _0x56ed4e=a0_0xc74cd0,_0x59df23=_0x11a0e4;if(!_0x1d623b){const _0x43f3d8=await t(_0x1e98b2,'user','autobioUsage');return _0x449a57[_0x59df23(0xa)](_0x1e98b2,{'text':_0x43f3d8},{'quoted':_0x3f184c});}if(_0x1d623b==='on'){if(isStatusFetching){const _0xce9ce8=await t(_0x1e98b2,_0x56ed4e(0x187),_0x59df23(0xd));return _0x449a57[_0x56ed4e(0x1be)](_0x1e98b2,{'text':_0xce9ce8},{'quoted':_0x3f184c});}isStatusFetching=!![],clearInterval(fetchInterval),fetchInterval=setInterval(async()=>{const _0x3ed942=_0x56ed4e,_0x13ee98=_0x59df23;try{const _0x4cde25=await fetch(_0x3ed942(0x174)),_0x3d309d=await _0x4cde25[_0x3ed942(0x1cd)](),_0x48fe4a='Spider\x20Man:\x20'+_0x3d309d['fact'];await _0x449a57[_0x3ed942(0x1b1)]({'tag':'iq','attrs':{'to':S_WHATSAPP_NET,'type':_0x13ee98(0xe),'xmlns':'status'},'content':[{'tag':'status','attrs':{},'content':Buffer[_0x3ed942(0x176)](_0x48fe4a,_0x3ed942(0x191))}]});}catch{}},0xea60),fetchInterval?.['unref']?.();const _0x5d48f6=await t(_0x1e98b2,_0x59df23(0x6),_0x59df23(0xf));return _0x449a57[_0x56ed4e(0x1be)](_0x1e98b2,{'text':_0x5d48f6},{'quoted':_0x3f184c});}if(_0x1d623b===_0x56ed4e(0x1a3)){if(!isStatusFetching){const _0xdef98f=await t(_0x1e98b2,_0x56ed4e(0x187),_0x56ed4e(0x1bf));return _0x449a57[_0x56ed4e(0x1be)](_0x1e98b2,{'text':_0xdef98f},{'quoted':_0x3f184c});}clearInterval(fetchInterval),fetchInterval=null,isStatusFetching=![];const _0x2a4b02=await t(_0x1e98b2,_0x59df23(0x6),_0x59df23(0x10));return _0x449a57[_0x59df23(0xa)](_0x1e98b2,{'text':_0x2a4b02},{'quoted':_0x3f184c});}const _0xbdafe9=await t(_0x1e98b2,'user',_0x56ed4e(0x18e));await _0x449a57[_0x59df23(0xa)](_0x1e98b2,{'text':_0xbdafe9},{'quoted':_0x3f184c});}},{'name':a0_0xc74cd0(0x17e),'description':_0x11a0e4(0x11),'category':a0_0xc74cd0(0x19a),'execute':async({sock:_0x5e5ee0,from:_0x5ee425,msg:_0x98433b})=>{const _0x2646a1=a0_0xc74cd0,_0xebec4d=_0x11a0e4,_0x367d6f=_0x98433b[_0x2646a1(0x1ae)]?.[_0x2646a1(0x180)]?.[_0x2646a1(0x196)]?.[_0x2646a1(0x17d)]||getSenderJid(_0x98433b);let _0x59a777;try{_0x59a777=await _0x5e5ee0[_0xebec4d(0x12)](_0x367d6f,'image');}catch{const _0x11f68b=await t(_0x5ee425,_0x2646a1(0x187),_0xebec4d(0x13));_0x59a777=_0x11f68b;}const _0x11667e=await t(_0x5ee425,_0x2646a1(0x187),'getppCaption');await _0x5e5ee0[_0x2646a1(0x1be)](_0x5ee425,{'image':{'url':_0x59a777},'caption':_0x11667e},{'quoted':_0x98433b});}},{'name':a0_0xc74cd0(0x18a),'description':_0x11a0e4(0x14),'category':a0_0xc74cd0(0x19a),'execute':async({sock:_0x5b28ba,from:_0x446630,msg:_0x490f9b})=>{const _0x503a93=a0_0xc74cd0,_0x5992dd=_0x11a0e4,_0x294400=_0x490f9b['message']?.[_0x5992dd(0x3)]?.[_0x503a93(0x196)]?.[_0x5992dd(0x1)]||getSenderJid(_0x490f9b),_0x4c9034=_0x294400[_0x5992dd(0x15)]('@')[0x0];let _0x26462c;try{_0x26462c=await _0x5b28ba[_0x503a93(0x1ce)](_0x294400,_0x5992dd(0x16));}catch{const _0x3e40ad=await t(_0x446630,_0x503a93(0x187),'whoisDefaultImage');_0x26462c=_0x3e40ad;}let _0x4edccc=_0x5992dd(0x17),_0x125a58='Unknown',_0x294409=_0x503a93(0x1b3);try{const _0x278f88=await _0x5b28ba[_0x503a93(0x1b4)](_0x294400);console[_0x5992dd(0x18)](_0x503a93(0x17a),_0x278f88);if(_0x278f88&&_0x278f88[0x0]&&_0x278f88[0x0][_0x503a93(0x19f)]){const _0x21b90d=_0x278f88[0x0][_0x503a93(0x19f)];_0x4edccc=_0x21b90d[_0x503a93(0x19f)]||_0x503a93(0x185);if(_0x21b90d[_0x503a93(0x19d)]){const _0x2cab94=new Date(_0x21b90d[_0x5992dd(0x19)]);!isNaN(_0x2cab94['getTime']())&&(_0x125a58=_0x2cab94[_0x503a93(0x1b0)](_0x503a93(0x190)),_0x294409=_0x2cab94['toLocaleTimeString'](_0x5992dd(0x1a)));}}}catch(_0x538de7){console[_0x5992dd(0x18)](_0x503a93(0x1a9),_0x538de7[_0x503a93(0x1ae)]);}let _0x44d304=_0x490f9b[_0x5992dd(0x1b)]||_0x4c9034;try{const _0x52041c=await _0x5b28ba[_0x5992dd(0x1c)](_0x294400);_0x52041c&&_0x52041c[0x0]&&_0x52041c[0x0][_0x5992dd(0x1d)]&&(_0x44d304=_0x52041c[0x0][_0x503a93(0x198)]);}catch{}const _0x2cf2cc=await t(_0x446630,_0x503a93(0x187),'whoisAbout'),_0x31ad22=await t(_0x446630,_0x5992dd(0x6),_0x5992dd(0x1e)),_0xc4e414=await t(_0x446630,_0x503a93(0x187),_0x5992dd(0x1f)),_0x5df17a=await t(_0x446630,'user','whoisSetAt'),_0xb6c04c=await t(_0x446630,_0x503a93(0x187),_0x5992dd(0x20)),_0x52da03='👤\x20*'+_0x2cf2cc+_0x503a93(0x1c3)+_0x4edccc+_0x503a93(0x1c3)+_0x31ad22+_0x503a93(0x1ca)+_0x4c9034+_0x503a93(0x1af)+_0xc4e414+_0x503a93(0x1b5)+_0x125a58+_0x503a93(0x1aa)+_0x5df17a+_0x503a93(0x1b5)+_0x294409+'\x0a\x0a'+_0xb6c04c;await _0x5b28ba['sendMessage'](_0x446630,{'image':{'url':_0x26462c},'caption':_0x52da03,'mentions':[_0x294400]},{'quoted':_0x490f9b});}},{'name':_0x11a0e4(0x21),'description':a0_0xc74cd0(0x199),'category':_0x11a0e4(0x9),'ownerOnly':!![],'execute':async({sock:_0x2766b4,from:_0x19d921,msg:_0x275eba})=>{const _0x2ed023=a0_0xc74cd0,_0x4118b3=_0x11a0e4;try{const _0x4b89d8=Object[_0x2ed023(0x17f)](await _0x2766b4[_0x4118b3(0x22)]()),_0x4d3820=await t(_0x19d921,_0x2ed023(0x187),_0x4118b3(0x23)),_0x27e0a2=await t(_0x19d921,_0x2ed023(0x187),_0x2ed023(0x1cb));let _0x1843b7=_0x4d3820;for(const _0x37bca9 of _0x4b89d8){_0x1843b7+=_0x27e0a2[_0x4118b3(0x24)](_0x2ed023(0x195),_0x37bca9[_0x4118b3(0x25)])[_0x2ed023(0x1a7)]('{count}',_0x37bca9[_0x2ed023(0x197)][_0x4118b3(0x26)])[_0x2ed023(0x1a7)](_0x2ed023(0x1a8),_0x37bca9['id']);}await _0x2766b4[_0x2ed023(0x1be)](_0x19d921,{'text':_0x1843b7},{'quoted':_0x275eba});}catch{const _0x1a92d9=await t(_0x19d921,'user','mygroupsError');await _0x2766b4[_0x4118b3(0xa)](_0x19d921,{'text':_0x1a92d9},{'quoted':_0x275eba});}}},{'name':'del','description':_0x11a0e4(0x27),'category':'USER','ownerOnly':!![],'execute':async({sock:_0x3c4190,from:_0x5c9b05,msg:_0x5b77fa})=>{const _0x1418e1=a0_0xc74cd0,_0x19224a=_0x11a0e4,_0x5b7339=_0x5b77fa[_0x1418e1(0x1ae)]?.[_0x1418e1(0x180)]?.[_0x1418e1(0x196)];if(!_0x5b7339)return;await _0x3c4190[_0x19224a(0xa)](_0x5c9b05,{'delete':{'remoteJid':_0x5c9b05,'fromMe':![],'id':_0x5b7339[_0x1418e1(0x1a0)],'participant':_0x5b7339[_0x1418e1(0x17d)]}});}},{'name':a0_0xc74cd0(0x1c1),'description':_0x11a0e4(0x28),'category':_0x11a0e4(0x9),'ownerOnly':!![],'execute':async({sock:_0x1a049b,from:_0x5818c2,msg:_0x14c7c8})=>{const _0x53f6e8=a0_0xc74cd0,_0x51892f=await t(_0x5818c2,_0x53f6e8(0x187),_0x53f6e8(0x1b2));await _0x1a049b[_0x53f6e8(0x1be)](_0x5818c2,{'text':_0x51892f},{'quoted':_0x14c7c8}),process[_0x53f6e8(0x18c)](0x0);}}];import{executeGetPP}from'../utils/profilePicture.js';const profilePictureCommand=commands[a0_0xc74cd0(0x17c)](_0x3f9a00=>_0x3f9a00['name']==='getpp');if(profilePictureCommand)profilePictureCommand['execute']=executeGetPP;
+import { S_WHATSAPP_NET } from '@whiskeysockets/baileys';
+import { formatJid, protectOwner } from '../france/index.js';
+import { t } from '../france/translator.js';
+import { executeGetPP } from '../utils/profilePicture.js';
+import { cleanJid, extractPhoneDigits } from '../../spider/utils/groupRoleResolver.js';
+import {
+  deleteMessageSafely,
+  isSendMessageFailure,
+  resolveQuotedDeleteTarget,
+  resolveTargetFromMessage,
+} from '../../spider/utils/groupActionHelper.js';
+
+let isStatusFetching = false;
+let fetchInterval = null;
+
+async function fetchMetaSafe(sock, from) {
+  if (!from || !String(from).endsWith('@g.us')) return null;
+  try {
+    if (typeof sock?.groupMetadata === 'function') {
+      return await sock.groupMetadata(from);
+    }
+  } catch {}
+  return null;
+}
+
+export const commands = [
+  {
+    name: 'block',
+    description: 'Block a WhatsApp user',
+    category: 'USER',
+    ownerOnly: true,
+    execute: async ({ sock, from, text, args = [], msg }) => {
+      const metadata = await fetchMetaSafe(sock, from);
+      const resolved = resolveTargetFromMessage({ sock, from, msg, text, args, metadata });
+      const targetJid =
+        resolved.targetJid ||
+        (text ? (String(text).includes('@s.whatsapp.net') ? String(text).trim() : formatJid(text)) : '');
+
+      if (!targetJid) {
+        const noTarget = await t(from, 'user', 'blockNoTarget');
+        return sock.sendMessage(from, { text: noTarget }, { quoted: msg });
+      }
+      const phone = resolved.phone || extractPhoneDigits(targetJid);
+      if (protectOwner(targetJid) || (phone && protectOwner(`${phone}@s.whatsapp.net`))) {
+        const protectedMsg = await t(from, 'user', 'blockProtected');
+        return sock.sendMessage(from, { text: protectedMsg }, { quoted: msg });
+      }
+      try {
+        const res = await sock.updateBlockStatus(targetJid, 'block');
+        if (isSendMessageFailure(res)) throw new Error('block-failed');
+        const successMsg = await t(from, 'user', 'blockSuccess');
+        await sock.sendMessage(from, { text: successMsg.replace('{jid}', targetJid) }, { quoted: msg });
+      } catch {
+        const errMsg = await t(from, 'user', 'blockError');
+        await sock.sendMessage(from, { text: errMsg }, { quoted: msg });
+      }
+    },
+  },
+  {
+    name: 'unblock',
+    description: 'Unblock a WhatsApp user',
+    category: 'USER',
+    ownerOnly: true,
+    execute: async ({ sock, from, text, args = [], msg }) => {
+      const metadata = await fetchMetaSafe(sock, from);
+      const resolved = resolveTargetFromMessage({ sock, from, msg, text, args, metadata });
+      const targetJid =
+        resolved.targetJid ||
+        (text ? (String(text).includes('@s.whatsapp.net') ? String(text).trim() : formatJid(text)) : '');
+
+      if (!targetJid) {
+        const noTarget = await t(from, 'user', 'unblockNoTarget');
+        return sock.sendMessage(from, { text: noTarget }, { quoted: msg });
+      }
+      const phone = resolved.phone || extractPhoneDigits(targetJid);
+      if (protectOwner(targetJid) || (phone && protectOwner(`${phone}@s.whatsapp.net`))) {
+        const protectedMsg = await t(from, 'user', 'unblockProtected');
+        return sock.sendMessage(from, { text: protectedMsg }, { quoted: msg });
+      }
+      try {
+        const res = await sock.updateBlockStatus(targetJid, 'unblock');
+        if (isSendMessageFailure(res)) throw new Error('unblock-failed');
+        const successMsg = await t(from, 'user', 'unblockSuccess');
+        await sock.sendMessage(from, { text: successMsg.replace('{jid}', targetJid) }, { quoted: msg });
+      } catch {
+        const errMsg = await t(from, 'user', 'unblockError');
+        await sock.sendMessage(from, { text: errMsg }, { quoted: msg });
+      }
+    },
+  },
+  {
+    name: 'setbio',
+    description: 'Set WhatsApp bio',
+    category: 'USER',
+    ownerOnly: true,
+    execute: async ({ sock, from, text, msg }) => {
+      if (!text) {
+        const noText = await t(from, 'user', 'setbioNoText');
+        return sock.sendMessage(from, { text: noText }, { quoted: msg });
+      }
+      try {
+        const res = await sock.query({
+          tag: 'iq',
+          attrs: { to: S_WHATSAPP_NET, type: 'set', xmlns: 'status' },
+          content: [{ tag: 'status', attrs: {}, content: Buffer.from(text, 'utf-8') }],
+        });
+        if (isSendMessageFailure(res)) throw new Error('setbio-failed');
+        const successMsg = await t(from, 'user', 'setbioSuccess');
+        await sock.sendMessage(from, { text: successMsg }, { quoted: msg });
+      } catch {
+        const errMsg = await t(from, 'user', 'setbioError');
+        await sock.sendMessage(from, { text: errMsg }, { quoted: msg });
+      }
+    },
+  },
+  {
+    name: 'autobio',
+    description: 'Toggle automatic bio',
+    category: 'USER',
+    ownerOnly: true,
+    execute: async ({ sock, from, text, msg }) => {
+      if (!text) {
+        const usageMsg = await t(from, 'user', 'autobioUsage');
+        return sock.sendMessage(from, { text: usageMsg }, { quoted: msg });
+      }
+      if (text === 'on') {
+        if (isStatusFetching) {
+          const alreadyOn = await t(from, 'user', 'autobioAlreadyOn');
+          return sock.sendMessage(from, { text: alreadyOn }, { quoted: msg });
+        }
+        isStatusFetching = true;
+        clearInterval(fetchInterval);
+        fetchInterval = setInterval(async () => {
+          try {
+            const resp = await fetch('https://nekos.life/api/v2/fact');
+            const data = await resp.json();
+            const bioText = `Spider Man: ${data.fact}`;
+            await sock.query({
+              tag: 'iq',
+              attrs: { to: S_WHATSAPP_NET, type: 'set', xmlns: 'status' },
+              content: [{ tag: 'status', attrs: {}, content: Buffer.from(bioText, 'utf-8') }],
+            });
+          } catch {}
+        }, 60000);
+        fetchInterval?.unref?.();
+        const enabledMsg = await t(from, 'user', 'autobioEnabled');
+        return sock.sendMessage(from, { text: enabledMsg }, { quoted: msg });
+      }
+      if (text === 'off') {
+        if (!isStatusFetching) {
+          const alreadyOff = await t(from, 'user', 'autobioAlreadyOff');
+          return sock.sendMessage(from, { text: alreadyOff }, { quoted: msg });
+        }
+        clearInterval(fetchInterval);
+        fetchInterval = null;
+        isStatusFetching = false;
+        const disabledMsg = await t(from, 'user', 'autobioDisabled');
+        return sock.sendMessage(from, { text: disabledMsg }, { quoted: msg });
+      }
+      const usageMsg = await t(from, 'user', 'autobioUsage');
+      await sock.sendMessage(from, { text: usageMsg }, { quoted: msg });
+    },
+  },
+  {
+    name: 'getpp',
+    description: 'Get profile picture',
+    category: 'USER',
+    execute: executeGetPP,
+  },
+  {
+    name: 'whois',
+    description: 'User information',
+    category: 'USER',
+    execute: async ({ sock, from, text, args = [], msg }) => {
+      const metadata = await fetchMetaSafe(sock, from);
+      const resolved = resolveTargetFromMessage({
+        sock,
+        from,
+        msg,
+        text,
+        args,
+        metadata,
+        allowSenderFallback: true,
+      });
+      const targetJid = resolved.targetJid || from;
+      const targetNum = resolved.displayUser || cleanJid(targetJid).split('@')[0];
+
+      let ppUrl;
+      try {
+        ppUrl = await sock.profilePictureUrl(targetJid, 'image');
+      } catch {
+        ppUrl = await t(from, 'user', 'whoisDefaultImage');
+      }
+
+      let statusText = 'No status';
+      let setDate = 'Unknown';
+      let setTime = 'Unknown';
+      try {
+        const statuses = await sock.fetchStatus(targetJid);
+        if (statuses && statuses[0] && statuses[0].status) {
+          const entry = statuses[0].status;
+          statusText = entry.status || 'Unknown';
+          if (entry.setAt) {
+            const dt = new Date(entry.setAt);
+            if (!isNaN(dt.getTime())) {
+              setDate = dt.toLocaleDateString('en-GB');
+              setTime = dt.toLocaleTimeString('en-GB');
+            }
+          }
+        }
+      } catch (err) {
+        console.log('[WHOIS] fetchStatus error:', err.message);
+      }
+
+      try {
+        await sock.onWhatsApp(targetJid);
+      } catch {}
+
+      const aboutLabel = await t(from, 'user', 'whoisAbout');
+      const nameLabel = await t(from, 'user', 'whoisName');
+      const setOnLabel = await t(from, 'user', 'whoisSetOn');
+      const setAtLabel = await t(from, 'user', 'whoisSetAt');
+      const footerLabel = await t(from, 'user', 'whoisFooter');
+
+      const caption = `👤 *${aboutLabel}:* ${statusText}\n\n*${nameLabel}:* @${targetNum}\n\n📅 *${setOnLabel}:* ${setDate}\n🕒 *${setAtLabel}:* ${setTime}\n\n${footerLabel}`;
+      await sock.sendMessage(
+        from,
+        {
+          image: { url: ppUrl },
+          caption,
+          mentions: [targetJid],
+        },
+        { quoted: msg },
+      );
+    },
+  },
+  {
+    name: 'mygroups',
+    description: 'List all groups',
+    category: 'USER',
+    ownerOnly: true,
+    execute: async ({ sock, from, msg }) => {
+      try {
+        const groups = Object.values(await sock.groupFetchAllParticipating());
+        const header = await t(from, 'user', 'mygroupsHeader');
+        const itemTpl = await t(from, 'user', 'mygroupsItem');
+        let output = header;
+        for (const group of groups) {
+          output += itemTpl
+            .replace('{subject}', group.subject)
+            .replace('{count}', group.participants.length)
+            .replace('{id}', group.id);
+        }
+        await sock.sendMessage(from, { text: output }, { quoted: msg });
+      } catch {
+        const errMsg = await t(from, 'user', 'mygroupsError');
+        await sock.sendMessage(from, { text: errMsg }, { quoted: msg });
+      }
+    },
+  },
+  {
+    name: 'del',
+    description: 'Delete a replied message',
+    category: 'USER',
+    ownerOnly: true,
+    execute: async ({ sock, from, msg }) => {
+      const metadata = await fetchMetaSafe(sock, from);
+      const delTarget = resolveQuotedDeleteTarget({ from, msg, sock, metadata });
+      if (!delTarget) return;
+
+      const res = await deleteMessageSafely({
+        sock,
+        from,
+        msg: delTarget.msg,
+        targetJid: delTarget.participant,
+        senderCandidates: delTarget.candidates,
+        metadata,
+        allowFromMeFallback: true,
+      });
+
+      if (!res.ok) {
+        await sock.sendMessage(
+          from,
+          { text: '❌ Failed to delete message.' },
+          { quoted: msg },
+        );
+      }
+    },
+  },
+  {
+    name: 'restart',
+    description: 'Restart bot',
+    category: 'USER',
+    ownerOnly: true,
+    execute: async ({ sock, from, msg }) => {
+      const restartMsg = await t(from, 'user', 'restartMessage');
+      await sock.sendMessage(from, { text: restartMsg }, { quoted: msg });
+      process.exit(0);
+    },
+  },
+];
