@@ -1,6 +1,7 @@
 const DEFAULT_LIMIT = 8;
 const DEFAULT_WINDOW_MS = 10_000;
 const CLEANUP_INTERVAL = 128;
+const MAX_TRACKED_SENDERS = 2000;
 
 /**
  * Returns true when a command is restricted to owners and the current sender
@@ -90,7 +91,16 @@ export function createCommandRateLimiter(options = {}) {
       }
 
       timestamps.push(currentTime);
+      if (timestampsBySender.has(key)) timestampsBySender.delete(key);
       timestampsBySender.set(key, timestamps);
+      if (timestampsBySender.size > MAX_TRACKED_SENDERS) {
+        pruneExpiredSenders(windowStart);
+        while (timestampsBySender.size > MAX_TRACKED_SENDERS) {
+          const oldestKey = timestampsBySender.keys().next().value;
+          if (oldestKey === undefined) break;
+          timestampsBySender.delete(oldestKey);
+        }
+      }
       return true;
     },
   };
