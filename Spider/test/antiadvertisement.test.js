@@ -385,6 +385,39 @@ test('handleAntiAdvertisementMessage enforces delete, kick, warnkick, mute, and 
     assert.match(env.sent[1].payload.text, /MESSAGE DELETED/);
     assert.match(env.sent[1].payload.text, /\*WARNING\*\s*›\s*No advertisements or promotions allowed in this group!/);
 
+    // Keep the exact inbound participant key first even when metadata prefers PN addressing.
+    const aliasEnv = createGroupMockSock();
+    aliasEnv.metadata.addressingMode = 'pn';
+    aliasEnv.metadata.participants = aliasEnv.metadata.participants.map((participant) =>
+      participant.id === advertiser
+        ? { ...participant, id: '3330003@lid', phoneNumber: advertiser }
+        : participant,
+    );
+    const aliasResult = await antiAdUtils.handleAntiAdvertisementMessage({
+      sock: aliasEnv.sock,
+      from: groupJid,
+      sender: '3330003@lid',
+      msg: {
+        key: {
+          id: 'ad-lid-pn',
+          remoteJid: groupJid,
+          fromMe: false,
+          participant: '3330003@lid',
+          participantAlt: advertiser,
+        },
+        message: { conversation: 'FULIZA\n5K @350\n10K@550\n20K@1050' },
+      },
+      groupMeta: aliasEnv.metadata,
+      store,
+    });
+    assert.equal(aliasResult.deleted, true);
+    assert.deepEqual(aliasEnv.sent[0].payload.delete, {
+      remoteJid: groupJid,
+      fromMe: false,
+      id: 'ad-lid-pn',
+      participant: '3330003@lid',
+    });
+
     // 2. Kick mode: deletes and removes advertiser
     store.setGroupConfig(groupJid, { enabled: true, action: 'kick', notify: true });
     env = createGroupMockSock();

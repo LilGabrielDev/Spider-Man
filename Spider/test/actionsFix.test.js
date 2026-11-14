@@ -246,6 +246,29 @@ test('deleteMessageSafely detects messages.update status 0 NACK and succeeds on 
   assert.ok(sent.some((s) => s.payload.delete?.participant === '254700000003@s.whatsapp.net'));
 });
 
+test('deleteMessageSafely requires a server ack and routes the revoke to the original message chat', async () => {
+  const { sock, sent, groupMeta } = createAckAwareSock();
+  const res = await groupActionHelper.deleteMessageSafely({
+    sock,
+    from: '120363000000009999@g.us',
+    msg: {
+      key: {
+        remoteJid: groupMeta.id,
+        id: 'unacked-victim-msg',
+        fromMe: false,
+        participant: '3330003@lid',
+      },
+    },
+    metadata: null,
+    ackTimeoutMs: 0,
+  });
+
+  assert.equal(res.ok, false);
+  assert.equal(res.error, 'delete-ack-timeout');
+  assert.equal(sent[0].jid, groupMeta.id);
+  assert.equal(sent[0].payload.delete.remoteJid, groupMeta.id);
+});
+
 test('participant update parsing rejects unknown or incomplete responses', () => {
   const first = '254700000001@s.whatsapp.net';
   const second = '254700000002@s.whatsapp.net';
