@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
 import {
+    SESSION_SERVER_URL,
     isShortLilSession,
     normalizeSession,
     resolveShortSession,
@@ -37,17 +38,34 @@ function withTempEnvSnapshot(fn) {
         });
 }
 
+function createRedirectingFetch(localBaseUrl) {
+    const expectedOrigin = "https://lilgabriel-session.onrender.com";
+    return async (url, init) => {
+        const rawUrl = String(url);
+        assert.ok(
+            rawUrl.startsWith(`${expectedOrigin}/`),
+            `Expected request to ${expectedOrigin}, got ${rawUrl}`
+        );
+        const rewritten = `${localBaseUrl}${rawUrl.slice(expectedOrigin.length)}`;
+        return globalThis.fetch(rewritten, init);
+    };
+}
+
 async function withServer(handler, fn) {
     const server = http.createServer(handler);
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
     const { port } = server.address();
     const baseUrl = `http://127.0.0.1:${port}`;
     try {
-        await fn(baseUrl);
+        await fn(baseUrl, createRedirectingFetch(baseUrl));
     } finally {
         await new Promise((resolve) => server.close(resolve));
     }
 }
+
+test("SESSION_SERVER_URL constant is fixed to https://lilgabriel-session.onrender.com/", () => {
+    assert.equal(SESSION_SERVER_URL, "https://lilgabriel-session.onrender.com/");
+});
 
 test("isShortLilSession detects compact LIL~, PANTHER~, and SPIDER~ short IDs and ignores full sessions", () => {
     assert.equal(isShortLilSession("LIL~abc123"), true);
@@ -86,7 +104,7 @@ test("normalizeSession accepts LIL~, PANTHER~, SPIDER~, plain base64, URL-safe b
     assert.throws(() => normalizeSession("invalid"), /SESSION must be base64-encoded credentials/);
 });
 
-test("resolveShortSession resolves short SESSION_ID from plain text server response", async () => {
+test("resolveShortSession resolves short SESSION_ID from plain text server response and ignores SESSION_SERVER_URL env", async () => {
     const full = makeFullLilSession();
     await withTempEnvSnapshot(async () => {
         await withServer((req, res) => {
@@ -97,12 +115,16 @@ test("resolveShortSession resolves short SESSION_ID from plain text server respo
             }
             res.writeHead(404);
             res.end("Not found");
-        }, async (baseUrl) => {
+        }, async (_baseUrl, fetchImpl) => {
             delete process.env.SESSION;
             process.env.SESSION_ID = "LIL~abc123";
-            process.env.SESSION_SERVER_URL = `${baseUrl}/session/`;
+            process.env.SESSION_SERVER_URL = "https://should-be-ignored.example.com";
 
-            await resolveShortSession({ loadEnv: false, credsPath: "/nonexistent/creds.json" });
+            await resolveShortSession({
+                loadEnv: false,
+                credsPath: "/nonexistent/creds.json",
+                fetchImpl,
+            });
             assert.equal(process.env.SESSION_ID, full);
             assert.ok(normalizeSession(process.env.SESSION_ID));
         });
@@ -126,12 +148,15 @@ test("resolveShortSession resolves short SESSION when SESSION_ID is also present
             }
             res.writeHead(404);
             res.end("Not found");
-        }, async (baseUrl) => {
+        }, async (_baseUrl, fetchImpl) => {
             process.env.SESSION = '"LIL~first99"';
             process.env.SESSION_ID = "PANTHER~second88";
-            process.env.SESSION_SERVER_URL = baseUrl;
 
-            await resolveShortSession({ loadEnv: false, credsPath: "/nonexistent/creds.json" });
+            await resolveShortSession({
+                loadEnv: false,
+                credsPath: "/nonexistent/creds.json",
+                fetchImpl,
+            });
             assert.equal(process.env.SESSION, full);
             assert.equal(process.env.SESSION_ID, makePlainBase64Session(creds));
         });
@@ -151,16 +176,23 @@ test("resolveShortSession falls back to prefixed lookup key on 404 and skips alr
             }
             res.writeHead(404);
             res.end("Not found");
-        }, async (baseUrl) => {
+        }, async (_baseUrl, fetchImpl) => {
             delete process.env.SESSION;
             process.env.SESSION_ID = "LIL~prefixed1";
-            process.env.SESSION_SERVER_URL = baseUrl;
 
-            await resolveShortSession({ loadEnv: false, credsPath: "/nonexistent/creds.json" });
+            await resolveShortSession({
+                loadEnv: false,
+                credsPath: "/nonexistent/creds.json",
+                fetchImpl,
+            });
             assert.equal(process.env.SESSION_ID, full);
 
             const countBeforeSecondCall = requestCount;
-            await resolveShortSession({ loadEnv: false, credsPath: "/nonexistent/creds.json" });
+            await resolveShortSession({
+                loadEnv: false,
+                credsPath: "/nonexistent/creds.json",
+                fetchImpl,
+            });
             assert.equal(requestCount, countBeforeSecondCall);
         });
     });
@@ -177,12 +209,11 @@ test("resolveShortSession reuses existing creds.json on restart when short sessi
             await withServer((_req, res) => {
                 res.writeHead(404);
                 res.end("Expired");
-            }, async (baseUrl) => {
+            }, async (_baseUrl, fetchImpl) => {
                 delete process.env.SESSION;
                 process.env.SESSION_ID = "LIL~expired123";
-                process.env.SESSION_SERVER_URL = baseUrl;
 
-                await resolveShortSession({ loadEnv: false, credsPath });
+                await resolveShortSession({ loadEnv: false, credsPath, fetchImpl });
                 assert.equal(
                     process.env.SESSION_ID,
                     Buffer.from(JSON.stringify(creds), "utf8").toString("base64")
@@ -199,13 +230,16 @@ test("resolveShortSession throws descriptive error when lookup fails and no cred
         await withServer((_req, res) => {
             res.writeHead(503);
             res.end("No database configured");
-        }, async (baseUrl) => {
+        }, async (_baseUrl, fetchImpl) => {
             delete process.env.SESSION;
             process.env.SESSION_ID = "LIL~missing123";
-            process.env.SESSION_SERVER_URL = baseUrl;
 
             await assert.rejects(
-                () => resolveShortSession({ loadEnv: false, credsPath: "/nonexistent/creds.json" }),
+                () => resolveShortSession({
+                    loadEnv: false,
+                    credsPath: "/nonexistent/creds.json",
+                    fetchImpl,
+                }),
                 /Short Spider-Man session lookup failed \(503\)/
             );
         });
