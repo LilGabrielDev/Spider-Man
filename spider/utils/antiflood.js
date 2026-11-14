@@ -1,7 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spiderHeader, spiderRow, spiderFooter } from '../../Spider/utils/tableStyle.js';
-import { cleanJid, extractPhone, resolveParticipantRole } from './antiscam.js';
+import { cleanJid, extractPhone } from './antiscam.js';
+import {
+  collectBotIdentities,
+  collectSenderIdentities,
+  resolveGroupRolesAsync,
+} from './groupRoleResolver.js';
 
 export const ANTIFLOOD_ACTIONS = Object.freeze(['delete', 'warn', 'kick', 'warnkick', 'mute']);
 
@@ -521,7 +526,14 @@ export async function handleAntiFloodMessage({
     }
   }
 
-  const senderRole = resolveParticipantRole(metadata, senderJid, getPhoneFromJid);
+  const senderCandidates = collectSenderIdentities(msg, [sender]);
+  const botCandidates = collectBotIdentities(sock);
+  const { senderRole, botRole } = await resolveGroupRolesAsync({
+    metadata,
+    sock,
+    senderJids: senderCandidates,
+    getPhoneFn: getPhoneFromJid,
+  });
   if (senderRole.isAdmin) {
     return {
       handled: false,
@@ -532,9 +544,7 @@ export async function handleAntiFloodMessage({
     };
   }
 
-  const botJid = sock.user?.id || sock.user?.lid || '';
-  const botRole = botJid ? resolveParticipantRole(metadata, botJid, getPhoneFromJid) : { isAdmin: true };
-  if (metadata && botJid && !botRole.isAdmin) {
+  if (metadata && botCandidates.length > 0 && !botRole.isAdmin) {
     return {
       handled: false,
       reason: 'bot-not-admin',

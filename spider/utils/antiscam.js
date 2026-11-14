@@ -1,6 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spiderHeader, spiderRow, spiderDivider, spiderFooter } from '../../Spider/utils/tableStyle.js';
+import {
+  collectBotIdentities,
+  collectSenderIdentities,
+  resolveParticipantRole as resolveParticipantRoleUnified,
+  resolveGroupRolesAsync,
+} from './groupRoleResolver.js';
 
 export const ANTISCAM_ACTIONS = Object.freeze(['delete', 'warn', 'kick', 'warnkick']);
 
@@ -637,34 +643,8 @@ export function detectScamMessage(text, groupConfig = {}, senderJid = '') {
   };
 }
 
-export function resolveParticipantRole(metadata, targetJid, getPhoneFn = null) {
-  const participants = Array.isArray(metadata?.participants) ? metadata.participants : [];
-  const targetClean = cleanJid(targetJid);
-  const targetPhone =
-    (typeof getPhoneFn === 'function' ? getPhoneFn(targetClean) : null) || extractPhone(targetClean);
-
-  const entry = participants.find((participant) => {
-    const candidates = [participant?.id, participant?.jid, participant?.pn, participant?.phoneNumber].filter(Boolean);
-    return candidates.some((cand) => {
-      const candClean = cleanJid(cand);
-      if (targetClean && candClean === targetClean) return true;
-      const candPhone = (typeof getPhoneFn === 'function' ? getPhoneFn(candClean) : null) || extractPhone(candClean);
-      return Boolean(targetPhone && candPhone && candPhone === targetPhone);
-    });
-  });
-
-  const isAdmin = entry?.admin === 'admin' || entry?.admin === 'superadmin';
-  const isOwner = Boolean(
-    metadata?.owner &&
-      (cleanJid(metadata.owner) === targetClean ||
-        (targetPhone && extractPhone(metadata.owner) === targetPhone)),
-  );
-
-  return {
-    participant: entry || null,
-    isAdmin: isAdmin || isOwner,
-    targetJid: entry?.id || targetClean || targetJid,
-  };
+export function resolveParticipantRole(metadata, targetJid, optionsOrFn = null) {
+  return resolveParticipantRoleUnified(metadata, targetJid, optionsOrFn);
 }
 
 function buildDeleteKey(from, msg, sender) {
@@ -742,15 +722,20 @@ export async function handleAntiScamMessage({
     }
   }
 
-  const senderJid = sender || msg.key?.participant || '';
-  const senderRole = resolveParticipantRole(metadata, senderJid, getPhoneFromJid);
+  const senderJid = sender || msg.key?.participant || msg.key?.participantAlt || '';
+  const senderCandidates = collectSenderIdentities(msg, [sender]);
+  const botCandidates = collectBotIdentities(sock);
+  const { senderRole, botRole } = await resolveGroupRolesAsync({
+    metadata,
+    sock,
+    senderJids: senderCandidates,
+    getPhoneFn: getPhoneFromJid,
+  });
   if (senderRole.isAdmin) {
     return { handled: false, reason: 'sender-is-admin', detection };
   }
 
-  const botJid = sock.user?.id || sock.user?.lid || '';
-  const botRole = botJid ? resolveParticipantRole(metadata, botJid, getPhoneFromJid) : { isAdmin: true };
-  if (metadata && botJid && !botRole.isAdmin) {
+  if (metadata && botCandidates.length > 0 && !botRole.isAdmin) {
     return { handled: false, reason: 'bot-not-admin', detection };
   }
 
