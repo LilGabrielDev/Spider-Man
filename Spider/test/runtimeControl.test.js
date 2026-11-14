@@ -199,6 +199,24 @@ test('Admin .update command keeps unsupervised panel processes online without ca
         },
       },
       from: '254700000000@s.whatsapp.net',
+      msg: { key: { id: 'msg-0' }, message: { conversation: '.updatecheck' } },
+      text: '',
+      isOwner: true,
+      config: { UPDATE_REPOSITORY: 'LilGabrielDev/Spider-Man' },
+    });
+
+    assert.match(sentMessages[0], /Spider Man Update Available/);
+    assert.doesNotMatch(sentMessages[0], /\bcommit\b/i);
+    assert.doesNotMatch(sentMessages[0], new RegExp(commitSha.slice(0, 7)));
+    assert.doesNotMatch(sentMessages[0], /Keep panel bot online on update/);
+
+    await updateCommand.execute({
+      sock: {
+        sendMessage: async (_jid, payload) => {
+          sentMessages.push(payload.text);
+        },
+      },
+      from: '254700000000@s.whatsapp.net',
       msg: { key: { id: 'msg-1' }, message: { conversation: '.update force' } },
       text: 'force',
       isOwner: true,
@@ -207,9 +225,28 @@ test('Admin .update command keeps unsupervised panel processes online without ca
 
     assert.equal(exitCalls.length, 0);
     assert.equal(reloadCalls, 1);
-    assert.equal(sentMessages.length, 1);
-    assert.match(sentMessages[0], /Spider Man UPDATED/);
-    assert.match(sentMessages[0], /Reloaded 55 commands live — bot stayed online/);
+    assert.equal(sentMessages.length, 2);
+    assert.match(sentMessages[1], /Spider Man UPDATED/);
+    assert.match(sentMessages[1], /Reloaded 55 commands live — bot stayed online/);
+    assert.doesNotMatch(sentMessages[1], /\bcommit\b/i);
+    assert.doesNotMatch(sentMessages[1], new RegExp(commitSha.slice(0, 7)));
+
+    await updateCommand.execute({
+      sock: {
+        sendMessage: async (_jid, payload) => {
+          sentMessages.push(payload.text);
+        },
+      },
+      from: '254700000000@s.whatsapp.net',
+      msg: { key: { id: 'msg-1b' }, message: { conversation: '.updatecheck' } },
+      text: '',
+      isOwner: true,
+      config: { UPDATE_REPOSITORY: 'LilGabrielDev/Spider-Man' },
+    });
+
+    assert.match(sentMessages[2], /Spider Man is up to date/);
+    assert.doesNotMatch(sentMessages[2], /\bcommit\b/i);
+    assert.doesNotMatch(sentMessages[2], new RegExp(commitSha.slice(0, 7)));
   } finally {
     resetRuntimeHandlers();
     globalThis.fetch = originalFetch;
@@ -309,6 +346,8 @@ test('Admin .update command triggers supervised worker restart handler without c
 
     assert.equal(sentMessages.length, 1);
     assert.match(sentMessages[0], /Reloading the bot process cleanly in-place/);
+    assert.doesNotMatch(sentMessages[0], /\bcommit\b/i);
+    assert.doesNotMatch(sentMessages[0], new RegExp(commitSha.slice(0, 7)));
     assert.equal(restartCalls, 0);
 
     t.mock.timers.tick(1500);
