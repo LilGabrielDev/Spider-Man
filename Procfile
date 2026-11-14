@@ -1,1 +1,1 @@
-web: node "spider/index.js"
+web: node index.js
