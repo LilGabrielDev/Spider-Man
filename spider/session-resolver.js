@@ -6,9 +6,9 @@ import dotenv from "dotenv";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_CREDS_PATH = path.join(__dirname, "auth", "creds.json");
-const DEFAULT_SESSION_SERVER_URLS = [
-    "https://session.Lilgabriel.co.ke",
-    "https://ultra-guru-pair-1.onrender.com",
+export const SESSION_SERVER_URL = "https://lilgabriel-session.onrender.com/";
+const SESSION_SERVER_URLS = [
+    SESSION_SERVER_URL.trim().replace(/\/+$/, "").replace(/\/session$/i, ""),
 ];
 const SESSION_PREFIX_RE = /^(?:LIL|PANTHER|SPIDER)~(?:\s*gzip\/base64)?\s*/i;
 const SESSION_ENV_VARS = ["SESSION", "SESSION_ID"];
@@ -158,19 +158,8 @@ function extractSessionFromResponse(rawText) {
     return normalized;
 }
 
-function getConfiguredServerUrls() {
-    const configured = stripWrappingQuotes(process.env.SESSION_SERVER_URL);
-    if (configured) {
-        return configured
-            .split(",")
-            .map((url) => url.trim().replace(/\/+$/, "").replace(/\/session$/i, ""))
-            .filter(Boolean);
-    }
-    return DEFAULT_SESSION_SERVER_URLS;
-}
-
 async function fetchShortSessionFromServers(cleanedInput, payload, fetchImpl) {
-    const baseUrls = getConfiguredServerUrls();
+    const baseUrls = SESSION_SERVER_URLS;
     const lookupIds = cleanedInput !== payload ? [payload, cleanedInput] : [payload];
     let lastError = null;
 
