@@ -937,9 +937,13 @@ export async function deleteMessageSafely({
     let winningAcked = false;
     let retriedWithoutCache = false;
 
-    if (firstTry.ok && !firstTry.timedOut) {
+    if (firstTry.ok && !firstTry.timedOut && !firstTry.acked) {
+      return { ok: false, key, attempts, error: 'delete-unconfirmed', result: firstTry.result };
+    }
+
+    if (firstTry.ok && !firstTry.timedOut && firstTry.acked) {
       winningResult = firstTry.result;
-      winningAcked = Boolean(firstTry.acked);
+      winningAcked = true;
     } else {
       lastError = firstTry.error || (firstTry.timedOut ? 'delete-ack-timeout' : 'delete-failed');
       if (firstTry.blocked) {
@@ -961,12 +965,18 @@ export async function deleteMessageSafely({
             sendOptions: { useCachedGroupMetadata: false, useUserDevicesCache: false },
             ackTimeoutMs,
           });
-          if (freshTry.ok && !freshTry.timedOut) {
+          if (freshTry.ok && !freshTry.timedOut && freshTry.acked) {
             winningResult = freshTry.result;
-            winningAcked = Boolean(freshTry.acked);
+            winningAcked = true;
             retriedWithoutCache = true;
           } else {
-            lastError = freshTry.error || (freshTry.timedOut ? 'delete-ack-timeout' : lastError);
+            lastError =
+              freshTry.error ||
+              (freshTry.timedOut
+                ? 'delete-ack-timeout'
+                : freshTry.ok
+                  ? 'delete-unconfirmed'
+                  : lastError);
             if (freshTry.blocked) {
               return { ok: false, blocked: true, key, attempts, error: lastError };
             }
@@ -975,7 +985,7 @@ export async function deleteMessageSafely({
       }
     }
 
-    if (winningResult !== null || (firstTry.ok && !firstTry.timedOut)) {
+    if (winningResult !== null || (firstTry.ok && !firstTry.timedOut && firstTry.acked)) {
       let alternateKeysSent = 0;
       if (isGroup && broadcastAlternates && rawParticipantCandidates.length > 1) {
         const distinctAlternates = selectDistinctFormatAlternates(key, rawParticipantCandidates);
@@ -995,7 +1005,7 @@ export async function deleteMessageSafely({
               sendOptions: { useCachedGroupMetadata: false, useUserDevicesCache: false },
               ackTimeoutMs,
             });
-            if (altTry.ok && !altTry.timedOut) alternateKeysSent += 1;
+            if (altTry.ok && !altTry.timedOut && altTry.acked) alternateKeysSent += 1;
           } catch {}
         }
       }

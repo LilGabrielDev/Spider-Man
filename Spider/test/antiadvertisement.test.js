@@ -1,5 +1,6 @@
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -56,6 +57,7 @@ after(() => {
 
 function createGroupMockSock({ botId = '254700000099@s.whatsapp.net', botIsAdmin = true } = {}) {
   const sent = [];
+  const ws = new EventEmitter();
   const kicked = [];
   const settingsUpdates = [];
   const metadata = {
@@ -78,9 +80,11 @@ function createGroupMockSock({ botId = '254700000099@s.whatsapp.net', botIsAdmin
     metadata,
     sock: {
       user: { id: `${botId.split('@')[0]}:1@s.whatsapp.net` },
+      ws,
       sendMessage: async (jid, payload, options = {}) => {
         const record = { id: `msg-${sent.length + 1}`, jid, payload, options };
         sent.push(record);
+        queueMicrotask(() => ws.emit('CB:ack,class:message', { attrs: { id: record.id } }));
         return { key: { id: record.id, remoteJid: jid, fromMe: true } };
       },
       groupParticipantsUpdate: async (jid, participants, action) => {
