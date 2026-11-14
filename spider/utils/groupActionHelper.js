@@ -810,10 +810,11 @@ export async function deleteMessageSafely({
   broadcastAlternates = false,
   ackTimeoutMs = null,
 } = {}) {
-  if (!sock || typeof sock.sendMessage !== 'function' || !from || !msg?.key?.id) {
+  if (!sock || typeof sock.sendMessage !== 'function' || (!from && !msg?.key?.remoteJid) || !msg?.key?.id) {
     return { ok: false, key: null, attempts: 0, error: 'missing-delete-key' };
   }
 
+  from = String(msg.key.remoteJid || from);
   const isGroup = String(from).endsWith('@g.us');
   const fromMe = Boolean(msg.key.fromMe);
   const seedCandidates = dedupeUserJids([
@@ -835,10 +836,19 @@ export async function deleteMessageSafely({
       ? collectParticipantAlternates(metadata, [...seedCandidates, ...metaAlternates, ...signalAlternates])
       : [];
 
-  const rawParticipantCandidates = orderParticipantsByAddressingMode(
+  const orderedParticipantCandidates = orderParticipantsByAddressingMode(
     [...seedCandidates, ...metaAlternates, ...signalAlternates, ...postMetaAlternates],
     { metadata, msg },
   );
+  const originalParticipant = cleanJid(msg.key.participant || '');
+  const rawParticipantCandidates = originalParticipant
+    ? [
+        originalParticipant,
+        ...orderedParticipantCandidates.filter(
+          (candidate) => candidate.toLowerCase() !== originalParticipant.toLowerCase(),
+        ),
+      ]
+    : orderedParticipantCandidates;
 
   if (isGroup && !fromMe && rawParticipantCandidates.length === 0 && !allowFromMeFallback) {
     return { ok: false, key: null, attempts: 0, error: 'missing-group-participant' };
@@ -927,11 +937,11 @@ export async function deleteMessageSafely({
     let winningAcked = false;
     let retriedWithoutCache = false;
 
-    if (firstTry.ok) {
+    if (firstTry.ok && !firstTry.timedOut) {
       winningResult = firstTry.result;
       winningAcked = Boolean(firstTry.acked);
     } else {
-      lastError = firstTry.error || 'delete-failed';
+      lastError = firstTry.error || (firstTry.timedOut ? 'delete-ack-timeout' : 'delete-failed');
       if (firstTry.blocked) {
         return { ok: false, blocked: true, key, attempts, error: lastError };
       }
@@ -951,12 +961,12 @@ export async function deleteMessageSafely({
             sendOptions: { useCachedGroupMetadata: false, useUserDevicesCache: false },
             ackTimeoutMs,
           });
-          if (freshTry.ok) {
+          if (freshTry.ok && !freshTry.timedOut) {
             winningResult = freshTry.result;
             winningAcked = Boolean(freshTry.acked);
             retriedWithoutCache = true;
           } else {
-            lastError = freshTry.error || lastError;
+            lastError = freshTry.error || (freshTry.timedOut ? 'delete-ack-timeout' : lastError);
             if (freshTry.blocked) {
               return { ok: false, blocked: true, key, attempts, error: lastError };
             }
@@ -965,7 +975,7 @@ export async function deleteMessageSafely({
       }
     }
 
-    if (winningResult !== null || firstTry.ok) {
+    if (winningResult !== null || (firstTry.ok && !firstTry.timedOut)) {
       let alternateKeysSent = 0;
       if (isGroup && broadcastAlternates && rawParticipantCandidates.length > 1) {
         const distinctAlternates = selectDistinctFormatAlternates(key, rawParticipantCandidates);
@@ -985,7 +995,7 @@ export async function deleteMessageSafely({
               sendOptions: { useCachedGroupMetadata: false, useUserDevicesCache: false },
               ackTimeoutMs,
             });
-            if (altTry.ok) alternateKeysSent += 1;
+            if (altTry.ok && !altTry.timedOut) alternateKeysSent += 1;
           } catch {}
         }
       }
