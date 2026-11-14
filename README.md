@@ -53,6 +53,7 @@ Copy `.env-sample` to `.env` and set your variables:
 | Variable | Description | Default |
 | --- | --- | --- |
 | `SESSION_ID` / `SESSION` | WhatsApp multi-device session string | — |
+| `SESSION_SERVER_URL` | Base URL used to resolve compact `LIL~` session IDs | `https://session.Lilgabriel.co.ke` |
 | `MODE` | Bot mode (`private` or `public`) | `private` |
 | `PREFIXES` | Comma-separated command prefixes | `.` |
 | `PORT` | HTTP server port | `3000` |
