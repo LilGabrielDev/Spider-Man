@@ -246,6 +246,63 @@ test('deleteMessageSafely detects messages.update status 0 NACK and succeeds on 
   assert.ok(sent.some((s) => s.payload.delete?.participant === '254700000003@s.whatsapp.net'));
 });
 
+test('participant update parsing rejects unknown or incomplete responses', () => {
+  const first = '254700000001@s.whatsapp.net';
+  const second = '254700000002@s.whatsapp.net';
+  const malformed = groupActionHelper.parseParticipantsUpdateResult(
+    [{ status: 'error', jid: first }, { status: '200', jid: second }],
+    [first, second],
+  );
+  assert.equal(malformed.ok, false);
+  assert.equal(malformed.failed[0].status, 'error');
+
+  const omitted = groupActionHelper.parseParticipantsUpdateResult(
+    [{ status: '200', jid: first }],
+    [first, second],
+  );
+  assert.equal(omitted.ok, false);
+  assert.ok(omitted.failed.some((failure) => failure.jid === second && failure.status === 'missing-result'));
+});
+
+test('participant update retry preserves earlier successes when the LID/PN retry fails', async () => {
+  const groupJid = '120363000000009001@g.us';
+  const firstTarget = '254700000004@s.whatsapp.net';
+  const targetLid = '3330003@lid';
+  const targetPn = '254700000003@s.whatsapp.net';
+  let calls = 0;
+  const sock = {
+    groupParticipantsUpdate: async (_jid, _participants, _action) => {
+      calls += 1;
+      if (calls === 1) {
+        return [
+          { status: '200', jid: firstTarget },
+          { status: '404', jid: targetLid },
+        ];
+      }
+      return [{ status: '403', jid: targetPn }];
+    },
+  };
+  const metadata = {
+    participants: [
+      { id: targetLid, phoneNumber: targetPn, admin: null },
+      { id: firstTarget, admin: null },
+    ],
+  };
+
+  const result = await groupActionHelper.executeParticipantsAction({
+    sock,
+    from: groupJid,
+    participants: [firstTarget, targetLid],
+    action: 'remove',
+    metadata,
+  });
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.succeeded, [firstTarget]);
+  assert.deepEqual(result.failed, [{ jid: targetPn, status: '403' }]);
+  assert.equal(result.retried, true);
+});
+
 test('antiadvertisement reports DELETE FAILED when WA rejects delete with 403 and accurately reports MESSAGE DELETED when acked', async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'spider-antiad-fix-'));
   const storePath = path.join(tmpDir, 'antiad.json');
@@ -490,7 +547,14 @@ test('Group .kick, .kickall, .approve, and .lock check WA responses, retry 404 L
   assert.match(failEnv.sent.at(-1).payload.text, /failed/i);
 
   // 3. kickall skips admins and bot
-  const kickAllEnv = createAckAwareSock();
+  const kickAllEnv = createAckAwareSock({
+    onParticipantsUpdate: async ({ participants }) =>
+      participants.map((p) => ({
+        status: p === '254700000004@s.whatsapp.net' ? '403' : '200',
+        jid: p,
+      })),
+  });
+  assert.equal(commandsMap.get('kickall').botAdminOnly, true);
   await commandsMap.get('kickall').execute({
     sock: kickAllEnv.sock,
     from: kickAllEnv.groupMeta.id,
@@ -505,6 +569,19 @@ test('Group .kick, .kickall, .approve, and .lock check WA responses, retry 404 L
     kickAllEnv.participantCalls.flatMap((c) => c.participants),
     ['3330003@lid', '254700000004@s.whatsapp.net'],
   );
+  assert.match(kickAllEnv.sent.at(-1).payload.text, /Removed: 1\/2[\s\S]*Failed: 1/);
+
+  const noMetadataEnv = createAckAwareSock();
+  noMetadataEnv.sock.groupMetadata = async () => {
+    throw new Error('metadata unavailable');
+  };
+  await commandsMap.get('kickall').execute({
+    sock: noMetadataEnv.sock,
+    from: noMetadataEnv.groupMeta.id,
+    msg: { key: { remoteJid: noMetadataEnv.groupMeta.id, id: 'cmd-kickall-no-metadata' } },
+  });
+  assert.equal(noMetadataEnv.participantCalls.length, 0);
+  assert.match(noMetadataEnv.sent.at(-1).payload.text, /No one was removed/i);
 
   // 4. approve checks request status 403
   const reqFailEnv = createAckAwareSock({

@@ -1084,25 +1084,41 @@ export function parseParticipantsUpdateResult(result, targets = []) {
     const succeeded = [];
     const failed = [];
     const statusCodes = [];
-    for (const item of result) {
+    const reported = new Set();
+    for (const [index, item] of result.entries()) {
       const statusRaw = item?.status;
       const statusStr = statusRaw != null ? String(statusRaw) : '';
       if (statusStr) statusCodes.push(statusStr);
       const hasAttrError = Boolean(item?.content?.attrs?.error);
-      const isFailure =
-        hasAttrError ||
-        (statusStr !== '' && !Number.isNaN(Number(statusStr)) && Number(statusStr) >= 400);
-      if (isFailure) {
-        failed.push({
-          jid: cleanJid(item?.jid || ''),
-          status: statusStr || 'error',
-        });
+      const responseJid = cleanJid(item?.jid || '');
+      const fallbackJid = cleanJid(targetList[index] || '');
+      const statusNumber = Number(statusStr);
+      const isSuccess =
+        !hasAttrError &&
+        Boolean(responseJid) &&
+        statusStr !== '' &&
+        Number.isInteger(statusNumber) &&
+        statusNumber >= 200 &&
+        statusNumber < 300;
+      const resultJid = responseJid || fallbackJid;
+      if (resultJid) reported.add(resultJid.toLowerCase());
+      if (isSuccess) {
+        succeeded.push(responseJid);
       } else {
-        succeeded.push(cleanJid(item?.jid || '') || targetList[0] || '');
+        failed.push({
+          jid: resultJid,
+          status: statusStr || (responseJid ? 'missing-status' : 'missing-jid'),
+        });
+      }
+    }
+    for (const target of targetList) {
+      const jid = cleanJid(target || '');
+      if (jid && !reported.has(jid.toLowerCase())) {
+        failed.push({ jid, status: 'missing-result' });
       }
     }
     return {
-      ok: succeeded.length > 0 && failed.length === 0,
+      ok: targetList.length > 0 && succeeded.length === targetList.length && failed.length === 0,
       succeeded: succeeded.filter(Boolean),
       failed,
       statusCodes,
@@ -1121,11 +1137,11 @@ export function parseParticipantsUpdateResult(result, targets = []) {
   }
 
   return {
-    ok: true,
-    succeeded: targetList.filter(Boolean),
-    failed: [],
+    ok: false,
+    succeeded: [],
+    failed: targetList.map((jid) => ({ jid: cleanJid(jid || ''), status: 'unexpected-result' })),
     statusCodes: [],
-    error: null,
+    error: 'unexpected-result',
   };
 }
 
@@ -1192,7 +1208,18 @@ export async function executeParticipantsAction({
             error: stillFailed[0]?.status || null,
           };
         }
-        return retryParsed;
+        const combinedFailed = [
+          ...parsed.failed.filter((f) => String(f.status) !== '404'),
+          ...retryParsed.failed,
+        ];
+        return {
+          ok: false,
+          succeeded: combinedSucceeded,
+          failed: combinedFailed,
+          statusCodes: [...parsed.statusCodes, ...retryParsed.statusCodes],
+          retried: true,
+          error: combinedFailed[0]?.status || retryParsed.error || 'participant-update-failed',
+        };
       } catch (retryErr) {
         return {
           ok: false,
