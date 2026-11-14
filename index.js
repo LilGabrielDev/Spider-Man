@@ -3,9 +3,12 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { resolveShortSession } from "./spider/session-resolver.js";
 import { RESTART_EXIT_CODE } from "./spider/utils/runtimeControl.js";
+import { cleanupDiskArtifacts, getWorkerMemoryExecArgv } from "./spider/utils/resourceGuard.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKER_SCRIPT = path.join(__dirname, "spider", "index.js");
+
+cleanupDiskArtifacts({ cwd: __dirname, maxAgeMs: 60 * 1000 });
 
 try {
     await resolveShortSession();
@@ -16,11 +19,17 @@ try {
 }
 
 let activeChild = null;
+let restartTimer = null;
 let shuttingDown = false;
 
 function forwardSignal(signal) {
     if (shuttingDown) return;
     shuttingDown = true;
+
+    if (restartTimer) {
+        clearTimeout(restartTimer);
+        restartTimer = null;
+    }
 
     if (activeChild && !activeChild.killed) {
         try {
@@ -46,6 +55,7 @@ function startWorker() {
 
     const child = spawn(process.execPath, [WORKER_SCRIPT], {
         cwd: __dirname,
+        execArgv: getWorkerMemoryExecArgv(),
         stdio: ["inherit", "inherit", "inherit", "ipc"],
         env: {
             ...process.env,
@@ -65,6 +75,7 @@ function startWorker() {
         if (activeChild === child) {
             activeChild = null;
         }
+        child.removeAllListeners();
 
         if (shuttingDown) {
             process.exit(typeof code === "number" ? code : 0);
@@ -73,12 +84,14 @@ function startWorker() {
 
         if (restartRequested || code === RESTART_EXIT_CODE) {
             console.log("🔄 [SUPERVISOR] Reloading Spider Man bot worker without stopping panel process...");
+            cleanupDiskArtifacts({ cwd: __dirname });
             try {
                 await resolveShortSession();
             } catch (error) {
                 console.warn(`⚠️ Short session refresh warning during reload: ${error.message}`);
             }
-            setTimeout(() => {
+            restartTimer = setTimeout(() => {
+                restartTimer = null;
                 if (!shuttingDown) startWorker();
             }, 500);
             return;
