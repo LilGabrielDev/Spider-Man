@@ -10,7 +10,7 @@ export const SESSION_SERVER_URL = "https://lilgabriel-session.onrender.com/";
 const SESSION_SERVER_URLS = [
     SESSION_SERVER_URL.trim().replace(/\/+$/, "").replace(/\/session$/i, ""),
 ];
-const SESSION_PREFIX_RE = /^(?:LIL|PANTHER|SPIDER)~(?:\s*gzip\/base64)?\s*/i;
+const SESSION_PREFIX_RE = /^(?:LIL|SPIDER)~(?:\s*gzip\/base64)?\s*/i;
 const SESSION_ENV_VARS = ["SESSION", "SESSION_ID"];
 
 export function stripWrappingQuotes(value) {

@@ -67,11 +67,10 @@ test("SESSION_SERVER_URL constant is fixed to https://lilgabriel-session.onrende
     assert.equal(SESSION_SERVER_URL, "https://lilgabriel-session.onrender.com/");
 });
 
-test("isShortLilSession detects compact LIL~, PANTHER~, and SPIDER~ short IDs and ignores full sessions", () => {
+test("isShortLilSession detects compact LIL~ and SPIDER~ short IDs and ignores full sessions", () => {
     assert.equal(isShortLilSession("LIL~abc123"), true);
     assert.equal(isShortLilSession('"LIL~abc123_XYZ"'), true);
     assert.equal(isShortLilSession("LIL~gzip/base64 short_id-1"), true);
-    assert.equal(isShortLilSession("PANTHER~short99"), true);
     assert.equal(isShortLilSession("SPIDER~short99"), true);
 
     assert.equal(isShortLilSession(makeFullLilSession()), false);
@@ -80,11 +79,10 @@ test("isShortLilSession detects compact LIL~, PANTHER~, and SPIDER~ short IDs an
     assert.equal(isShortLilSession("not-a-prefixed-session"), false);
 });
 
-test("normalizeSession accepts LIL~, PANTHER~, SPIDER~, plain base64, URL-safe base64, quoted strings, and raw JSON", () => {
+test("normalizeSession accepts LIL~, SPIDER~, plain base64, URL-safe base64, quoted strings, and raw JSON", () => {
     const creds = { registrationId: 99, me: { id: "254700000000@s.whatsapp.net" } };
     const expectedB64 = Buffer.from(JSON.stringify(creds), "utf8").toString("base64");
     const lil = makeFullLilSession(creds);
-    const panther = lil.replace(/^LIL~/, "PANTHER~");
     const spider = lil.replace(/^LIL~/, "SPIDER~");
     const urlSafe = Buffer.from(gzipSync(Buffer.from(JSON.stringify(creds), "utf8")))
         .toString("base64")
@@ -94,7 +92,6 @@ test("normalizeSession accepts LIL~, PANTHER~, SPIDER~, plain base64, URL-safe b
 
     assert.equal(normalizeSession(lil), expectedB64);
     assert.equal(normalizeSession(`"${lil}"`), expectedB64);
-    assert.equal(normalizeSession(panther), expectedB64);
     assert.equal(normalizeSession(spider), expectedB64);
     assert.equal(normalizeSession(`LIL~${urlSafe}`), expectedB64);
     assert.equal(normalizeSession(expectedB64), expectedB64);
@@ -150,7 +147,7 @@ test("resolveShortSession resolves short SESSION when SESSION_ID is also present
             res.end("Not found");
         }, async (_baseUrl, fetchImpl) => {
             process.env.SESSION = '"LIL~first99"';
-            process.env.SESSION_ID = "PANTHER~second88";
+            process.env.SESSION_ID = "SPIDER~second88";
 
             await resolveShortSession({
                 loadEnv: false,
