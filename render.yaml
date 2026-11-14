@@ -25,3 +25,5 @@ services:
         value: Spider Man
       - key: ADMIN_PROTECTION
         value: "on"
+      - key: AUTO_READ
+        value: "off"
