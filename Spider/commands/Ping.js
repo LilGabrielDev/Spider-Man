@@ -1,3 +1,4 @@
+import performanceNow from 'performance-now';
 import config from '../../spider/config.js';
 
 if (!globalThis.botStartTime) {
@@ -11,10 +12,13 @@ export const commands = [
     description: "Checks the bot's response time",
     category: 'General',
     execute: async ({ sock, from, msg }) => {
+      const startedAt = performanceNow();
       const botName = config.BOT_NAME || 'Spider Man';
+      await sock.sendMessage(from, { text: 'Pinging...' }, { quoted: msg });
+      const latencyMs = Math.round(performanceNow() - startedAt);
       return sock.sendMessage(
         from,
-        { text: `🏓 Pong!\n⚡ *${botName} is online*` },
+        { text: `🏓 Pong!\n⏱️ *_${botName} Speed: ${latencyMs} ms_*` },
         { quoted: msg },
       );
     },
