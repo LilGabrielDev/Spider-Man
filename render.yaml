@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: spider-man-md
+    runtime: node
+    plan: free
+    buildCommand: npm ci --legacy-peer-deps --no-audit --no-fund
+    startCommand: npm start
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: MODE
+        value: private
+      - key: TZ
+        value: Africa/Nairobi
+      - key: SESSION_ID
+        sync: false
+      - key: SESSION
+        sync: false
+      - key: OWNER_NUMBER
+        sync: false
+      - key: OWNER_NAME
+        value: Spider Man
+      - key: BOT_NAME
+        value: Spider Man
+      - key: ADMIN_PROTECTION
+        value: "on"
