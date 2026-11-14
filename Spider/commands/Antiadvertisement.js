@@ -52,6 +52,7 @@ function formatStatusCard(botName, prefix, groupConfig) {
   return [
     spiderHeader(botName, 'ANTI-ADVERTISEMENT SHIELD'),
     spiderRow('STATUS', groupConfig.enabled ? 'ON ✅' : 'OFF ❌', '⛨'),
+    spiderRow('STRICT MODE', groupConfig.strict !== false ? 'VERY STRICT 🔥' : 'STANDARD', '☢'),
     spiderRow('ACTION', actionLabel(groupConfig.action), '⚡'),
     spiderRow('WARN LIMIT', `${groupConfig.maxWarns} warn(s)`, '▣'),
     spiderRow('ALERTS', groupConfig.notify ? 'ON' : 'OFF', '◈'),
@@ -59,12 +60,13 @@ function formatStatusCard(botName, prefix, groupConfig) {
     spiderRow('WHITELIST', String(groupConfig.whitelist.length), '✦'),
     spiderRow(
       'BLOCKED STATS',
-      `${groupConfig.stats.detected} caught · ${groupConfig.stats.deleted} del · ${groupConfig.stats.kicked} kicked`,
+      `${groupConfig.stats.detected} caught · ${groupConfig.stats.deleted} del · ${groupConfig.stats.kicked} kicked · ${groupConfig.stats.muted || 0} muted`,
       '▤',
     ),
     spiderDivider('CONTROLS'),
     `> ┃ ▸ *${p}antiadvertisement on [delete|kick|warn|warnkick|mute]*`,
     `> ┃ ▸ *${p}antiadvertisement off* — Disable protection`,
+    `> ┃ ▸ *${p}antiadvertisement strict on|off* — Toggle very strict detection`,
     `> ┃ ▸ *${p}antiadvertisement delete* — Delete ad messages`,
     `> ┃ ▸ *${p}antiadvertisement kick* — Delete & kick advertisers`,
     `> ┃ ▸ *${p}antiadvertisement warn* — Delete & warn advertisers`,
@@ -168,6 +170,7 @@ export const commands = [
         const textOut = [
           spiderHeader(botName, 'ANTI-AD ENABLED'),
           spiderRow('STATUS', 'ON ✅', '⛨'),
+          spiderRow('STRICT MODE', updated.strict !== false ? 'VERY STRICT 🔥' : 'STANDARD', '☢'),
           spiderRow('ACTION', actionLabel(updated.action), '⚡'),
           spiderRow('WARN LIMIT', `${updated.maxWarns} warn(s)`, '▣'),
           spiderFooter('ADVERTISEMENTS WILL BE BLOCKED'),
@@ -186,6 +189,28 @@ export const commands = [
           spiderFooter(`USE ${prefix}antiadvertisement on TO RE-ENABLE`),
         ].join('\n');
         return sock.sendMessage(from, { text: textOut }, { quoted: msg });
+      }
+
+      if (sub === 'strict' || sub === 'strictmode') {
+        const toggle = String(tokens[1] || '').toLowerCase();
+        if (toggle !== 'on' && toggle !== 'off') {
+          return sock.sendMessage(
+            from,
+            { text: `❌ Usage: *${prefix}antiadvertisement strict on* or *${prefix}antiadvertisement strict off*` },
+            { quoted: msg },
+          );
+        }
+        const updated = defaultAntiadvertisementStore.setGroupConfig(from, {
+          ...current,
+          strict: toggle === 'on',
+        });
+        return sock.sendMessage(
+          from,
+          {
+            text: `✅ Anti-Advertisement strict mode turned *${updated.strict ? 'ON (VERY STRICT)' : 'OFF (STANDARD)'}*.`,
+          },
+          { quoted: msg },
+        );
       }
 
       const directAction = normalizeAction(sub);
@@ -208,6 +233,7 @@ export const commands = [
         const textOut = [
           spiderHeader(botName, 'ANTI-AD MODE UPDATED'),
           spiderRow('STATUS', updated.enabled ? 'ON ✅' : 'OFF ❌', '⛨'),
+          spiderRow('STRICT MODE', updated.strict !== false ? 'VERY STRICT 🔥' : 'STANDARD', '☢'),
           spiderRow('ACTION', actionLabel(updated.action), '⚡'),
           spiderRow('WARN LIMIT', `${updated.maxWarns} warn(s)`, '▣'),
           spiderFooter('PROTECTION POLICY SAVED'),
@@ -427,7 +453,7 @@ export const commands = [
         const scanOut = [
           spiderHeader(botName, 'ANTI-AD SCAN TEST'),
           spiderRow('VERDICT', detection.isAd ? '🚨 AD DETECTED' : '✅ CLEAN', '⛨'),
-          spiderRow('RISK SCORE', `${detection.score} / 4+ threshold`, '▣'),
+          spiderRow('RISK SCORE', `${detection.score} / ${detection.threshold}+ threshold`, '▣'),
           ...(detection.categories.length
             ? [spiderRow('FLAGS', detection.categories.join(', '), '⚠')]
             : []),

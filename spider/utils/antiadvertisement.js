@@ -3,6 +3,7 @@ import path from 'node:path';
 import { spiderHeader, spiderRow, spiderFooter } from '../../Spider/utils/tableStyle.js';
 import {
   cleanJid,
+  deobfuscateTextForScan,
   extractMessageText,
   extractPhone,
   extractUrls,
@@ -19,7 +20,8 @@ export const ANTIAD_ACTIONS = Object.freeze(['delete', 'warn', 'kick', 'warnkick
 const DEFAULT_MAX_WARNS = 3;
 const MAX_CUSTOM_PATTERNS = 50;
 const MAX_WHITELIST_ENTRIES = 100;
-const SCORE_THRESHOLD = 4;
+const STRICT_THRESHOLD = 3;
+const STANDARD_THRESHOLD = 4;
 
 function normalizeDigits(value) {
   return String(value || '').replace(/\D/g, '');
@@ -39,6 +41,7 @@ function normalizeWhitelistEntry(raw) {
 function defaultGroupConfig() {
   return {
     enabled: false,
+    strict: true,
     action: 'delete',
     maxWarns: DEFAULT_MAX_WARNS,
     notify: true,
@@ -96,6 +99,7 @@ function sanitizeGroupConfig(raw) {
 
   return {
     enabled: Boolean(raw.enabled),
+    strict: raw.strict !== undefined ? Boolean(raw.strict) : true,
     action,
     maxWarns,
     notify: raw.notify !== undefined ? Boolean(raw.notify) : true,
@@ -363,10 +367,11 @@ const AD_CATEGORIES = [
   {
     id: 'bundle-promo',
     category: 'Data / Airtime / Minutes / SMS Bundle Promo',
-    score: 3,
+    score: 4,
     patterns: [
-      /\b(?:data\s*deals?|sms\s*deals?|minutes?\s*deals?|airtime\s*deals?|data\s*bundles?|pata\s+minutes)\b/i,
-      /\b(?:valid\s+till\s+midnight|okoa\s+jahazi|buy\s+(?:once|many\s+times)|no\s+expiry|unlimited\s+data)\b/i,
+      /\b(?:data\s*deals?|sms\s*deals?|minutes?\s*deals?|airtime\s*deals?|data\s*bundles?|pata\s+minutes|bingwa\s+sokoni|tunukiwa)\b/i,
+      /\b(?:valid\s+till\s+midnight|okoa\s+jahazi|buy\s+(?:once|many\s+times)|no\s+expiry|unlimited\s+data|cheap(?:est)?\s+(?:data|bundles?|airtime))\b/i,
+      /\b(?:safaricom|airtel|telkom|mtn|glo|vodacom)\s+(?:data\s+)?(?:deals?|bundles?\s+(?:available|promo)|offers?)\b/i,
       /\b\d+(?:[.,]\d+)?\s*(?:gb|mbs?)\s*\+\s*\d+\s*(?:mins?|minutes?|sms)\b/i,
       /\bheist\s+heist\b/i,
     ],
@@ -374,7 +379,7 @@ const AD_CATEGORIES = [
   {
     id: 'till-paybill',
     category: 'Mobile Money Till / Paybill Promotion',
-    score: 3,
+    score: 4,
     patterns: [
       /\btill\s*(?:number|no\.?|=|:)?\s*\*?\s*\d{5,9}\b/i,
       /\b(?:paybill|buy\s*goods|lipa\s*na\s*mpesa)\b.{0,25}\b\d{5,9}\b/i,
@@ -383,22 +388,22 @@ const AD_CATEGORIES = [
   {
     id: 'fuliza-utility-promo',
     category: 'Fuliza / Loan / Utility Token Promo',
-    score: 3,
+    score: 4,
     patterns: [
       /\bfuliza\b.{0,30}\b\d+\s*k?\s*[@=]\s*\d+/i,
       /\b(?:increase|boost|unlock)\s+(?:your\s+)?fuliza\s+limit\b/i,
-      /\bkplc\s+tokens?\b/i,
+      /\b(?:cheap(?:est)?|discount(?:ed)?|sell(?:ing)?)\s+kplc\s+tokens?\b|\bbuy\s+kplc\s+tokens?\s+(?:from|via|here|now|cheap|at)\b|\bkplc\s+tokens?\s*(?:deals?|available|for\s+sale|promo|offers?|[@=])\b/i,
       /\b\d+\s*units?\s*[@=]\s*(?:ksh|kes)?\s*\d+\b/i,
     ],
   },
   {
     id: 'pharma-health-promo',
-    category: 'Unsolicited Medication / Health Product Ad',
-    score: 3,
+    category: 'Unsolicited Medication / Health / Adult Product Ad',
+    score: 4,
     patterns: [
       /\b(?:abortion\s+pills?|reproductive\s+health\s+medication|sti\s+and\s+std\s+treatment)\b/i,
-      /\b(?:titan\s*gel|butt\s*booster|hips?\s*(?:&|and)?\s*butt\s*booster|penis\s*enlargement|manhood\s+enlargement)\b/i,
-      /\b(?:herbal\s+clinic|spell\s*caster|love\s*spell|bring\s+back\s+lost\s+lover)\b/i,
+      /\b(?:titan\s*gel|butt\s*booster|hips?\s*(?:&|and)?\s*butt\s*booster|penis\s*enlargement|manhood\s+enlargement|enlargement\s+(?:cream|oil|pills?))\b/i,
+      /\b(?:herbal\s+clinic|spell\s*caster|love\s*spell|bring\s+back\s+lost\s+lover|escort\s+services?|hookup\s+available|call\s+girls?)\b/i,
     ],
   },
   {
@@ -406,19 +411,30 @@ const AD_CATEGORIES = [
     category: 'Commercial Health / Cosmetic Catalog',
     score: 2,
     patterns: [
-      /\b(?:weight\s+gain|weight\s+loss|flat\s+tummy|skin\s+whitening|acne\s+treatment|stretch\s+marks?\s+removal)\b/i,
+      /\b(?:weight\s+gain|weight\s+loss|flat\s+tummy|skin\s+whitening|acne\s+treatment|stretch\s+marks?\s+removal|bleaching\s+cream|slimming\s+(?:tea|pills)|detox\s+tea)\b/i,
     ],
     minMatchesForBoost: 2,
     boostScore: 2,
   },
   {
+    id: 'digital-services-promo',
+    category: 'Digital Services / Followers / Betting / Subscription Promo',
+    score: 4,
+    patterns: [
+      /\b(?:buy|boost|sell(?:ing)?)\s+(?:real\s+)?(?:ig|instagram|tiktok|youtube|twitter|x|facebook|tg|telegram|whatsapp)?\s*(?:followers|likes|views|subscribers|members|accounts?)\b/i,
+      /\b(?:fixed\s*match(?:es)?|sure\s+odds|correct\s+score\s+(?:fixed|vip)|aviator\s+predictor|vip\s+(?:betting|forex|crypto)\s+(?:signals?|tips?|group))\b/i,
+      /\b(?:assignments?\s+done|essay\s+writing\s+service|academic\s+writing\s+service|cheap\s+(?:netflix|spotify|canva|iptv)\s+(?:accounts?|subscriptions?))\b/i,
+      /\b(?:use\s+my\s+(?:referral|promo|invite)\s*(?:code|link)|register\s+(?:under|using|with)\s+my\s+link)\b/i,
+    ],
+  },
+  {
     id: 'commercial-cta',
     category: 'Commercial Sales / Delivery CTA',
-    score: 2,
+    score: 3,
     patterns: [
       /\b(?:payment\s+(?:can\s+be\s+done|is\s+done|on|upon)\s+after\s+delivery|pay\s+(?:on|after)\s+delivery|depending\s+on\s+(?:our\s+)?clients?\s+location)\b/i,
-      /\b(?:dm\s+or\s+call\s+for\s+inquiries|dm\s+for\s+(?:prices?|orders?|more\s+info)|inbox\s+(?:me\s+)?(?:for\s+)?(?:orders?|prices?)|call\s*(?:\/|or)\s*whatsapp)\b/i,
-      /\b(?:countrywide\s+delivery|delivery\s+countrywide|available\s+in\s+stock|place\s+your\s+order|order\s+now|buy\s+followers|fixed\s+matches|sure\s+odds|aviator\s+predictor|assignments?\s+done|vip\s+(?:forex|crypto|betting)\s+signals?)\b/i,
+      /\b(?:dm\s+or\s+call\s+for\s+inquiries|dm\s+(?:me\s+)?for\s+(?:prices?|orders?|more\s+info)|inbox\s+(?:me\s+)?(?:for\s+)?(?:orders?|prices?)|call\s*(?:\/|or)\s*whatsapp)\b/i,
+      /\b(?:countrywide\s+delivery|delivery\s+countrywide|nationwide\s+delivery|worldwide\s+shipping|available\s+in\s+stock|place\s+your\s+order|order\s+now|limited\s+stock|grab\s+yours|shop\s+with\s+us|visit\s+our\s+shop|wholesale\s+and\s+retail|price\s+list|flash\s+sale|mega\s+sale|selling\s+cheap)\b/i,
     ],
   },
 ];
@@ -445,15 +461,18 @@ function countPriceExpressions(text) {
 export function detectAdvertisementMessage(text, groupConfig = {}, senderOrCandidates = '') {
   const normalized = normalizeTextForScan(text);
   const whitelist = Array.isArray(groupConfig?.whitelist) ? groupConfig.whitelist : [];
+  const strict = groupConfig?.strict !== undefined ? Boolean(groupConfig.strict) : true;
+  const threshold = strict ? STRICT_THRESHOLD : STANDARD_THRESHOLD;
 
   if (!normalized) {
-    return { isAd: false, score: 0, reason: '', categories: [], matches: [], urls: [] };
+    return { isAd: false, score: 0, threshold, reason: '', categories: [], matches: [], urls: [] };
   }
 
   if (isSenderOrCandidateWhitelisted(senderOrCandidates, whitelist)) {
     return {
       isAd: false,
       score: 0,
+      threshold,
       reason: 'Sender is whitelisted',
       categories: [],
       matches: [],
@@ -472,6 +491,9 @@ export function detectAdvertisementMessage(text, groupConfig = {}, senderOrCandi
     }
   }
   const cleanText = stripMarkdownWrappers(textForRuleScan);
+  const deobfuscatedText = deobfuscateTextForScan(cleanText);
+  const scanVariants =
+    deobfuscatedText && deobfuscatedText !== cleanText ? [cleanText, deobfuscatedText] : [cleanText];
 
   let score = 0;
   const categories = new Set();
@@ -480,7 +502,11 @@ export function detectAdvertisementMessage(text, groupConfig = {}, senderOrCandi
   for (const custom of groupConfig?.customPatterns || []) {
     const rule = String(custom || '').trim().toLowerCase();
     if (!rule) continue;
-    if (normalized.toLowerCase().includes(rule) || cleanText.toLowerCase().includes(rule)) {
+    if (
+      normalized.toLowerCase().includes(rule) ||
+      cleanText.toLowerCase().includes(rule) ||
+      deobfuscatedText.toLowerCase().includes(rule)
+    ) {
       score += 6;
       categories.add('Custom Ad Rule Match');
       matches.push(`rule:${rule}`);
@@ -492,18 +518,29 @@ export function detectAdvertisementMessage(text, groupConfig = {}, senderOrCandi
     for (const pattern of ruleGroup.patterns) {
       if (ruleGroup.minMatchesForBoost) {
         const globalPattern = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`);
-        const allMatches = cleanText.match(globalPattern) || [];
-        if (allMatches.length > 0) {
-          matchedInGroup += allMatches.length;
-          for (const item of allMatches.slice(0, 3)) {
+        let bestMatches = [];
+        for (const variant of scanVariants) {
+          const found = variant.match(globalPattern) || [];
+          if (found.length > bestMatches.length) bestMatches = found;
+        }
+        if (bestMatches.length > 0) {
+          matchedInGroup += bestMatches.length;
+          for (const item of bestMatches.slice(0, 3)) {
             matches.push(item.slice(0, 50));
           }
         }
       } else {
-        const m = cleanText.match(pattern);
-        if (m) {
+        let hit = null;
+        for (const variant of scanVariants) {
+          const m = variant.match(pattern);
+          if (m) {
+            hit = m;
+            break;
+          }
+        }
+        if (hit) {
           matchedInGroup += 1;
-          matches.push(m[0].slice(0, 60));
+          matches.push(hit[0].slice(0, 60));
           break;
         }
       }
@@ -523,13 +560,13 @@ export function detectAdvertisementMessage(text, groupConfig = {}, senderOrCandi
     }
   }
 
-  const priceCount = countPriceExpressions(cleanText);
+  const priceCount = Math.max(...scanVariants.map((variant) => countPriceExpressions(variant)));
   if (priceCount >= 3) {
     score += 4;
     categories.add('Commercial Price List / Deals Menu');
     matches.push(`${priceCount} price items`);
   } else if (priceCount >= 1) {
-    score += 2;
+    score += strict ? 3 : 2;
     categories.add('Promotional Pricing');
     matches.push(`${priceCount} price item(s)`);
   }
@@ -547,7 +584,16 @@ export function detectAdvertisementMessage(text, groupConfig = {}, senderOrCandi
         lowerUrl.includes('t.me/') ||
         lowerUrl.includes('telegram.me/') ||
         lowerUrl.includes('bit.ly/') ||
-        lowerUrl.includes('tinyurl.com/')
+        lowerUrl.includes('tinyurl.com/') ||
+        lowerUrl.includes('shorturl.at/') ||
+        lowerUrl.includes('cutt.ly/') ||
+        lowerUrl.includes('rb.gy/') ||
+        lowerUrl.includes('is.gd/') ||
+        lowerUrl.includes('instagram.com/') ||
+        lowerUrl.includes('tiktok.com/@') ||
+        lowerUrl.includes('youtube.com/@') ||
+        lowerUrl.includes('youtu.be/') ||
+        lowerUrl.includes('facebook.com/')
       ) {
         hasSocialPromoLink = true;
         matches.push(getHostname(url));
@@ -557,21 +603,22 @@ export function detectAdvertisementMessage(text, groupConfig = {}, senderOrCandi
     if (hasWaInviteOrChannel) {
       score += 4;
       categories.add('WhatsApp Group / Channel Invite Ad');
-    } else if (hasSocialPromoLink && score >= 2) {
-      score += 2;
-      categories.add('Promotional Contact Link');
-    } else if (score >= 2) {
-      score += 1;
+    } else if (hasSocialPromoLink && (strict || score >= 2)) {
+      score += strict ? 3 : 2;
+      categories.add('Promotional Contact / Social Link');
+    } else if (score >= (strict ? 1 : 2)) {
+      score += strict ? 2 : 1;
       categories.add('Promotional Link');
       matches.push(getHostname(nonWhitelistedUrls[0]));
     }
   }
 
-  const isAd = score >= SCORE_THRESHOLD;
+  const isAd = score >= threshold;
   const categoryList = [...categories];
   return {
     isAd,
     score,
+    threshold,
     reason: categoryList[0] || '',
     categories: categoryList,
     matches: [...new Set(matches)],

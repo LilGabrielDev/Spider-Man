@@ -214,13 +214,27 @@ Acne treatment
     'Join our promo group now: https://chat.whatsapp.com/If4pqGG08uwCybHQvIiYwY',
     'Abortion pills and Titan gel available, DM or call for inquiries, countrywide delivery',
     'VIP forex signals & sure odds fixed matches! DM to order, payment after delivery wa.me/254712345678',
+    'Buy real Instagram followers and cheap Netflix accounts today',
+    'Order now, countrywide delivery available in stock!',
+    '1GB @Ksh50',
+    'DM me on https://tiktok.com/@promo_vendor_ke',
+    'Cheap d4t4 d34ls with t.i.l.l n.u.m.b.e.r 4382247',
   ];
 
   for (const sample of adSamples) {
     const res = detectAdvertisementMessage(sample);
     assert.equal(res.isAd, true, `Expected ad detection for:\n${sample.slice(0, 120)}`);
-    assert.ok(res.score >= 4, `Expected score >= 4, got ${res.score}`);
+    assert.ok(res.score >= 3, `Expected score >= 3, got ${res.score}`);
   }
+
+  // Strict mode (default) blocks single promo CTA/price/social link immediately while standard mode uses 4+ threshold
+  const singlePromoCta = 'Order now! Countrywide delivery available';
+  const strictCta = detectAdvertisementMessage(singlePromoCta, { strict: true });
+  assert.equal(strictCta.isAd, true);
+  assert.equal(strictCta.threshold, 3);
+  const standardCta = detectAdvertisementMessage(singlePromoCta, { strict: false });
+  assert.equal(standardCta.isAd, false);
+  assert.equal(standardCta.threshold, 4);
 
   const benignSamples = [
     'Good morning team, let us meet at 3pm to review the codebase.',
@@ -284,11 +298,15 @@ test('antiadvertisement command manages on/off, actions, warnlimit, notify, cust
     assert.equal(antiAdUtils.defaultAntiadvertisementStore.getGroupConfig(groupJid).enabled, true);
     assert.equal(antiAdUtils.defaultAntiadvertisementStore.getGroupConfig(groupJid).action, 'kick');
 
-    // Warnkick + warnlimit
+    // Warnkick + warnlimit + strict toggle
     await cmd.execute(makeCmdCtx('warnkick'));
     assert.equal(antiAdUtils.defaultAntiadvertisementStore.getGroupConfig(groupJid).action, 'warnkick');
     await cmd.execute(makeCmdCtx('warnlimit 2'));
     assert.equal(antiAdUtils.defaultAntiadvertisementStore.getGroupConfig(groupJid).maxWarns, 2);
+    await cmd.execute(makeCmdCtx('strict off'));
+    assert.equal(antiAdUtils.defaultAntiadvertisementStore.getGroupConfig(groupJid).strict, false);
+    await cmd.execute(makeCmdCtx('strict on'));
+    assert.equal(antiAdUtils.defaultAntiadvertisementStore.getGroupConfig(groupJid).strict, true);
 
     // Custom rule + test scan + remove rule
     await cmd.execute(makeCmdCtx('addword jamlic'));
@@ -297,6 +315,7 @@ test('antiadvertisement command manages on/off, actions, warnlimit, notify, cust
     assert.match(sent.at(-1).payload.text, /jamlic/);
     await cmd.execute(makeCmdCtx('test Buy bundles via Jamlic now'));
     assert.match(sent.at(-1).payload.text, /AD DETECTED/);
+    assert.match(sent.at(-1).payload.text, /3\+ threshold/);
     await cmd.execute(makeCmdCtx('delword jamlic'));
     assert.match(sent.at(-1).payload.text, /Removed custom Anti-Advertisement rule/);
 

@@ -57,6 +57,7 @@ after(() => {
 function createGroupMockSock({ botId = '254700000099@s.whatsapp.net', botIsAdmin = true } = {}) {
   const sent = [];
   const kicked = [];
+  const settingsUpdates = [];
   const metadata = {
     id: '120363000000009999@g.us',
     subject: 'Security Test Group',
@@ -73,6 +74,7 @@ function createGroupMockSock({ botId = '254700000099@s.whatsapp.net', botIsAdmin
   return {
     sent,
     kicked,
+    settingsUpdates,
     metadata,
     sock: {
       user: { id: `${botId.split('@')[0]}:1@s.whatsapp.net` },
@@ -84,6 +86,10 @@ function createGroupMockSock({ botId = '254700000099@s.whatsapp.net', botIsAdmin
       groupParticipantsUpdate: async (jid, participants, action) => {
         kicked.push({ jid, participants, action });
         return participants.map((p) => ({ status: '200', jid: p }));
+      },
+      groupSettingUpdate: async (jid, setting) => {
+        settingsUpdates.push({ jid, setting });
+        return { status: '200' };
       },
       groupMetadata: async () => metadata,
     },
@@ -128,6 +134,17 @@ test('detectScamMessage catches real scam patterns and avoids false positives on
     'Earn $300 daily airdrop giveaway USDT! Limited time, click the link https://bit.ly/freeusdt',
     'Get bank logs and CVV dumps cheap right now',
     'S\u200be\u200bn\u200bd your 12-word recovery phrase to validate wallet',
+    'Sell spendable flash USDT TRC20 cheap rate',
+    'CashApp glitch method and PayPal logs available DM',
+    'Mpesa reversal and Fuliza bypass tool working 100%',
+    'Aviator predictor and fixed matches sure fixed odds today',
+    'Complete prepaid task to withdraw $500 daily income',
+    'Quick loan approval fee $20 no collateral instant loan',
+    'Join Illuminati brotherhood for magic wallet money ritual',
+    'Send money or I leak your nudes recorded your screen',
+    'Hire a hacker to hack any WhatsApp or unban banned account',
+    'Download keylogger apk and scampage phishing kit',
+    'Send your s.e.e.d p.h.r.a.s.e or try this b1tc01n fl1p',
   ];
 
   for (const sample of scamSamples) {
@@ -135,6 +152,15 @@ test('detectScamMessage catches real scam patterns and avoids false positives on
     assert.equal(res.isScam, true, `Expected scam detection for: ${sample}`);
     assert.ok(res.score >= 4, `Expected score >= 4 for: ${sample}`);
   }
+
+  // Strict mode (default) catches suspicious shortened/risky links immediately while standard mode allows single link
+  const shortLinkMsg = 'Check this out https://bit.ly/check-promo-2026';
+  const strictRes = detectScamMessage(shortLinkMsg, { strict: true });
+  assert.equal(strictRes.isScam, true);
+  assert.equal(strictRes.threshold, 3);
+  const standardRes = detectScamMessage(shortLinkMsg, { strict: false });
+  assert.equal(standardRes.isScam, false);
+  assert.equal(standardRes.threshold, 4);
 
   const benignSamples = [
     'Good morning everyone, how is the project going?',
@@ -197,11 +223,18 @@ test('antiscam command manages on/off, delete/kick/warn/warnkick modes, custom r
     assert.equal(antiscamUtils.defaultAntiscamStore.getGroupConfig(groupJid).enabled, true);
     assert.equal(antiscamUtils.defaultAntiscamStore.getGroupConfig(groupJid).action, 'kick');
 
-    // Switch action to warnkick and warnlimit 2
+    // Switch action to warnkick, warnlimit 2, strict toggle, and mute mode
     await cmd.execute(makeCmdCtx('warnkick'));
     assert.equal(antiscamUtils.defaultAntiscamStore.getGroupConfig(groupJid).action, 'warnkick');
     await cmd.execute(makeCmdCtx('warnlimit 2'));
     assert.equal(antiscamUtils.defaultAntiscamStore.getGroupConfig(groupJid).maxWarns, 2);
+    await cmd.execute(makeCmdCtx('strict off'));
+    assert.equal(antiscamUtils.defaultAntiscamStore.getGroupConfig(groupJid).strict, false);
+    await cmd.execute(makeCmdCtx('strict on'));
+    assert.equal(antiscamUtils.defaultAntiscamStore.getGroupConfig(groupJid).strict, true);
+    await cmd.execute(makeCmdCtx('mute'));
+    assert.equal(antiscamUtils.defaultAntiscamStore.getGroupConfig(groupJid).action, 'mute');
+    assert.match(sent.at(-1).payload.text, /DELETE & MUTE GROUP/);
 
     // Custom phrase rules
     await cmd.execute(makeCmdCtx('addword scamcoin-presale'));
@@ -210,6 +243,7 @@ test('antiscam command manages on/off, delete/kick/warn/warnkick modes, custom r
     assert.match(sent.at(-1).payload.text, /scamcoin-presale/);
     await cmd.execute(makeCmdCtx('test Join our scamcoin-presale right now'));
     assert.match(sent.at(-1).payload.text, /SCAM DETECTED/);
+    assert.match(sent.at(-1).payload.text, /3\+ threshold/);
     await cmd.execute(makeCmdCtx('delword scamcoin-presale'));
     assert.match(sent.at(-1).payload.text, /Removed custom Anti-Scam rule/);
 
@@ -351,6 +385,46 @@ test('handleAntiScamMessage enforces delete, kick, warn, warnkick, and respects 
     assert.equal(botRes.handled, false);
     assert.equal(botRes.reason, 'bot-not-admin');
     assert.equal(nonBotAdminEnv.sent.length, 0);
+
+    // 5. Mute mode: deletes scam message AND locks group immediately
+    store.setGroupConfig(groupJid, { enabled: true, action: 'mute', notify: true });
+    env = createGroupMockSock();
+    const muteRes = await antiscamUtils.handleAntiScamMessage({
+      sock: env.sock,
+      from: groupJid,
+      sender: scammer,
+      msg: buildMsg('scam-mute', scammer, 'Flash USDT TRC20 available DM me now'),
+      store,
+    });
+    assert.equal(muteRes.handled, true);
+    assert.equal(muteRes.deleted, true);
+    assert.equal(muteRes.muted, true);
+    assert.deepEqual(env.settingsUpdates, [{ jid: groupJid, setting: 'announcement' }]);
+    assert.match(env.sent[1].payload.text, /DELETED & GROUP MUTED/);
+
+    // 6. Whitelisted sender via @lid / participantAlt identity is exempted
+    store.addWhitelist(groupJid, '254700000004');
+    env = createGroupMockSock();
+    const lidMsg = {
+      key: {
+        id: 'scam-wl-lid',
+        remoteJid: groupJid,
+        fromMe: false,
+        participant: '1234567890123@lid',
+        participantAlt: '254700000004@s.whatsapp.net',
+      },
+      message: { conversation: 'Double your BTC today! Send 0.1 BTC' },
+    };
+    const wlRes = await antiscamUtils.handleAntiScamMessage({
+      sock: env.sock,
+      from: groupJid,
+      sender: '1234567890123@lid',
+      msg: lidMsg,
+      store,
+    });
+    assert.equal(wlRes.handled, false);
+    assert.equal(wlRes.reason, 'whitelisted');
+    assert.equal(env.sent.length, 0);
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

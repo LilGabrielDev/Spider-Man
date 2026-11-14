@@ -14,6 +14,7 @@ function normalizeAction(raw) {
   if (value === 'del') return 'delete';
   if (value === 'remove' || value === 'ban') return 'kick';
   if (value === 'warn-kick' || value === 'warn_kick' || value === 'limit') return 'warnkick';
+  if (value === 'lock' || value === 'close') return 'mute';
   return ANTISCAM_ACTIONS.includes(value) ? value : null;
 }
 
@@ -25,6 +26,8 @@ function actionLabel(action) {
       return 'DELETE & WARN';
     case 'warnkick':
       return 'DELETE · WARN TO KICK';
+    case 'mute':
+      return 'DELETE & MUTE GROUP';
     case 'delete':
     default:
       return 'DELETE MESSAGE';
@@ -49,6 +52,7 @@ function formatStatusCard(botName, prefix, groupConfig) {
   return [
     spiderHeader(botName, 'ANTISCAM SHIELD'),
     spiderRow('STATUS', groupConfig.enabled ? 'ON ✅' : 'OFF ❌', '⛨'),
+    spiderRow('STRICT MODE', groupConfig.strict !== false ? 'VERY STRICT 🔥' : 'STANDARD', '☢'),
     spiderRow('ACTION', actionLabel(groupConfig.action), '⚡'),
     spiderRow('WARN LIMIT', `${groupConfig.maxWarns} warn(s)`, '▣'),
     spiderRow('ALERTS', groupConfig.notify ? 'ON' : 'OFF', '◈'),
@@ -56,16 +60,18 @@ function formatStatusCard(botName, prefix, groupConfig) {
     spiderRow('WHITELIST', String(groupConfig.whitelist.length), '✦'),
     spiderRow(
       'BLOCKED STATS',
-      `${groupConfig.stats.detected} caught · ${groupConfig.stats.deleted} del · ${groupConfig.stats.kicked} kicked`,
+      `${groupConfig.stats.detected} caught · ${groupConfig.stats.deleted} del · ${groupConfig.stats.kicked} kicked · ${groupConfig.stats.muted || 0} muted`,
       '▤',
     ),
     spiderDivider('CONTROLS'),
-    `> ┃ ▸ *${p}antiscam on [delete|kick|warn|warnkick]*`,
+    `> ┃ ▸ *${p}antiscam on [delete|kick|warn|warnkick|mute]*`,
     `> ┃ ▸ *${p}antiscam off* — Disable protection`,
+    `> ┃ ▸ *${p}antiscam strict on|off* — Toggle very strict detection`,
     `> ┃ ▸ *${p}antiscam delete* — Delete scam messages`,
     `> ┃ ▸ *${p}antiscam kick* — Delete & kick scammers`,
     `> ┃ ▸ *${p}antiscam warn* — Delete & warn scammers`,
     `> ┃ ▸ *${p}antiscam warnkick* — Warn, then kick at limit`,
+    `> ┃ ▸ *${p}antiscam mute* — Delete & lock group chat`,
     `> ┃ ▸ *${p}antiscam warnlimit <1-10>* — Set warn kick limit`,
     `> ┃ ▸ *${p}antiscam notify on|off* — Toggle group alerts`,
     `> ┃ ▸ *${p}antiscam addword / delword <text>*`,
@@ -80,7 +86,7 @@ export const commands = [
   {
     name: 'antiscam',
     aliases: ['noscams', 'scamguard', 'antiphish'],
-    description: 'Protect the group from scam, phishing, and fraud messages (delete, kick, warn, warnkick).',
+    description: 'Protect the group from scam, phishing, and fraud messages (delete, kick, warn, warnkick, mute).',
     category: 'Group',
     groupOnly: true,
     adminOnly: true,
@@ -149,7 +155,7 @@ export const commands = [
           return sock.sendMessage(
             from,
             {
-              text: `❌ Invalid action "${tokens[1]}". Valid actions: *delete*, *kick*, *warn*, *warnkick*.`,
+              text: `❌ Invalid action "${tokens[1]}". Valid actions: *delete*, *kick*, *warn*, *warnkick*, *mute*.`,
             },
             { quoted: msg },
           );
@@ -163,6 +169,7 @@ export const commands = [
         const textOut = [
           spiderHeader(botName, 'ANTISCAM ENABLED'),
           spiderRow('STATUS', 'ON ✅', '⛨'),
+          spiderRow('STRICT MODE', updated.strict !== false ? 'VERY STRICT 🔥' : 'STANDARD', '☢'),
           spiderRow('ACTION', actionLabel(updated.action), '⚡'),
           spiderRow('WARN LIMIT', `${updated.maxWarns} warn(s)`, '▣'),
           spiderFooter('SCAMMERS WILL BE BLOCKED'),
@@ -183,6 +190,28 @@ export const commands = [
         return sock.sendMessage(from, { text: textOut }, { quoted: msg });
       }
 
+      if (sub === 'strict' || sub === 'strictmode') {
+        const toggle = String(tokens[1] || '').toLowerCase();
+        if (toggle !== 'on' && toggle !== 'off') {
+          return sock.sendMessage(
+            from,
+            { text: `❌ Usage: *${prefix}antiscam strict on* or *${prefix}antiscam strict off*` },
+            { quoted: msg },
+          );
+        }
+        const updated = defaultAntiscamStore.setGroupConfig(from, {
+          ...current,
+          strict: toggle === 'on',
+        });
+        return sock.sendMessage(
+          from,
+          {
+            text: `✅ Anti-Scam strict mode turned *${updated.strict ? 'ON (VERY STRICT)' : 'OFF (STANDARD)'}*.`,
+          },
+          { quoted: msg },
+        );
+      }
+
       const directAction = normalizeAction(sub);
       if (directAction || sub === 'action' || sub === 'mode') {
         const chosenAction = directAction || normalizeAction(tokens[1]);
@@ -190,7 +219,7 @@ export const commands = [
           return sock.sendMessage(
             from,
             {
-              text: `❌ Usage: *${prefix}antiscam action <delete|kick|warn|warnkick>*`,
+              text: `❌ Usage: *${prefix}antiscam action <delete|kick|warn|warnkick|mute>*`,
             },
             { quoted: msg },
           );
@@ -203,6 +232,7 @@ export const commands = [
         const textOut = [
           spiderHeader(botName, 'ANTISCAM MODE UPDATED'),
           spiderRow('STATUS', updated.enabled ? 'ON ✅' : 'OFF ❌', '⛨'),
+          spiderRow('STRICT MODE', updated.strict !== false ? 'VERY STRICT 🔥' : 'STANDARD', '☢'),
           spiderRow('ACTION', actionLabel(updated.action), '⚡'),
           spiderRow('WARN LIMIT', `${updated.maxWarns} warn(s)`, '▣'),
           spiderFooter('PROTECTION POLICY SAVED'),
@@ -408,7 +438,7 @@ export const commands = [
         const scanOut = [
           spiderHeader(botName, 'ANTISCAM SCAN TEST'),
           spiderRow('VERDICT', detection.isScam ? '🚨 SCAM DETECTED' : '✅ CLEAN', '⛨'),
-          spiderRow('RISK SCORE', `${detection.score} / 4+ threshold`, '▣'),
+          spiderRow('RISK SCORE', `${detection.score} / ${detection.threshold}+ threshold`, '▣'),
           ...(detection.categories.length
             ? [spiderRow('FLAGS', detection.categories.join(', '), '⚠')]
             : []),
