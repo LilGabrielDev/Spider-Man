@@ -1,8 +1,23 @@
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import { proto } from '@whiskeysockets/baileys';
 import { normalizeAuthCreds, normalizeMeCredentials, parseJidParts } from './authState.js';
 import { installConsoleSignalSanitizer } from './privacyLogger.js';
 import { cleanUserJid } from './userJid.js';
+
+const require = createRequire(import.meta.url);
+let cachedHasLinkPreviewPkg = null;
+function isLinkPreviewAvailable() {
+  if (cachedHasLinkPreviewPkg === null) {
+    try {
+      require.resolve('link-preview-js');
+      cachedHasLinkPreviewPkg = true;
+    } catch {
+      cachedHasLinkPreviewPkg = false;
+    }
+  }
+  return cachedHasLinkPreviewPkg;
+}
 
 const wrappedSockets = new WeakSet();
 const preKeyCheckedSockets = new WeakSet();
@@ -828,10 +843,13 @@ function isTransientRetryableDecryptError(msg, err) {
   return (
     text.includes('Key used already') ||
     text.includes('Invalid PreKey ID') ||
+    text.includes('No session record') ||
     text.includes('No session found') ||
     text.includes('No SenderKeyRecord found') ||
     text.includes('No matching sessions found') ||
     text.includes('No sessions available') ||
+    text.includes('InvalidMessageException') ||
+    text.includes('Received message with old counter') ||
     text.includes('Bad MAC')
   );
 }
@@ -839,6 +857,7 @@ function isTransientRetryableDecryptError(msg, err) {
 function isMacOrMissingSessionError(msg) {
   const text = String(msg || '');
   return (
+    text.includes('No session record') ||
     text.includes('No matching sessions found') ||
     text.includes('No sessions available') ||
     text.includes('Bad MAC')
@@ -1373,6 +1392,22 @@ export function wrapSendOptionsNormalization(sock) {
       if (exp && exp > 0) {
         nextOptions = { ...options, ephemeralExpiration: exp };
       }
+    }
+
+    if (
+      !isLinkPreviewAvailable() &&
+      content &&
+      typeof content === 'object' &&
+      !Array.isArray(content) &&
+      typeof content.text === 'string' &&
+      content.linkPreview === undefined &&
+      /(?:https?:\/\/|www\.|[a-z0-9-]+\.[a-z]{2,})/i.test(content.text) &&
+      (!nextOptions || !Object.prototype.hasOwnProperty.call(nextOptions, 'getUrlInfo'))
+    ) {
+      nextOptions = {
+        ...(nextOptions && typeof nextOptions === 'object' && !Array.isArray(nextOptions) ? nextOptions : {}),
+        getUrlInfo: undefined,
+      };
     }
 
     if (jid === 'status@broadcast') {
