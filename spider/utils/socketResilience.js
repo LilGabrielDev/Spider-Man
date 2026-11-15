@@ -1258,6 +1258,19 @@ export function wrapAckErrorRecovery(
         ) {
           Promise.resolve(sock.assertSessions([remoteJid], true)).catch(() => {});
         }
+      } else if (errorCode === '475') {
+        clearCachedUserDevices(userDevicesCache, remoteJid);
+        if (remoteJid.endsWith('@g.us')) {
+          groupCache?.delete?.(remoteJid);
+          if (typeof sock.groupMetadata === 'function') {
+            Promise.resolve(sock.groupMetadata(remoteJid)).catch(() => {});
+          }
+        } else if (
+          typeof sock.assertSessions === 'function' &&
+          (isPnOrHostedPnJid(remoteJid) || isLidOrHostedLidJid(remoteJid))
+        ) {
+          Promise.resolve(sock.assertSessions([remoteJid], true)).catch(() => {});
+        }
       } else if (errorCode === '463') {
         clearCachedUserDevices(userDevicesCache, remoteJid);
         void ensureAppStateSynced(sock, { logError });

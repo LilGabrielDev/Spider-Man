@@ -198,12 +198,20 @@ test('createBaileysSignalLogger filters redundant rollback/newsletter/parking/st
             onMissingAppStateKey: (kid) => missingKeys.push(kid)
         });
 
-        // Redundant rollback, benign newsletter, and transient status@broadcast decrypt stay silent while tracked
+        // Redundant rollback, benign newsletter, Invalid PreKey ID, ack error, and transient status@broadcast decrypt stay silent while tracked
         logger.error({ err: new Error('No session found to decrypt message') }, 'transaction failed, rolling back');
         logger.warn('Invalid mex newsletter notification content');
         logger.error(
             { err: new Error('No session found to decrypt message for keyId=123499, group=status@broadcast::254712345605_1::0') },
             'failed to decrypt message'
+        );
+        logger.error(
+            { key: { remoteJid: '123456789012@lid' }, err: new Error('Invalid PreKey ID') },
+            'failed to decrypt message'
+        );
+        logger.warn(
+            { attrs: { from: '120363000000000001@g.us', error: '475', class: 'message' } },
+            'received error in ack'
         );
         assert.equal(captured.length, 0);
 
@@ -236,8 +244,17 @@ test('createBaileysSignalLogger filters redundant rollback/newsletter/parking/st
         assert.ok(!joined.includes('254712345678'), 'Phone digits must stay redacted');
 
         const diag = logger.getDiagnostics();
-        assert.equal(diag.warnings, 3);
-        assert.equal(diag.errors, 5);
+        assert.equal(diag.warnings, 4);
+        assert.equal(diag.errors, 6);
+
+        // Structured attrs/key fields are extracted & redacted when onEvent inspects events
+        const events = [];
+        const eventLogger = createBaileysSignalLogger({ onEvent: (ev) => events.push(ev) });
+        eventLogger.warn({ attrs: { from: '254712345678@s.whatsapp.net', class: 'message', error: '475' } }, 'received error in ack');
+        eventLogger.error({ key: { remoteJid: '123456789012@lid' }, err: new Error('Invalid PreKey ID') }, 'failed to decrypt message');
+        assert.ok(events[0].summary.includes('from=••••78@s.whatsapp.net'));
+        assert.ok(events[0].summary.includes('ackError=475'));
+        assert.ok(events[1].summary.includes('jid=••••12@lid'));
     });
 });
 

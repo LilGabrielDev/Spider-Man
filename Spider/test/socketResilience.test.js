@@ -352,6 +352,16 @@ test('wrapAckErrorRecovery clears stale caches and recreates sessions on 421/479
   assert.equal(keyWrites[0]['sender-key-memory']['120363000000000001@g.us'], null);
   assert.equal(keyWrites[0]['sender-key-memory']['120363000000000001@g.us:887766554433:5@lid'], null);
 
+  // 475 in DM clears userDevicesCache and force-asserts sessions
+  ev.emit('messages.update', [
+    {
+      key: { remoteJid: '776655443322@lid', id: 'm5' },
+      update: { messageStubParameters: ['475'] },
+    },
+  ]);
+  assert.ok(deletedKeys.includes('776655443322@lid'));
+  assert.deepEqual(asserted[1], { jids: ['776655443322@lid'], force: true });
+
   assert.equal(clearCachedUserDevices(null, 'x'), false);
 });
 
