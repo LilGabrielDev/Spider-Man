@@ -16,9 +16,7 @@ clearTemporarySessionsAndCache({ cwd: __dirname, maxAgeMs: 60 * 1000, tempMaxAge
 try {
     await resolveShortSession();
 } catch (error) {
-    console.error(`❌ Short session lookup failed: ${error.message}`);
-    process.exitCode = 1;
-    throw error;
+    console.warn(`⚠️ Short session lookup deferred (${error.message}); starting worker HTTP server in standby mode.`);
 }
 
 let activeChild = null;

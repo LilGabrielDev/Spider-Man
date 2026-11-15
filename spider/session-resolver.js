@@ -158,9 +158,27 @@ function extractSessionFromResponse(rawText) {
     return normalized;
 }
 
-async function fetchShortSessionFromServers(cleanedInput, payload, fetchImpl) {
+function isTransientStatus(status) {
+    return status === 408 || status === 425 || status === 429 || status >= 500;
+}
+
+function waitMs(ms) {
+    if (!Number.isFinite(ms) || ms <= 0) return Promise.resolve();
+    return new Promise((resolve) => {
+        const t = setTimeout(resolve, ms);
+        t?.unref?.();
+    });
+}
+
+async function fetchShortSessionFromServers(
+    cleanedInput,
+    payload,
+    fetchImpl,
+    { retries = 2, retryDelayMs = 200 } = {}
+) {
     const baseUrls = SESSION_SERVER_URLS;
     const lookupIds = cleanedInput !== payload ? [payload, cleanedInput] : [payload];
+    const maxAttempts = Math.max(1, (Number(retries) || 0) + 1);
     let lastError = null;
 
     for (const baseUrl of baseUrls) {
@@ -171,36 +189,47 @@ async function fetchShortSessionFromServers(cleanedInput, payload, fetchImpl) {
             ];
 
             for (const url of paths) {
-                try {
-                    const response = await fetchImpl(url, {
-                        headers: { accept: "text/plain, application/json;q=0.9, */*;q=0.8" },
-                        signal: AbortSignal.timeout(15_000),
-                    });
+                for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+                    try {
+                        const response = await fetchImpl(url, {
+                            headers: { accept: "text/plain, application/json;q=0.9, */*;q=0.8" },
+                            signal: AbortSignal.timeout(15_000),
+                        });
 
-                    if (!response.ok) {
-                        lastError = new Error(
-                            `Short Spider-Man session lookup failed (${response.status}) at ${baseUrl}`
-                        );
-                        if (response.status === 404) {
+                        if (!response.ok) {
+                            lastError = new Error(
+                                `Short Spider-Man session lookup failed (${response.status}) at ${baseUrl}`
+                            );
+                            if (response.status === 404) {
+                                break;
+                            }
+                            if (isTransientStatus(response.status) && attempt < maxAttempts) {
+                                await waitMs(retryDelayMs * attempt);
+                                continue;
+                            }
+                            break;
+                        }
+
+                        const bodyText = await response.text();
+                        const resolved = extractSessionFromResponse(bodyText);
+                        if (!resolved) {
+                            lastError = new Error(
+                                `Short Spider-Man session lookup returned an invalid session from ${baseUrl}`
+                            );
+                            break;
+                        }
+
+                        return resolved;
+                    } catch (error) {
+                        const detail =
+                            error?.cause?.code || error?.cause?.message || error?.message || String(error);
+                        lastError = new Error(`Short Spider-Man session lookup failed (${detail}) at ${baseUrl}`);
+                        if (attempt < maxAttempts) {
+                            await waitMs(retryDelayMs * attempt);
                             continue;
                         }
                         break;
                     }
-
-                    const bodyText = await response.text();
-                    const resolved = extractSessionFromResponse(bodyText);
-                    if (!resolved) {
-                        lastError = new Error(
-                            `Short Spider-Man session lookup returned an invalid session from ${baseUrl}`
-                        );
-                        break;
-                    }
-
-                    return resolved;
-                } catch (error) {
-                    const detail = error?.cause?.code || error?.cause?.message || error?.message || String(error);
-                    lastError = new Error(`Short Spider-Man session lookup failed (${detail}) at ${baseUrl}`);
-                    break;
                 }
             }
         }
@@ -226,6 +255,8 @@ export async function resolveShortSession(options = {}) {
         credsPath = DEFAULT_CREDS_PATH,
         loadEnv = true,
         fetchImpl = globalThis.fetch,
+        retries = 2,
+        retryDelayMs = 200,
     } = options;
 
     if (loadEnv) {
@@ -241,7 +272,10 @@ export async function resolveShortSession(options = {}) {
 
         const payload = cleaned.replace(SESSION_PREFIX_RE, "").replace(/\s+/g, "");
         try {
-            const fullSession = await fetchShortSessionFromServers(cleaned, payload, fetchImpl);
+            const fullSession = await fetchShortSessionFromServers(cleaned, payload, fetchImpl, {
+                retries,
+                retryDelayMs,
+            });
             process.env[variable] = fullSession;
         } catch (error) {
             const existingCreds = readExistingCredsBase64(credsPath);

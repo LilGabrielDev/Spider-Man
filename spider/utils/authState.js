@@ -96,10 +96,130 @@ function isPlainObject(value) {
   return Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null;
 }
 
+export function coerceToBuffer(value) {
+  if (value === null || value === undefined) return value;
+  if (Buffer.isBuffer(value)) return value;
+  if (value instanceof Uint8Array) {
+    return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+  }
+  if (Array.isArray(value)) {
+    if (value.every((n) => typeof n === 'number' && Number.isInteger(n) && n >= 0 && n <= 255)) {
+      return Buffer.from(value);
+    }
+    return value;
+  }
+  if (typeof value === 'object') {
+    if (value.type === 'Buffer') {
+      if (Array.isArray(value.data)) {
+        return Buffer.from(value.data);
+      }
+      if (typeof value.data === 'string') {
+        return Buffer.from(value.data, 'base64');
+      }
+    }
+    if (isPlainObject(value)) {
+      const keys = Object.keys(value);
+      if (keys.length > 0 && keys.every((k) => /^\d+$/.test(k))) {
+        let maxIdx = -1;
+        for (const k of keys) {
+          const idx = Number(k);
+          if (!Number.isSafeInteger(idx) || idx < 0 || idx > 1_048_576) {
+            maxIdx = -1;
+            break;
+          }
+          const b = value[k];
+          if (typeof b !== 'number' || !Number.isInteger(b) || b < 0 || b > 255) {
+            maxIdx = -1;
+            break;
+          }
+          if (idx > maxIdx) maxIdx = idx;
+        }
+        if (maxIdx >= 0) {
+          const out = Buffer.alloc(maxIdx + 1);
+          for (const k of keys) {
+            out[Number(k)] = value[k];
+          }
+          return out;
+        }
+      }
+    }
+    return value;
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return Buffer.alloc(0);
+    if (/^[A-Za-z0-9+/=_-]+$/.test(trimmed)) {
+      const std = trimmed.replace(/-/g, '+').replace(/_/g, '/');
+      const padded = std.length % 4 === 0 ? std : std + '='.repeat(4 - (std.length % 4));
+      return Buffer.from(padded, 'base64');
+    }
+  }
+  return value;
+}
+
+function normalizeBinaryField(obj, key) {
+  if (!obj || typeof obj !== 'object' || obj[key] === undefined || obj[key] === null) return false;
+  const orig = obj[key];
+  const coerced = coerceToBuffer(orig);
+  if (Buffer.isBuffer(coerced) && (!Buffer.isBuffer(orig) || coerced !== orig)) {
+    obj[key] = coerced;
+    return true;
+  }
+  return false;
+}
+
+function normalizeKeyPair(pair) {
+  if (!pair || typeof pair !== 'object') return false;
+  let changed = false;
+  if (normalizeBinaryField(pair, 'public')) changed = true;
+  if (normalizeBinaryField(pair, 'private')) changed = true;
+  return changed;
+}
+
+/**
+ * Ensures binary credential fields (especially `creds.account`, `noiseKey`,
+ * `signedIdentityKey`, `signedPreKey`, and `signalIdentities`) are real `Buffer`
+ * instances and repairs device-suffixed `creds.me.lid`.
+ * Plain-object `{ "0": ... }` or base64-string encodings silently cause
+ * `encodeSignedDeviceIdentity` to drop `accountSignatureKey`, breaking every
+ * `pkmsg` / retry delivery with "Waiting for this message".
+ */
+export function normalizeAuthCreds(creds) {
+  if (!creds || typeof creds !== 'object' || Array.isArray(creds)) return false;
+  let changed = false;
+
+  if (normalizeKeyPair(creds.noiseKey)) changed = true;
+  if (normalizeKeyPair(creds.pairingEphemeralKeyPair)) changed = true;
+  if (normalizeKeyPair(creds.signedIdentityKey)) changed = true;
+
+  if (creds.signedPreKey && typeof creds.signedPreKey === 'object') {
+    if (normalizeKeyPair(creds.signedPreKey.keyPair)) changed = true;
+    if (normalizeBinaryField(creds.signedPreKey, 'signature')) changed = true;
+  }
+
+  if (creds.account && typeof creds.account === 'object') {
+    for (const field of ['details', 'accountSignatureKey', 'accountSignature', 'deviceSignature']) {
+      if (normalizeBinaryField(creds.account, field)) changed = true;
+    }
+  }
+
+  if (normalizeBinaryField(creds, 'companionEncStatic')) changed = true;
+  if (normalizeBinaryField(creds, 'routingInfo')) changed = true;
+
+  if (Array.isArray(creds.signalIdentities)) {
+    for (const identity of creds.signalIdentities) {
+      if (normalizeBinaryField(identity, 'identifierKey')) changed = true;
+    }
+  }
+
+  if (normalizeMeCredentials(creds)) changed = true;
+  return changed;
+}
+
 export function applyCredsUpdate(creds, update) {
   if (!creds || typeof creds !== 'object') return creds;
   if (!update || typeof update !== 'object') {
-    normalizeMeCredentials(creds);
+    normalizeAuthCreds(creds);
     return creds;
   }
 
@@ -121,7 +241,7 @@ export function applyCredsUpdate(creds, update) {
     }
   }
 
-  normalizeMeCredentials(creds);
+  normalizeAuthCreds(creds);
   return creds;
 }
 
@@ -226,8 +346,9 @@ export async function useHardenedMultiFileAuthState(
         try {
           const raw = await readFile(credsPath, { encoding: 'utf8' });
           const parsed = JSON.parse(raw, BufferJSON.reviver);
+          const repaired = normalizeAuthCreds(parsed);
           if (isValidAuthCreds(parsed)) {
-            return { creds: parsed, recoveredFromBackup: false };
+            return { creds: parsed, recoveredFromBackup: false, repaired };
           }
           primaryError = new Error('creds.json failed credential schema validation');
         } catch (err) {
@@ -242,10 +363,11 @@ export async function useHardenedMultiFileAuthState(
         try {
           const rawBak = await readFile(backupPath, { encoding: 'utf8' });
           const parsedBak = JSON.parse(rawBak, BufferJSON.reviver);
+          const repaired = normalizeAuthCreds(parsedBak);
           if (isValidAuthCreds(parsedBak)) {
             await atomicWriteRaw(credsPath, rawBak).catch(() => {});
             logInfo?.('[AUTH] Recovered valid credentials from creds.json.bak');
-            return { creds: parsedBak, recoveredFromBackup: true };
+            return { creds: parsedBak, recoveredFromBackup: true, repaired };
           }
         } catch {
           // Fall through
@@ -266,11 +388,11 @@ export async function useHardenedMultiFileAuthState(
     }
 
     const freshCreds = initAuthCreds();
-    return { creds: freshCreds, recoveredFromBackup: false };
+    return { creds: freshCreds, recoveredFromBackup: false, repaired: false };
   };
 
-  const { creds } = await loadCredsWithRecovery();
-  const normalizedInitial = normalizeMeCredentials(creds);
+  const { creds, repaired: repairedOnLoad } = await loadCredsWithRecovery();
+  const normalizedInitial = normalizeAuthCreds(creds) || repairedOnLoad;
   if (normalizedInitial && isValidAuthCreds(creds)) {
     await writeData(creds, 'creds.json', { backup: true }).catch(() => {});
   } else if (fs.existsSync(path.join(folder, 'creds.json')) && !fs.existsSync(path.join(folder, 'creds.json.bak'))) {
@@ -284,7 +406,7 @@ export async function useHardenedMultiFileAuthState(
     if (update && typeof update === 'object' && update !== creds) {
       applyCredsUpdate(creds, update);
     } else {
-      normalizeMeCredentials(creds);
+      normalizeAuthCreds(creds);
     }
 
     if (!isValidAuthCreds(creds)) {

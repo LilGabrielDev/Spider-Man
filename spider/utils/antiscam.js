@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spiderHeader, spiderRow, spiderDivider, spiderFooter } from '../../Spider/utils/tableStyle.js';
 import {
@@ -122,14 +123,17 @@ function sanitizeGroupConfig(raw) {
   };
 }
 
-export function createAntiscamStore(
-  storePathOrResolver = () => path.join(process.cwd(), 'data', 'antiscam.json'),
-) {
+export function createAntiscamStore(storePathOrResolver = null) {
+  const isDefault = storePathOrResolver === null || storePathOrResolver === undefined;
+  let tmpFallbackPath = null;
   let cachedPath = null;
   let cachedGroups = null;
 
   function resolvePath() {
-    return typeof storePathOrResolver === 'function' ? storePathOrResolver() : storePathOrResolver;
+    if (!isDefault) {
+      return typeof storePathOrResolver === 'function' ? storePathOrResolver() : storePathOrResolver;
+    }
+    return tmpFallbackPath || path.join(process.cwd(), 'data', 'antiscam.json');
   }
 
   function loadAll() {
@@ -139,15 +143,26 @@ export function createAntiscamStore(
     }
 
     let parsed = {};
-    try {
-      if (fs.existsSync(filePath)) {
-        const raw = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-        if (raw && typeof raw === 'object' && raw.groups && typeof raw.groups === 'object') {
-          parsed = raw.groups;
+    let loadedFrom = filePath;
+    const candidates = isDefault && !tmpFallbackPath
+      ? [filePath, path.join(os.tmpdir(), 'spider-data', 'antiscam.json')]
+      : [filePath];
+    for (const candidate of candidates) {
+      try {
+        if (fs.existsSync(candidate)) {
+          const raw = JSON.parse(fs.readFileSync(candidate, 'utf8'));
+          if (raw && typeof raw === 'object' && raw.groups && typeof raw.groups === 'object') {
+            parsed = raw.groups;
+            loadedFrom = candidate;
+            if (candidate !== filePath) {
+              tmpFallbackPath = candidate;
+            }
+            break;
+          }
         }
+      } catch {
+        parsed = {};
       }
-    } catch {
-      parsed = {};
     }
 
     const next = new Map();
@@ -155,31 +170,49 @@ export function createAntiscamStore(
       next.set(groupId, sanitizeGroupConfig(cfg));
     }
 
-    cachedPath = filePath;
+    cachedPath = loadedFrom;
     cachedGroups = next;
     return cachedGroups;
   }
 
-  function saveAll(groupsMap) {
-    const filePath = resolvePath();
+  function writeTarget(filePath, serialized) {
     const dir = path.dirname(filePath);
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     try {
       fs.chmodSync(dir, 0o700);
     } catch {}
-
-    const serialized = {};
-    for (const [groupId, cfg] of groupsMap.entries()) {
-      serialized[groupId] = sanitizeGroupConfig(cfg);
-    }
-
     const tmpPath = `${filePath}.${process.pid}.tmp`;
     fs.writeFileSync(tmpPath, `${JSON.stringify({ groups: serialized }, null, 2)}\n`, { mode: 0o600 });
     fs.renameSync(tmpPath, filePath);
     try {
       fs.chmodSync(filePath, 0o600);
     } catch {}
-    cachedPath = filePath;
+  }
+
+  function saveAll(groupsMap) {
+    const filePath = resolvePath();
+    const serialized = {};
+    for (const [groupId, cfg] of groupsMap.entries()) {
+      serialized[groupId] = sanitizeGroupConfig(cfg);
+    }
+
+    try {
+      writeTarget(filePath, serialized);
+      cachedPath = filePath;
+    } catch {
+      if (isDefault) {
+        const fallback = path.join(os.tmpdir(), 'spider-data', 'antiscam.json');
+        try {
+          writeTarget(fallback, serialized);
+          tmpFallbackPath = fallback;
+          cachedPath = fallback;
+        } catch {
+          cachedPath = filePath;
+        }
+      } else {
+        cachedPath = filePath;
+      }
+    }
     cachedGroups = groupsMap;
   }
 

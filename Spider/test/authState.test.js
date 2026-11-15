@@ -3,11 +3,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { BufferJSON, initAuthCreds } from '@whiskeysockets/baileys';
+import { BufferJSON, encodeSignedDeviceIdentity, initAuthCreds, proto } from '@whiskeysockets/baileys';
 import {
   applyCredsUpdate,
   fixAuthFileName,
   isValidAuthCreds,
+  normalizeAuthCreds,
   normalizeMeCredentials,
   parseJidParts,
   useHardenedMultiFileAuthState,
@@ -151,3 +152,64 @@ test('useHardenedMultiFileAuthState writes atomically, maintains .bak, recovers 
     assert.ok(errors.some((e) => /Refusing to wipe corrupted creds\.json/.test(e)));
   });
 });
+
+test('normalizeAuthCreds coerces plain-object and base64 credential fields so encodeSignedDeviceIdentity preserves accountSignatureKey', () => {
+  const detailsBuf = Buffer.from([8, 1, 16, 2]);
+  const sigKeyBuf = Buffer.from(Array.from({ length: 32 }, (_, i) => i + 1));
+  const acctSigBuf = Buffer.from(Array.from({ length: 64 }, (_, i) => (i * 3) & 0xff));
+  const devSigBuf = Buffer.from(Array.from({ length: 64 }, (_, i) => (i * 7) & 0xff));
+
+  const toPlainIndexed = (buf) => Object.fromEntries(Array.from(buf.entries()));
+
+  const creds = {
+    registrationId: 4242,
+    me: { id: '254712345678:3@s.whatsapp.net', lid: '998877665544@lid' },
+    noiseKey: {
+      public: toPlainIndexed(Buffer.from([1, 2, 3, 4])),
+      private: Buffer.from([5, 6, 7, 8]).toString('base64'),
+    },
+    signedIdentityKey: {
+      public: { type: 'Buffer', data: [9, 10, 11, 12] },
+      private: [13, 14, 15, 16],
+    },
+    signedPreKey: {
+      keyPair: {
+        public: toPlainIndexed(Buffer.from([21, 22])),
+        private: toPlainIndexed(Buffer.from([23, 24])),
+      },
+      signature: Buffer.from([25, 26]).toString('base64'),
+    },
+    account: {
+      details: toPlainIndexed(detailsBuf),
+      accountSignatureKey: toPlainIndexed(sigKeyBuf),
+      accountSignature: acctSigBuf.toString('base64'),
+      deviceSignature: { type: 'Buffer', data: Array.from(devSigBuf) },
+    },
+    signalIdentities: [
+      {
+        identifier: { name: '254712345678:3@s.whatsapp.net', deviceId: 3 },
+        identifierKey: toPlainIndexed(Buffer.from([31, 32, 33])),
+      },
+    ],
+  };
+
+  assert.equal(normalizeAuthCreds(creds), true);
+  assert.equal(Buffer.isBuffer(creds.noiseKey.public), true);
+  assert.equal(Buffer.isBuffer(creds.noiseKey.private), true);
+  assert.equal(Buffer.isBuffer(creds.signedIdentityKey.public), true);
+  assert.equal(Buffer.isBuffer(creds.signedIdentityKey.private), true);
+  assert.equal(Buffer.isBuffer(creds.signedPreKey.signature), true);
+  assert.equal(Buffer.isBuffer(creds.account.accountSignatureKey), true);
+  assert.equal(Buffer.isBuffer(creds.signalIdentities[0].identifierKey), true);
+  assert.equal(creds.me.lid, '998877665544:3@lid');
+
+  const encoded = encodeSignedDeviceIdentity(creds.account, true);
+  const decoded = proto.ADVSignedDeviceIdentity.decode(encoded);
+  assert.deepEqual(Buffer.from(decoded.details), detailsBuf);
+  assert.deepEqual(Buffer.from(decoded.accountSignatureKey), sigKeyBuf);
+  assert.deepEqual(Buffer.from(decoded.accountSignature), acctSigBuf);
+  assert.deepEqual(Buffer.from(decoded.deviceSignature), devSigBuf);
+
+  assert.equal(normalizeAuthCreds(creds), false, 'subsequent call is idempotent');
+});
+

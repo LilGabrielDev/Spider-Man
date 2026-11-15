@@ -8,6 +8,7 @@ import {
   clearCachedUserDevices,
   countLocalPreKeyFiles,
   createGuardedSignalKeyStore,
+  createHardenedSignalRepository,
   ensureActiveOnlinePresence,
   ensureAppStateSynced,
   ensureFallbackMeName,
@@ -19,6 +20,7 @@ import {
   wrapPresenceResilience,
   wrapSendOptionsNormalization,
   wrapSignalAndSenderKeyGuard,
+  wrapWebSocketTagSanitizer,
 } from '../../spider/utils/socketResilience.js';
 
 function createEmitter() {
@@ -781,4 +783,123 @@ test('installSocketResilience cancels scheduled pre-key retry cleanly when socke
   // Closing the socket cancels the pending retry timer without throwing
   ev.emit('connection.update', { connection: 'close' });
 });
+
+test('createHardenedSignalRepository synchronously asserts missing sessions and retries encryptMessage in-flight', async () => {
+  const failedEncryptJids = new Map();
+  const cleared = [];
+  const userDevicesCache = {
+    del: (k) => {
+      cleared.push(k);
+      return true;
+    },
+  };
+  let hasSession = false;
+  let encryptAttempts = 0;
+
+  const baseFactory = (auth) => {
+    assert.equal(Buffer.isBuffer(auth.creds.account.accountSignatureKey), true);
+    return {
+      encryptGroupMessage: async (opts) => ({ opts }),
+      encryptMessage: async ({ jid }) => {
+        encryptAttempts += 1;
+        if (!hasSession) {
+          throw new Error(`No session record for ${jid}`);
+        }
+        return { type: 'pkmsg', ciphertext: Buffer.from('recovered-cipher') };
+      },
+    };
+  };
+
+  const factory = createHardenedSignalRepository(baseFactory, {
+    failedEncryptJids,
+    userDevicesCache,
+  });
+
+  const authCreds = {
+    me: { id: '254700000001:4@s.whatsapp.net', lid: '1122334455@lid' },
+    account: { accountSignatureKey: { '0': 1, '1': 2, '2': 3 } },
+  };
+  const repo = factory({ creds: authCreds });
+  assert.equal(authCreds.me.lid, '1122334455:4@lid');
+
+  const sock = {
+    ev: createEmitter(),
+    authState: { creds: authCreds, keys: createGuardedSignalKeyStore({ get: async () => ({}), set: async () => {} }, failedEncryptJids) },
+    signalRepository: repo,
+    assertSessions: async (jids, force) => {
+      assert.deepEqual(jids, ['222233334444:0@lid']);
+      assert.equal(force, true);
+      hasSession = true;
+      return true;
+    },
+  };
+
+  // Binds live sock context onto the pre-wrapped repository without double-wrapping
+  assert.equal(
+    wrapSignalAndSenderKeyGuard(sock, { failedEncryptJids, userDevicesCache }),
+    true,
+  );
+
+  // Simulates a caller (like Baileys messages-send.js) invoking the early-captured encryptMessage reference
+  const result = await repo.encryptMessage({ jid: '222233334444:0@lid', data: Buffer.from('skdm') });
+  assert.equal(encryptAttempts, 2);
+  assert.equal(result.type, 'pkmsg');
+  assert.deepEqual(result.ciphertext, Buffer.from('recovered-cipher'));
+  assert.equal(failedEncryptJids.has('222233334444:0@lid'), false);
+  assert.equal(cleared.includes('222233334444:0@lid'), true);
+
+  // Bare meId passed into group encrypt also resolves to device-suffixed LID from bound sock creds
+  const groupRes = await repo.encryptGroupMessage({ group: '120363@g.us', meId: '1122334455@lid' });
+  assert.equal(groupRes.opts.meId, '1122334455:4@lid');
+});
+
+test('wrapWebSocketTagSanitizer strips partial encrypt IQ errors directly from TAG:* events', () => {
+  const cleared = [];
+  const logged = [];
+  const emitted = [];
+  const ws = {
+    emit(event, payload) {
+      emitted.push({ event, payload });
+      return true;
+    },
+  };
+  const sock = { ws };
+  const userDevicesCache = {
+    del: (k) => {
+      cleared.push(k);
+      return true;
+    },
+  };
+
+  assert.equal(
+    wrapWebSocketTagSanitizer(sock, {
+      userDevicesCache,
+      logError: (ctx, _c, _j, msg) => logged.push(`${ctx}:${msg}`),
+    }),
+    true,
+  );
+  assert.equal(wrapWebSocketTagSanitizer(sock), true, 'idempotent');
+
+  ws.emit('TAG:1234', {
+    tag: 'iq',
+    attrs: { type: 'result', id: '1234' },
+    content: [
+      {
+        tag: 'list',
+        attrs: {},
+        content: [
+          { tag: 'user', attrs: { jid: '1111@lid' }, content: [{ tag: 'identity' }] },
+          { tag: 'user', attrs: { jid: '2222@lid' }, content: [{ tag: 'error', attrs: { code: '404' } }] },
+        ],
+      },
+    ],
+  });
+
+  assert.equal(emitted.length, 1);
+  assert.equal(emitted[0].payload.content[0].content.length, 1);
+  assert.equal(emitted[0].payload.content[0].content[0].attrs.jid, '1111@lid');
+  assert.equal(cleared.includes('2222@lid'), true);
+  assert.match(logged[0], /Isolated 1 errored recipient key bundle/);
+});
+
 
