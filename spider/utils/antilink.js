@@ -1,4 +1,5 @@
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { spiderFooter, spiderHeader, spiderRow } from '../../Spider/utils/tableStyle.js';
 import { extractMessageText } from './antiscam.js';
@@ -87,9 +88,15 @@ function normalizeGroupConfig(raw) {
   };
 }
 
-export function createAntilinkStore(filePathOrFn = () => path.join(process.cwd(), 'data', 'antilink.json')) {
-  const resolvePath =
-    typeof filePathOrFn === 'function' ? filePathOrFn : () => String(filePathOrFn);
+export function createAntilinkStore(filePathOrFn = null) {
+  const isDefault = filePathOrFn === null || filePathOrFn === undefined;
+  let tmpFallbackPath = null;
+  const resolvePath = () => {
+    if (!isDefault) {
+      return typeof filePathOrFn === 'function' ? filePathOrFn() : String(filePathOrFn);
+    }
+    return tmpFallbackPath || path.join(process.cwd(), 'data', 'antilink.json');
+  };
   let loadedPath = null;
   let cache = { groups: {} };
 
@@ -98,27 +105,54 @@ export function createAntilinkStore(filePathOrFn = () => path.join(process.cwd()
     if (loadedPath === filePath) return;
     loadedPath = filePath;
     cache = { groups: {} };
-    try {
-      if (fs.existsSync(filePath)) {
-        const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-        if (parsed && typeof parsed === 'object' && parsed.groups && typeof parsed.groups === 'object') {
-          for (const [jid, cfg] of Object.entries(parsed.groups)) {
-            cache.groups[jid] = normalizeGroupConfig(cfg);
+    const candidates = isDefault && !tmpFallbackPath
+      ? [filePath, path.join(os.tmpdir(), 'spider-data', 'antilink.json')]
+      : [filePath];
+    for (const candidate of candidates) {
+      try {
+        if (fs.existsSync(candidate)) {
+          const parsed = JSON.parse(fs.readFileSync(candidate, 'utf8'));
+          if (parsed && typeof parsed === 'object' && parsed.groups && typeof parsed.groups === 'object') {
+            for (const [jid, cfg] of Object.entries(parsed.groups)) {
+              cache.groups[jid] = normalizeGroupConfig(cfg);
+            }
           }
+          if (candidate !== filePath) {
+            tmpFallbackPath = candidate;
+            loadedPath = candidate;
+          }
+          break;
         }
+      } catch {
+        cache = { groups: {} };
       }
-    } catch {
-      cache = { groups: {} };
     }
   }
 
-  function save() {
-    const filePath = resolvePath();
+  function writeTarget(filePath) {
     const dir = path.dirname(filePath);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
     fs.writeFileSync(filePath, JSON.stringify(cache, null, 2));
+  }
+
+  function save() {
+    const filePath = resolvePath();
+    try {
+      writeTarget(filePath);
+    } catch {
+      if (isDefault) {
+        const fallback = path.join(os.tmpdir(), 'spider-data', 'antilink.json');
+        try {
+          writeTarget(fallback);
+          tmpFallbackPath = fallback;
+          loadedPath = fallback;
+        } catch {
+          // Best-effort persistence on read-only hosts
+        }
+      }
+    }
   }
 
   return {

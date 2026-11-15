@@ -1,9 +1,14 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { normalizeSudoTarget } from "./userJid.js";
 
 function getDefaultSudoPath() {
   return path.join(process.cwd(), "data", "sudo.json");
+}
+
+function getTmpSudoPath() {
+  return path.join(os.tmpdir(), "spider-data", "sudo.json");
 }
 
 function getLegacySudoPath() {
@@ -28,6 +33,7 @@ export function loadSudoList(filePath) {
   };
   return (
     tryRead(resolvedPath) ||
+    (isDefault ? tryRead(getTmpSudoPath()) : null) ||
     (isDefault ? tryRead(getLegacySudoPath()) : null) ||
     new Set()
   );
@@ -39,13 +45,23 @@ export function saveSudoList(listOrSet, filePath) {
     .map((entry) => normalizeEntry(entry))
     .filter(Boolean);
   const unique = Array.from(new Set(entries));
+  const payload = JSON.stringify(unique, null, 2) + "\n";
+  const writeTarget = (target) => {
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    const tmpPath = `${target}.${process.pid}.tmp`;
+    fs.writeFileSync(tmpPath, payload, "utf8");
+    fs.renameSync(tmpPath, target);
+  };
   try {
-    fs.mkdirSync(path.dirname(resolvedPath), { recursive: true });
-    const tmpPath = `${resolvedPath}.${process.pid}.tmp`;
-    fs.writeFileSync(tmpPath, JSON.stringify(unique, null, 2) + "\n", "utf8");
-    fs.renameSync(tmpPath, resolvedPath);
+    writeTarget(resolvedPath);
   } catch {
-    // Best-effort persistence on read-only hosts
+    if (!filePath) {
+      try {
+        writeTarget(getTmpSudoPath());
+      } catch {
+        // Best-effort persistence on read-only hosts
+      }
+    }
   }
   return unique;
 }

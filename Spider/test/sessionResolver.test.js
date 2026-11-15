@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import http from "node:http";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
@@ -236,9 +238,112 @@ test("resolveShortSession throws descriptive error when lookup fails and no cred
                     loadEnv: false,
                     credsPath: "/nonexistent/creds.json",
                     fetchImpl,
+                    retryDelayMs: 5,
                 }),
                 /Short Spider-Man session lookup failed \(503\)/
             );
         });
     });
 });
+
+test("resolveShortSession retries transient 503 responses and recovers when server comes up", async () => {
+    const full = makeFullLilSession();
+    let attempts = 0;
+    await withTempEnvSnapshot(async () => {
+        await withServer((req, res) => {
+            if (req.url === "/session/transient42") {
+                attempts += 1;
+                if (attempts <= 2) {
+                    res.writeHead(503);
+                    res.end("Cold starting");
+                    return;
+                }
+                res.writeHead(200, { "content-type": "text/plain" });
+                res.end(full);
+                return;
+            }
+            res.writeHead(404);
+            res.end("Not found");
+        }, async (_baseUrl, fetchImpl) => {
+            delete process.env.SESSION;
+            process.env.SESSION_ID = "LIL~transient42";
+
+            await resolveShortSession({
+                loadEnv: false,
+                credsPath: "/nonexistent/creds.json",
+                fetchImpl,
+                retries: 2,
+                retryDelayMs: 5,
+            });
+            assert.equal(attempts, 3);
+            assert.equal(process.env.SESSION_ID, full);
+        });
+    });
+});
+
+async function getFreePort() {
+    return new Promise((resolve, reject) => {
+        const srv = net.createServer();
+        srv.once("error", reject);
+        srv.listen(0, "127.0.0.1", () => {
+            const addr = srv.address();
+            const port = addr && typeof addr === "object" ? addr.port : 0;
+            srv.close((err) => (err ? reject(err) : resolve(port)));
+        });
+    });
+}
+
+test("spider/index.js binds HTTP PORT immediately and stays alive in standby mode without session crash", async () => {
+    const port = await getFreePort();
+    const tmpAuthDir = fs.mkdtempSync(path.join(os.tmpdir(), "spider-standby-auth-"));
+    const child = spawn(process.execPath, ["spider/index.js"], {
+        cwd: process.cwd(),
+        env: {
+            ...process.env,
+            PORT: String(port),
+            AUTH_DIR: tmpAuthDir,
+            SESSION: "",
+            SESSION_ID: "invalid-standby-session",
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    try {
+        let ready = false;
+        let lastErr = null;
+        const deadline = Date.now() + 10_000;
+        while (Date.now() < deadline) {
+            if (child.exitCode !== null) {
+                throw new Error(`Worker exited prematurely with code ${child.exitCode}`);
+            }
+            try {
+                const res = await fetch(`http://127.0.0.1:${port}/`);
+                if (res.status === 200) {
+                    const body = await res.text();
+                    assert.match(body, /Running/);
+                    const healthRes = await fetch(`http://127.0.0.1:${port}/health`);
+                    assert.equal(healthRes.status, 503);
+                    const healthJson = await healthRes.json();
+                    assert.equal(healthJson.whatsapp, "disconnected");
+                    ready = true;
+                    break;
+                }
+            } catch (err) {
+                lastErr = err;
+            }
+            await new Promise((r) => setTimeout(r, 50));
+        }
+        assert.equal(ready, true, `HTTP server did not bind PORT ${port} in time: ${lastErr?.message || ""}`);
+
+        const exitPromise = new Promise((resolve) => child.once("exit", (code, sig) => resolve({ code, sig })));
+        child.kill("SIGTERM");
+        const exited = await exitPromise;
+        assert.equal(exited.code, 0);
+    } finally {
+        if (child.exitCode === null) {
+            child.kill("SIGKILL");
+        }
+        fs.rmSync(tmpAuthDir, { recursive: true, force: true });
+    }
+});
+
