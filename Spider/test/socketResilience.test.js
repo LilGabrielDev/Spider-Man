@@ -14,6 +14,7 @@ import {
   ensureFallbackMeName,
   ensureHealthyPreKeys,
   installSocketResilience,
+  requestMissingAppStateSyncKeys,
   syncMessageKeyAliases,
   wrapAckErrorRecovery,
   wrapLidMappingResilience,
@@ -900,6 +901,171 @@ test('wrapWebSocketTagSanitizer strips partial encrypt IQ errors directly from T
   assert.equal(emitted[0].payload.content[0].content[0].attrs.jid, '1111@lid');
   assert.equal(cleared.includes('2222@lid'), true);
   assert.match(logged[0], /Isolated 1 errored recipient key bundle/);
+});
+
+test('wrapSignalAndSenderKeyGuard recovers decrypt failures (Bad MAC, No matching sessions, status scope, Invalid PreKey ID) cleanly', async () => {
+  const deletedSessions = [];
+  const keyWrites = [];
+  const uploaded = [];
+  const logged = [];
+  const ev = createEmitter();
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'spider-decrypt-guard-'));
+  try {
+    const innerKeys = {
+      get: async (_type, ids) => Object.fromEntries(ids.map((id) => [id, null])),
+      set: async (data) => {
+        keyWrites.push(data);
+      },
+    };
+    const guardedKeys = createGuardedSignalKeyStore(innerKeys, new Map());
+
+    let nextDecryptErr = null;
+    let nextGroupDecryptErr = null;
+    const sock = {
+      ev,
+      authState: {
+        creds: {
+          nextPreKeyId: 50,
+          firstUnuploadedPreKeyId: 10,
+          me: { id: '254700000001:1@s.whatsapp.net', lid: '1122334455:1@lid' },
+        },
+        keys: guardedKeys,
+      },
+      uploadPreKeys: async (n) => {
+        uploaded.push(n);
+      },
+      signalRepository: {
+        lidMapping: {
+          getPNForLID: async (lid) => (lid === '998877665514@lid' ? '254711111114@s.whatsapp.net' : null),
+        },
+        jidToSignalProtocolAddress: (jid) => jid.split('@')[0],
+        deleteSession: async (jids) => {
+          deletedSessions.push(jids);
+        },
+        decryptMessage: async () => {
+          if (nextDecryptErr) throw nextDecryptErr;
+          return Buffer.from('ok');
+        },
+        decryptGroupMessage: async () => {
+          if (nextGroupDecryptErr) throw nextGroupDecryptErr;
+          return Buffer.from('ok');
+        },
+      },
+    };
+
+    wrapSignalAndSenderKeyGuard(sock, {
+      authDir: tmpDir,
+      logError: (ctx, _c, target, msg) => logged.push({ ctx, target, msg }),
+    });
+
+    // 1. Unscoped 'No matching sessions found for message' -> deletes session, tags Bad MAC for retry, no noisy log box
+    nextDecryptErr = new Error('No matching sessions found for message');
+    await assert.rejects(
+      () => sock.signalRepository.decryptMessage({ jid: '998877665514@lid', type: 'msg', ciphertext: Buffer.from('x') }),
+      /Bad MAC.*No matching sessions found/,
+    );
+    assert.deepEqual(deletedSessions, [['998877665514@lid']]);
+    assert.equal(logged.length, 0);
+
+    // 2. Scoped (status) Bad MAC -> clears ONLY *_status session (+ PN alias), never calling unscoped deleteSession
+    nextDecryptErr = new Error('Bad MAC');
+    await assert.rejects(
+      () =>
+        sock.signalRepository.decryptMessage({
+          jid: '998877665514@lid',
+          scope: 'status',
+          type: 'msg',
+          ciphertext: Buffer.from('x'),
+        }),
+      /Bad MAC/,
+    );
+    assert.equal(deletedSessions.length, 1);
+    assert.deepEqual(keyWrites[0].session, {
+      '998877665514_status': null,
+      '254711111114_status': null,
+    });
+    assert.equal(logged.length, 0);
+
+    // 3. Invalid PreKey ID -> repairs stale firstUnuploadedPreKeyId cursor and triggers throttled pre-key upload
+    nextDecryptErr = new Error('Invalid PreKey ID');
+    await assert.rejects(
+      () => sock.signalRepository.decryptMessage({ jid: '887766554485@lid', type: 'pkmsg', ciphertext: Buffer.from('x') }),
+      /Invalid PreKey ID/,
+    );
+    await new Promise((r) => setTimeout(r, 15));
+    assert.equal(sock.authState.creds.firstUnuploadedPreKeyId, 50);
+    assert.deepEqual(uploaded, [50]);
+    assert.equal(logged.length, 0);
+
+    // 4. Unexpected non-retryable error logs once within cooldown window
+    nextDecryptErr = new Error('Unsupported message envelope');
+    await assert.rejects(
+      () => sock.signalRepository.decryptMessage({ jid: '887766554485@lid', type: 'msg', ciphertext: Buffer.from('x') }),
+      /Unsupported message envelope/,
+    );
+    await assert.rejects(
+      () => sock.signalRepository.decryptMessage({ jid: '887766554485@lid', type: 'msg', ciphertext: Buffer.from('x') }),
+      /Unsupported message envelope/,
+    );
+    assert.equal(logged.length, 1);
+    assert.equal(logged[0].ctx, 'Signal Decrypt Failure');
+
+    // 5. Group transient keyId miss suppresses redundant box; unexpected error logs once with cooldown
+    nextGroupDecryptErr = new Error('No session found to decrypt message for keyId=60, group=status@broadcast::111_1::0');
+    await assert.rejects(
+      () => sock.signalRepository.decryptGroupMessage({ group: 'status@broadcast', authorJid: '111@lid', msg: Buffer.from('x') }),
+      /No session found/,
+    );
+    assert.equal(logged.length, 1);
+
+    nextGroupDecryptErr = new Error('Malformed group frame');
+    await assert.rejects(
+      () => sock.signalRepository.decryptGroupMessage({ group: '120363@g.us', authorJid: '111@lid', msg: Buffer.from('x') }),
+      /Malformed group frame/,
+    );
+    await assert.rejects(
+      () => sock.signalRepository.decryptGroupMessage({ group: '120363@g.us', authorJid: '111@lid', msg: Buffer.from('x') }),
+      /Malformed group frame/,
+    );
+    assert.equal(logged.length, 2);
+    assert.equal(logged[1].ctx, 'Signal Group Decrypt Failure');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('requestMissingAppStateSyncKeys sends APP_STATE_SYNC_KEY_REQUEST, enforces cooldown, and skips existing keys', async () => {
+  const peerCalls = [];
+  const storedKeys = new Set();
+  const sock = {
+    authState: {
+      keys: {
+        get: async (_type, ids) => Object.fromEntries(ids.map((id) => [id, storedKeys.has(id) ? { keyData: Buffer.from('k') } : null])),
+      },
+    },
+    sendPeerMessage: async (msg) => {
+      peerCalls.push(msg);
+      return 'msg-id-1';
+    },
+  };
+
+  assert.equal(await requestMissingAppStateSyncKeys(sock, 'AAAAAHGA'), true);
+  assert.equal(peerCalls.length, 1);
+  assert.equal(peerCalls[0].protocolMessage.type, 7);
+  assert.deepEqual(
+    peerCalls[0].protocolMessage.appStateSyncKeyRequest.keyIds.map((k) => Buffer.from(k.keyId).toString('base64')),
+    ['AAAAAHGA'],
+  );
+
+  // Cooldown prevents duplicate requests for the same keyId
+  assert.equal(await requestMissingAppStateSyncKeys(sock, 'AAAAAHGA'), false);
+  assert.equal(peerCalls.length, 1);
+
+  // Already-stored key is skipped even with 0ms cooldown
+  storedKeys.add('AAAAAHGB');
+  assert.equal(await requestMissingAppStateSyncKeys(sock, 'AAAAAHGB', { cooldownMs: 0 }), false);
+  assert.equal(peerCalls.length, 1);
 });
 
 

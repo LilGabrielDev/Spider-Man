@@ -213,3 +213,47 @@ test('normalizeAuthCreds coerces plain-object and base64 credential fields so en
   assert.equal(normalizeAuthCreds(creds), false, 'subsequent call is idempotent');
 });
 
+test('normalizeAuthCreds clamps firstUnuploadedPreKeyId and useHardenedMultiFileAuthState advances stale pre-key cursor on hydrated sessions', async () => {
+  const aheadCreds = initAuthCreds();
+  aheadCreds.nextPreKeyId = 35;
+  aheadCreds.firstUnuploadedPreKeyId = 50;
+  assert.equal(normalizeAuthCreds(aheadCreds), true);
+  assert.equal(aheadCreds.firstUnuploadedPreKeyId, 35);
+  assert.equal(normalizeAuthCreds(aheadCreds), false);
+
+  // Hydrated session: nextPreKeyId=50, firstUnuploadedPreKeyId=10, but no pre-key-10.json on disk
+  await withTempDir(async (hydratedDir) => {
+    const creds = initAuthCreds();
+    creds.nextPreKeyId = 50;
+    creds.firstUnuploadedPreKeyId = 10;
+    fs.writeFileSync(
+      path.join(hydratedDir, 'creds.json'),
+      JSON.stringify(creds, BufferJSON.replacer),
+    );
+
+    const auth = await useHardenedMultiFileAuthState(hydratedDir);
+    assert.equal(auth.state.creds.firstUnuploadedPreKeyId, 50);
+
+    const persisted = JSON.parse(
+      fs.readFileSync(path.join(hydratedDir, 'creds.json'), 'utf8'),
+      BufferJSON.reviver,
+    );
+    assert.equal(persisted.firstUnuploadedPreKeyId, 50);
+  });
+
+  // Healthy dir: pre-key-10.json exists on disk -> cursor is preserved
+  await withTempDir(async (healthyDir) => {
+    const creds = initAuthCreds();
+    creds.nextPreKeyId = 50;
+    creds.firstUnuploadedPreKeyId = 10;
+    fs.writeFileSync(
+      path.join(healthyDir, 'creds.json'),
+      JSON.stringify(creds, BufferJSON.replacer),
+    );
+    fs.writeFileSync(path.join(healthyDir, 'pre-key-10.json'), '{}');
+
+    const auth = await useHardenedMultiFileAuthState(healthyDir);
+    assert.equal(auth.state.creds.firstUnuploadedPreKeyId, 10);
+  });
+});
+

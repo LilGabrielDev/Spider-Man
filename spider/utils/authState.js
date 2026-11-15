@@ -212,6 +212,17 @@ export function normalizeAuthCreds(creds) {
     }
   }
 
+  if (
+    typeof creds.nextPreKeyId === 'number' &&
+    Number.isFinite(creds.nextPreKeyId) &&
+    typeof creds.firstUnuploadedPreKeyId === 'number' &&
+    Number.isFinite(creds.firstUnuploadedPreKeyId) &&
+    creds.firstUnuploadedPreKeyId > creds.nextPreKeyId
+  ) {
+    creds.firstUnuploadedPreKeyId = creds.nextPreKeyId;
+    changed = true;
+  }
+
   if (normalizeMeCredentials(creds)) changed = true;
   return changed;
 }
@@ -392,7 +403,22 @@ export async function useHardenedMultiFileAuthState(
   };
 
   const { creds, repaired: repairedOnLoad } = await loadCredsWithRecovery();
-  const normalizedInitial = normalizeAuthCreds(creds) || repairedOnLoad;
+  let repairedPreKeyCursor = false;
+  if (
+    Number(creds?.nextPreKeyId) > 1 &&
+    Number(creds?.firstUnuploadedPreKeyId) > 0 &&
+    Number(creds?.firstUnuploadedPreKeyId) < Number(creds?.nextPreKeyId)
+  ) {
+    const firstKeyFile = path.join(
+      folder,
+      fixAuthFileName(`pre-key-${creds.firstUnuploadedPreKeyId}.json`),
+    );
+    if (!fs.existsSync(firstKeyFile)) {
+      creds.firstUnuploadedPreKeyId = creds.nextPreKeyId;
+      repairedPreKeyCursor = true;
+    }
+  }
+  const normalizedInitial = normalizeAuthCreds(creds) || repairedOnLoad || repairedPreKeyCursor;
   if (normalizedInitial && isValidAuthCreds(creds)) {
     await writeData(creds, 'creds.json', { backup: true }).catch(() => {});
   } else if (fs.existsSync(path.join(folder, 'creds.json')) && !fs.existsSync(path.join(folder, 'creds.json.bak'))) {

@@ -92,7 +92,93 @@ function summarizeErrorPayload(arg) {
     return sanitizeConsoleText(String(arg));
 }
 
-export function createBaileysSignalLogger({ onEvent = null, level = 'warn', throttleMs = 10_000 } = {}) {
+const LIBSIGNAL_CONSOLE_NOISE_PATTERNS = [
+    /Failed to decrypt message with any known session/i,
+    /^Session error:/i,
+    /\bSession error:\s*Error:\s*Bad MAC\b/i,
+    /\bat Object\.verifyMAC\b/i,
+    /\bat SessionCipher\.(?:doDecryptWhisperMessage|decryptWithSessions|decryptWhisperMessage)\b/i,
+    /\b(?:Closing open session|Closing session:|Removing old closed session:|Decrypted message with closed session:)/i,
+];
+
+function consoleArgToText(arg) {
+    if (typeof arg === 'string') return arg;
+    if (arg instanceof Error) return `${arg.message || arg.name || 'Error'} ${arg.stack || ''}`;
+    if (arg && typeof arg === 'object') {
+        try {
+            return JSON.stringify(arg);
+        } catch {
+            return String(arg);
+        }
+    }
+    return String(arg ?? '');
+}
+
+export function isLibsignalConsoleNoise(args) {
+    if (!Array.isArray(args) || args.length === 0) return false;
+    const joined = args.map(consoleArgToText).join(' ');
+    if (LIBSIGNAL_CONSOLE_NOISE_PATTERNS.some((re) => re.test(joined))) {
+        return true;
+    }
+    if (
+        args.some(
+            (arg) =>
+                arg &&
+                typeof arg === 'object' &&
+                !Array.isArray(arg) &&
+                !(arg instanceof Error) &&
+                (arg._chains || arg.currentRatchet || (arg.indexInfo && arg.registrationId)),
+        )
+    ) {
+        return true;
+    }
+    return false;
+}
+
+export function installConsoleSignalSanitizer() {
+    if (console.__spiderSignalSanitizerInstalled) return true;
+    const origError = console.error.bind(console);
+    const origWarn = console.warn.bind(console);
+
+    const wrapMethod = (origFn) => (...args) => {
+        if (isLibsignalConsoleNoise(args)) {
+            return;
+        }
+        const sanitizedArgs = args.map((arg) =>
+            typeof arg === 'string' ? sanitizeConsoleText(arg) : arg,
+        );
+        return origFn(...sanitizedArgs);
+    };
+
+    try {
+        console.error = wrapMethod(origError);
+        console.warn = wrapMethod(origWarn);
+        console.__spiderSignalSanitizerInstalled = true;
+    } catch {
+        return false;
+    }
+    return true;
+}
+
+function isRedundantOrBenignBaileysMessage(lowerSummary) {
+    if (!lowerSummary) return false;
+    if (lowerSummary.startsWith('transaction failed, rolling back')) return true;
+    if (
+        lowerSummary.includes('invalid mex newsletter notification content') ||
+        lowerSummary.includes('invalid mex newsletter notification') ||
+        lowerSummary.includes('unknown newsletter notification child')
+    ) {
+        return true;
+    }
+    return false;
+}
+
+export function createBaileysSignalLogger({
+    onEvent = null,
+    onMissingAppStateKey = null,
+    level = 'warn',
+    throttleMs = 10_000,
+} = {}) {
     const diagnostics = {
         warnings: 0,
         errors: 0,
@@ -130,6 +216,15 @@ export function createBaileysSignalLogger({ onEvent = null, level = 'warn', thro
             diagnostics.sessionErrors += 1;
         }
 
+        if (typeof onMissingAppStateKey === 'function') {
+            const keyMatch = combined.match(/failed to find key\s+"([^"]+)"/i);
+            if (keyMatch?.[1]) {
+                try {
+                    onMissingAppStateKey(keyMatch[1]);
+                } catch {}
+            }
+        }
+
         const summary = combined || 'Unknown Baileys diagnostic event';
         diagnostics.lastEventAt = Date.now();
         diagnostics.lastSummary = summary;
@@ -141,8 +236,13 @@ export function createBaileysSignalLogger({ onEvent = null, level = 'warn', thro
             return;
         }
 
+        if (isRedundantOrBenignBaileysMessage(lower)) {
+            return;
+        }
+
         const now = Date.now();
-        const dedupeKey = `${severity}:${summary}`;
+        const dedupeSummary = summary.replace(/keyId=[^,\s]+/g, 'keyId=*');
+        const dedupeKey = `${severity}:${dedupeSummary}`;
         const prev = recentMessages.get(dedupeKey) || 0;
         if (now - prev < throttleMs) return;
         recentMessages.set(dedupeKey, now);
@@ -172,4 +272,5 @@ export function createBaileysSignalLogger({ onEvent = null, level = 'warn', thro
 
     return logger;
 }
+
 
