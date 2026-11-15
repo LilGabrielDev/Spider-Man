@@ -64,6 +64,17 @@ test('safeTeardownSocket flushes stores before closing and removing socket liste
   });
 
   assert.deepEqual(order, ['flushStores', 'end', 'ws.close', 'removeAllListeners']);
+
+  const bufferOrder = [];
+  await safeTeardownSocket({
+    end: () => bufferOrder.push('end'),
+    ws: { close: () => bufferOrder.push('ws.close') },
+    ev: {
+      removeAllListeners: () => bufferOrder.push('removeAllListeners'),
+      flush: () => bufferOrder.push('ev.flush'),
+    },
+  });
+  assert.deepEqual(bufferOrder, ['end', 'ws.close', 'removeAllListeners', 'ev.flush']);
 });
 
 test('fatal auth disconnect cancels pending transient reconnects and invalidates stale events', async () => {
