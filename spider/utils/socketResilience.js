@@ -917,6 +917,7 @@ export function installSocketResilience(
     userDevicesCache = null,
     failedEncryptJids = null,
     defaultPushName = 'Spider Man',
+    preKeyRetryDelayMs = DEFAULT_PREKEY_RETRY_DELAY_MS,
     logInfo = console.log,
     logError = null,
   } = {},
@@ -948,6 +949,7 @@ export function installSocketResilience(
         void ensureHealthyPreKeys(sock, {
           authDir,
           fsImpl,
+          retryDelayMs: preKeyRetryDelayMs,
           isSocketActive: () => !socketClosed,
           logInfo,
           logError,
