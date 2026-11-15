@@ -3,7 +3,16 @@ import { normalizeMeCredentials, parseJidParts } from './authState.js';
 
 const wrappedSockets = new WeakSet();
 const preKeyCheckedSockets = new WeakSet();
+const appStateSyncedSockets = new WeakSet();
+const appStateInFlightSockets = new WeakSet();
 const VALID_PN_DOMAINS = new Set(['s.whatsapp.net', 'hosted', 'c.us']);
+export const ALL_APP_STATE_COLLECTIONS = [
+  'critical_block',
+  'critical_unblock_low',
+  'regular_high',
+  'regular_low',
+  'regular',
+];
 
 function isPnOrHostedPnJid(jid) {
   const raw = String(jid || '').trim();
@@ -141,6 +150,89 @@ export async function ensureHealthyPreKeys(
     preKeyCheckedSockets.delete(sock);
     logError?.('Signal PreKey Replenish', null, null, err?.message || String(err));
     return false;
+  }
+}
+
+export function ensureFallbackMeName(creds, fallbackName = 'Spider Man') {
+  if (!creds?.me || typeof creds.me !== 'object') return false;
+  const current = String(creds.me.name || '').trim();
+  if (current) return false;
+  const safeName = String(fallbackName || 'Spider Man').replace(/@/g, '').trim() || 'Spider Man';
+  creds.me.name = safeName;
+  return true;
+}
+
+export function wrapPresenceResilience(sock, { defaultPushName = 'Spider Man' } = {}) {
+  if (!sock || typeof sock.sendPresenceUpdate !== 'function') return false;
+  ensureFallbackMeName(sock.authState?.creds, defaultPushName);
+  if (sock.sendPresenceUpdate.__spiderPresenceWrapped) return true;
+
+  const origSendPresenceUpdate = sock.sendPresenceUpdate.bind(sock);
+  const wrappedSendPresence = async (type, toJid) => {
+    if (type === 'available' || type === 'unavailable') {
+      ensureFallbackMeName(sock.authState?.creds, defaultPushName);
+    }
+    return origSendPresenceUpdate(type, toJid);
+  };
+  wrappedSendPresence.__spiderPresenceWrapped = true;
+  sock.sendPresenceUpdate = wrappedSendPresence;
+  return true;
+}
+
+export async function ensureActiveOnlinePresence(
+  sock,
+  { defaultPushName = 'Spider Man', logError = null } = {},
+) {
+  if (!sock || typeof sock !== 'object') return false;
+  ensureFallbackMeName(sock.authState?.creds, defaultPushName);
+  if (typeof sock.sendPresenceUpdate !== 'function') return false;
+  try {
+    await sock.sendPresenceUpdate('available');
+    return true;
+  } catch (err) {
+    logError?.('Presence Update', null, null, err?.message || String(err));
+    return false;
+  }
+}
+
+export async function ensureAppStateSynced(
+  sock,
+  { logInfo = null, logError = null } = {},
+) {
+  if (
+    !sock ||
+    typeof sock.resyncAppState !== 'function' ||
+    typeof sock.authState?.keys?.get !== 'function'
+  ) {
+    return false;
+  }
+  if (appStateSyncedSockets.has(sock) || appStateInFlightSockets.has(sock)) {
+    return false;
+  }
+
+  appStateInFlightSockets.add(sock);
+  try {
+    const versions = await sock.authState.keys.get(
+      'app-state-sync-version',
+      [...ALL_APP_STATE_COLLECTIONS],
+    );
+    const unsynced = ALL_APP_STATE_COLLECTIONS.filter((name) => !versions?.[name]);
+    if (unsynced.length === 0) {
+      appStateSyncedSockets.add(sock);
+      return false;
+    }
+
+    await sock.resyncAppState(unsynced, true);
+    appStateSyncedSockets.add(sock);
+    logInfo?.(
+      `[APP-STATE] Synced ${unsynced.length} app-state collection(s): ${unsynced.join(', ')}`,
+    );
+    return true;
+  } catch (err) {
+    logError?.('App State Sync', null, null, err?.message || String(err));
+    return false;
+  } finally {
+    appStateInFlightSockets.delete(sock);
   }
 }
 
@@ -690,6 +782,7 @@ export function wrapAckErrorRecovery(
         }
       } else if (errorCode === '463') {
         clearCachedUserDevices(userDevicesCache, remoteJid);
+        void ensureAppStateSynced(sock, { logError });
       }
     }
   });
@@ -731,6 +824,7 @@ export function installSocketResilience(
     groupCache = null,
     userDevicesCache = null,
     failedEncryptJids = null,
+    defaultPushName = 'Spider Man',
     logInfo = console.log,
     logError = null,
   } = {},
@@ -742,12 +836,41 @@ export function installSocketResilience(
   wrapSignalAndSenderKeyGuard(sock, { failedEncryptJids, userDevicesCache, logError });
   wrapAckErrorRecovery(sock, { groupCache, userDevicesCache, logError });
   wrapSendOptionsNormalization(sock);
+  wrapPresenceResilience(sock, { defaultPushName });
 
   if (sock?.ev && typeof sock.ev.on === 'function') {
-    sock.ev.on('connection.update', ({ connection }) => {
+    let appStateFallbackTimer = null;
+    sock.ev.on('connection.update', ({ connection, receivedPendingNotifications }) => {
+      if (connection === 'close') {
+        if (appStateFallbackTimer) {
+          clearTimeout(appStateFallbackTimer);
+          appStateFallbackTimer = null;
+        }
+      }
       if (connection === 'open') {
         normalizeMeCredentials(sock.authState?.creds);
         void ensureHealthyPreKeys(sock, { authDir, fsImpl, logInfo, logError });
+        void ensureActiveOnlinePresence(sock, { defaultPushName, logError });
+        if (!appStateSyncedSockets.has(sock) && !appStateFallbackTimer) {
+          appStateFallbackTimer = setTimeout(() => {
+            appStateFallbackTimer = null;
+            void ensureAppStateSynced(sock, { logInfo, logError });
+          }, 1500);
+          appStateFallbackTimer?.unref?.();
+        }
+      }
+      if (receivedPendingNotifications) {
+        if (appStateFallbackTimer) {
+          clearTimeout(appStateFallbackTimer);
+          appStateFallbackTimer = null;
+        }
+        void ensureAppStateSynced(sock, { logInfo, logError });
+      }
+    });
+    sock.ev.on('creds.update', (update) => {
+      if (update && typeof update === 'object' && update.myAppStateKeyId) {
+        appStateSyncedSockets.delete(sock);
+        void ensureAppStateSynced(sock, { logInfo, logError });
       }
     });
   }

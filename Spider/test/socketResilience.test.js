@@ -4,14 +4,19 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  ALL_APP_STATE_COLLECTIONS,
   clearCachedUserDevices,
   countLocalPreKeyFiles,
   createGuardedSignalKeyStore,
+  ensureActiveOnlinePresence,
+  ensureAppStateSynced,
+  ensureFallbackMeName,
   ensureHealthyPreKeys,
   installSocketResilience,
   syncMessageKeyAliases,
   wrapAckErrorRecovery,
   wrapLidMappingResilience,
+  wrapPresenceResilience,
   wrapSendOptionsNormalization,
   wrapSignalAndSenderKeyGuard,
 } from '../../spider/utils/socketResilience.js';
@@ -565,4 +570,107 @@ test('createGuardedSignalKeyStore and wrapSignalAndSenderKeyGuard prevent sender
   assert.deepEqual(persistedSets[0]['sender-key-memory']['120363@g.us'], {
     'goodrecipient:0@lid': true,
   });
+});
+
+test('wrapPresenceResilience and ensureActiveOnlinePresence prevent silent no-name drop that keeps sendActiveReceipts false', async () => {
+  const creds = { me: { id: '254700000001:5@s.whatsapp.net', name: '' } };
+  assert.equal(ensureFallbackMeName(creds, 'Spider Man'), true);
+  assert.equal(creds.me.name, 'Spider Man');
+  // Does not overwrite an existing non-empty name
+  creds.me.name = 'Custom Bot';
+  assert.equal(ensureFallbackMeName(creds, 'Spider Man'), false);
+  assert.equal(creds.me.name, 'Custom Bot');
+
+  const presenceCalls = [];
+  const sock = {
+    authState: { creds: { me: { id: '254700000001:5@s.whatsapp.net' } } },
+    sendPresenceUpdate: async (type, toJid) => {
+      // Simulate Baileys chats.js:843 returning early without emitting isOnline if !me.name
+      if ((type === 'available' || type === 'unavailable') && !sock.authState.creds.me?.name) {
+        return 'ignored-no-name';
+      }
+      presenceCalls.push({ type, toJid, meName: sock.authState.creds.me?.name });
+      return 'sent';
+    },
+  };
+
+  assert.equal(wrapPresenceResilience(sock, { defaultPushName: 'Spider Man' }), true);
+  assert.equal(wrapPresenceResilience(sock, { defaultPushName: 'Spider Man' }), true);
+
+  // Even if me.name is cleared later before sendPresenceUpdate('available'), wrapper restores it
+  sock.authState.creds.me.name = '';
+  const ok = await ensureActiveOnlinePresence(sock, { defaultPushName: 'Spider Man' });
+  assert.equal(ok, true);
+  assert.deepEqual(presenceCalls, [{ type: 'available', toJid: undefined, meName: 'Spider Man' }]);
+});
+
+test('ensureAppStateSynced syncs unsynced collections on receivedPendingNotifications and key arrival', async () => {
+  const ev = createEmitter();
+  const syncedBatches = [];
+  const storedVersions = { critical_block: { version: 1 } };
+
+  const sock = {
+    ev,
+    authState: {
+      creds: {
+        me: { id: '254700000001:5@s.whatsapp.net' },
+        nextPreKeyId: 1,
+      },
+      keys: {
+        get: async (type, names) => {
+          if (type !== 'app-state-sync-version') return {};
+          const res = {};
+          for (const n of names) {
+            if (storedVersions[n]) res[n] = storedVersions[n];
+          }
+          return res;
+        },
+        set: async () => {},
+      },
+    },
+    resyncAppState: async (collections, isInitialSync) => {
+      syncedBatches.push({ collections, isInitialSync });
+      for (const c of collections) {
+        storedVersions[c] = { version: 1 };
+      }
+    },
+    sendPresenceUpdate: async () => {},
+    signalRepository: {
+      lidMapping: { getLIDsForPNs: async () => [] },
+    },
+    query: async () => ({ tag: 'iq', attrs: { type: 'result' }, content: [] }),
+    sendMessage: async (_j, _c, o) => o,
+  };
+
+  installSocketResilience(sock, { authDir: '', logInfo: () => {} });
+
+  ev.emit('connection.update', { receivedPendingNotifications: true });
+  await new Promise((r) => setTimeout(r, 20));
+
+  assert.equal(syncedBatches.length, 1);
+  assert.equal(syncedBatches[0].isInitialSync, true);
+  assert.deepEqual(
+    syncedBatches[0].collections,
+    ALL_APP_STATE_COLLECTIONS.filter((c) => c !== 'critical_block'),
+  );
+
+  // Subsequent call when all collections have versions is a no-op
+  const secondRun = await ensureAppStateSynced(sock, { logInfo: () => {} });
+  assert.equal(secondRun, false);
+  assert.equal(syncedBatches.length, 1);
+
+  // New myAppStateKeyId triggers re-check if any collection became unsynced
+  delete storedVersions.regular_high;
+  ev.emit('creds.update', { myAppStateKeyId: 'new-key-id' });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(syncedBatches.length, 2);
+  assert.deepEqual(syncedBatches[1], { collections: ['regular_high'], isInitialSync: true });
+});
+
+test('spider/index.js enables markOnlineOnConnect for active delivery receipts and updated version fallback', () => {
+  const source = fs.readFileSync(path.resolve(process.cwd(), 'spider/index.js'), 'utf8');
+  assert.match(source, /'markOnlineOnConnect':!!\[\]/);
+  assert.doesNotMatch(source, /1027934701/);
+  assert.match(source, /_0xbaileysDefaultVersion/);
+  assert.match(source, /defaultPushName:/);
 });
