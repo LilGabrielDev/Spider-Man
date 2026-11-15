@@ -11,7 +11,7 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKER_SCRIPT = path.join(__dirname, "spider", "index.js");
 
-clearTemporarySessionsAndCache({ cwd: __dirname, maxAgeMs: 60 * 1000, tempMaxAgeMs: 60 * 1000 });
+clearTemporarySessionsAndCache({ cwd: __dirname, maxAgeMs: 60 * 1000, tempMaxAgeMs: 60 * 1000, preserveSignalKeys: true });
 
 try {
     await resolveShortSession();
@@ -106,7 +106,7 @@ function startWorker() {
         if (restartRequested || code === RESTART_EXIT_CODE) {
             workerRestartAttempts = 0;
             console.log("🔄 [SUPERVISOR] Reloading Spider Man bot worker without stopping panel process...");
-            clearTemporarySessionsAndCache({ cwd: __dirname });
+            clearTemporarySessionsAndCache({ cwd: __dirname, preserveSignalKeys: true });
             try {
                 await resolveShortSession();
             } catch (error) {

@@ -6,6 +6,7 @@ import path from 'node:path';
 import { proto } from '@whiskeysockets/baileys';
 import {
   configureMessageRetryStore,
+  createPreSendPatchCapture,
   flushMessageRetryStore,
   getMessageForRetry,
   installMessageRetryStore,
@@ -245,4 +246,41 @@ test('installMessageRetryStore serializes concurrent sends to aliased PN and LID
     `end:${lid}:second`,
   ]);
   resetMessageRetryStore();
+});
+
+test('createPreSendPatchCapture caches outbound payload BEFORE sendMessage returns', async () => {
+  resetMessageRetryStore();
+  const patcher = createPreSendPatchCapture();
+  let midFlightRetryHit = null;
+  let capturedMsgId = null;
+
+  const sock = {
+    user: { id: '254712345678:12@s.whatsapp.net' },
+    sendMessage: async (jid, content, options) => {
+      capturedMsgId = options?.messageId;
+      assert.ok(capturedMsgId, 'live socket must assign deterministic messageId before dispatch');
+      const protoPayload = proto.Message.fromObject({
+        extendedTextMessage: { text: content.text },
+      });
+      await patcher(protoPayload, [jid]);
+      midFlightRetryHit = await getMessageForRetry({ remoteJid: jid, id: capturedMsgId });
+      return { key: { remoteJid: jid, id: capturedMsgId, fromMe: true }, message: protoPayload };
+    },
+  };
+
+  installMessageRetryStore(sock);
+  const res = await sock.sendMessage(groupA, { text: 'menu output' });
+  assert.equal(res.key.id, capturedMsgId);
+  assert.equal(midFlightRetryHit?.extendedTextMessage?.text, 'menu output');
+  resetMessageRetryStore();
+});
+
+test('spider/index.js wires hardened auth state, connection controller, signal guard, and pre-send capture', () => {
+  const source = fs.readFileSync(path.resolve(process.cwd(), 'spider/index.js'), 'utf8');
+  assert.match(source, /useHardenedMultiFileAuthState\(/);
+  assert.match(source, /createConnectionController\(/);
+  assert.match(source, /createGuardedSignalKeyStore\(/);
+  assert.match(source, /'patchMessageBeforeSending':createPreSendPatchCapture\(\)/);
+  assert.match(source, /createBaileysSignalLogger\(/);
+  assert.match(source, /'preserveSignalKeys':!!\[\]/);
 });

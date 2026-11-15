@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import path from 'node:path';
+import { normalizeMeCredentials, parseJidParts } from './authState.js';
 
 const wrappedSockets = new WeakSet();
 const preKeyCheckedSockets = new WeakSet();
@@ -32,6 +32,19 @@ function normalizePnJid(jid) {
     return `${raw.slice(0, -5)}@s.whatsapp.net`;
   }
   return raw;
+}
+
+function resolveEffectiveLidIdentity(candidateId, credsMe) {
+  if (!candidateId || !credsMe?.id) return candidateId;
+  const candParts = parseJidParts(candidateId);
+  const meParts = parseJidParts(credsMe.id);
+  if (!candParts || !meParts) return candidateId;
+  const isLidServer = candParts.server === 'lid' || candParts.server === 'hosted.lid';
+  if (!isLidServer) return candidateId;
+  if (typeof meParts.device === 'number' && meParts.device > 0 && (candParts.device === undefined || candParts.device === 0)) {
+    return `${candParts.user}:${meParts.device}@${candParts.server}`;
+  }
+  return candidateId;
 }
 
 function extractEphemeralExpiration(quotedMsg) {
@@ -196,6 +209,55 @@ export function syncMessageKeyAliases(
   return updated;
 }
 
+function stripPartialEncryptErrors(iqResult, logError) {
+  if (!iqResult || typeof iqResult !== 'object' || !Array.isArray(iqResult.content)) {
+    return iqResult;
+  }
+  const listIdx = iqResult.content.findIndex((child) => child?.tag === 'list');
+  if (listIdx === -1) return iqResult;
+
+  const listNode = iqResult.content[listIdx];
+  if (!Array.isArray(listNode?.content) || listNode.content.length === 0) {
+    return iqResult;
+  }
+
+  const userNodes = listNode.content.filter((child) => child?.tag === 'user');
+  if (userNodes.length === 0) return iqResult;
+
+  const validUsers = [];
+  const erroredCodes = [];
+  for (const child of listNode.content) {
+    if (child?.tag !== 'user') {
+      validUsers.push(child);
+      continue;
+    }
+    const errChild = Array.isArray(child.content)
+      ? child.content.find((sub) => sub?.tag === 'error')
+      : null;
+    if (errChild) {
+      erroredCodes.push(String(errChild?.attrs?.code || errChild?.attrs?.text || 'error'));
+    } else {
+      validUsers.push(child);
+    }
+  }
+
+  // Only strip failed <user> children if at least one valid user bundle survived
+  const validUserCount = validUsers.filter((child) => child?.tag === 'user').length;
+  if (erroredCodes.length > 0 && validUserCount > 0) {
+    logError?.(
+      'Encrypt PreKey Fetch',
+      null,
+      null,
+      `Isolated ${erroredCodes.length} errored recipient key bundle(s) [${erroredCodes.join(',')}] while injecting ${validUserCount} valid session(s)`,
+    );
+    const nextContent = [...iqResult.content];
+    nextContent[listIdx] = { ...listNode, content: validUsers };
+    return { ...iqResult, content: nextContent };
+  }
+
+  return iqResult;
+}
+
 export function wrapLidMappingResilience(sock, { logError = null } = {}) {
   const signalRepository = sock?.signalRepository;
   const lidMapping = signalRepository?.lidMapping;
@@ -344,6 +406,8 @@ export function wrapLidMappingResilience(sock, { logError = null } = {}) {
             return { tag: 'iq', attrs: { type: 'result' }, content: [] };
           }
         }
+        const rawRes = await origQuery(node, timeoutMs);
+        return stripPartialEncryptErrors(rawRes, logError);
       }
       return origQuery(node, timeoutMs);
     };
@@ -369,6 +433,198 @@ export function clearCachedUserDevices(userDevicesCache, jid) {
     if (userDevicesCache.del(key)) cleared = true;
   }
   return cleared;
+}
+
+/**
+ * Wraps SignalKeyStore (outside makeWASocket / makeCacheableSignalKeyStore) so that
+ * any recipient device whose `encryptMessage` failed during a group SKDM fanout
+ * is never persisted as `true` in `sender-key-memory`.
+ */
+export function createGuardedSignalKeyStore(keys, failedEncryptJids) {
+  if (!keys || typeof keys.get !== 'function' || typeof keys.set !== 'function') {
+    return keys;
+  }
+  if (keys.__spiderGuarded) return keys;
+  const failureMap = failedEncryptJids instanceof Map ? failedEncryptJids : new Map();
+  const FAILURE_WINDOW_MS = 30_000;
+
+  return {
+    __spiderGuarded: true,
+    __failedEncryptJids: failureMap,
+    get: (...args) => keys.get(...args),
+    clear: keys.clear ? (...args) => keys.clear(...args) : undefined,
+    set: async (data) => {
+      if (data && typeof data === 'object' && data['sender-key-memory']) {
+        const now = Date.now();
+        for (const [k, ts] of failureMap.entries()) {
+          if (now - ts > FAILURE_WINDOW_MS) {
+            failureMap.delete(k);
+          }
+        }
+        if (failureMap.size > 0) {
+          const nextMemory = { ...data['sender-key-memory'] };
+          for (const [memoryKey, valueMap] of Object.entries(nextMemory)) {
+            if (!valueMap || typeof valueMap !== 'object') continue;
+            let mutated = false;
+            const cleanedMap = { ...valueMap };
+            for (const failedJid of failureMap.keys()) {
+              if (Object.prototype.hasOwnProperty.call(cleanedMap, failedJid)) {
+                delete cleanedMap[failedJid];
+                mutated = true;
+              }
+            }
+            if (mutated) {
+              nextMemory[memoryKey] = cleanedMap;
+            }
+          }
+          data = { ...data, 'sender-key-memory': nextMemory };
+        }
+      }
+      return keys.set(data);
+    },
+  };
+}
+
+export function wrapSignalAndSenderKeyGuard(
+  sock,
+  { failedEncryptJids = null, userDevicesCache = null, logError = null } = {},
+) {
+  if (!sock || typeof sock !== 'object') return false;
+  if (sock.__spiderSignalGuardWrapped) return true;
+  sock.__spiderSignalGuardWrapped = true;
+
+  normalizeMeCredentials(sock.authState?.creds);
+
+  const trackedFailures =
+    failedEncryptJids instanceof Map
+      ? failedEncryptJids
+      : sock.authState?.keys?.__failedEncryptJids instanceof Map
+        ? sock.authState.keys.__failedEncryptJids
+        : new Map();
+  const refreshCooldown = new Map();
+
+  if (sock.ev && typeof sock.ev.on === 'function') {
+    sock.ev.on('creds.update', (update) => {
+      if (update && typeof update === 'object' && update.me) {
+        const mergedMe = {
+          ...(sock.authState?.creds?.me || {}),
+          ...update.me,
+        };
+        if (normalizeMeCredentials(mergedMe)) {
+          update.me.lid = mergedMe.lid;
+        }
+      }
+      normalizeMeCredentials(sock.authState?.creds);
+    });
+  }
+
+  const repo = sock.signalRepository;
+  if (!repo || typeof repo !== 'object') return true;
+
+  if (typeof repo.encryptGroupMessage === 'function') {
+    const origEncryptGroup = repo.encryptGroupMessage.bind(repo);
+    repo.encryptGroupMessage = async (opts) => {
+      if (opts && typeof opts === 'object' && opts.meId) {
+        const nextMeId = resolveEffectiveLidIdentity(opts.meId, sock.authState?.creds?.me);
+        if (nextMeId !== opts.meId) {
+          opts = { ...opts, meId: nextMeId };
+        }
+      }
+      try {
+        return await origEncryptGroup(opts);
+      } catch (err) {
+        logError?.('Signal Group Encrypt', null, opts?.group || null, err?.message || String(err));
+        throw err;
+      }
+    };
+  }
+
+  if (typeof repo.hasSenderKey === 'function') {
+    const origHasSenderKey = repo.hasSenderKey.bind(repo);
+    repo.hasSenderKey = async (opts) => {
+      if (opts && typeof opts === 'object' && opts.meId) {
+        const nextMeId = resolveEffectiveLidIdentity(opts.meId, sock.authState?.creds?.me);
+        if (nextMeId !== opts.meId) {
+          opts = { ...opts, meId: nextMeId };
+        }
+      }
+      return origHasSenderKey(opts);
+    };
+  }
+
+  if (typeof repo.getSenderKeyDistributionMessage === 'function') {
+    const origGetSkdm = repo.getSenderKeyDistributionMessage.bind(repo);
+    repo.getSenderKeyDistributionMessage = async (opts) => {
+      if (opts && typeof opts === 'object' && opts.meId) {
+        const nextMeId = resolveEffectiveLidIdentity(opts.meId, sock.authState?.creds?.me);
+        if (nextMeId !== opts.meId) {
+          opts = { ...opts, meId: nextMeId };
+        }
+      }
+      return origGetSkdm(opts);
+    };
+  }
+
+  if (typeof repo.encryptMessage === 'function') {
+    const origEncryptMessage = repo.encryptMessage.bind(repo);
+    repo.encryptMessage = async (opts) => {
+      try {
+        return await origEncryptMessage(opts);
+      } catch (err) {
+        const jid = opts?.jid;
+        if (jid) {
+          trackedFailures.set(jid, Date.now());
+          if (trackedFailures.size > 500) {
+            trackedFailures.delete(trackedFailures.keys().next().value);
+          }
+          clearCachedUserDevices(userDevicesCache, jid);
+          logError?.('Signal Encrypt Failure', null, jid, err?.message || String(err));
+          const now = Date.now();
+          const lastRefresh = refreshCooldown.get(jid) || 0;
+          if (typeof sock.assertSessions === 'function' && now - lastRefresh >= 10_000) {
+            refreshCooldown.set(jid, now);
+            if (refreshCooldown.size > 200) {
+              refreshCooldown.delete(refreshCooldown.keys().next().value);
+            }
+            Promise.resolve(sock.assertSessions([jid], true)).catch(() => {});
+          }
+        }
+        throw err;
+      }
+    };
+  }
+
+  if (typeof repo.decryptMessage === 'function') {
+    const origDecryptMessage = repo.decryptMessage.bind(repo);
+    repo.decryptMessage = async (opts) => {
+      try {
+        return await origDecryptMessage(opts);
+      } catch (err) {
+        const msg = err?.message || String(err);
+        if (err?.name !== 'MessageCounterError' && !msg.includes('Key used already')) {
+          logError?.('Signal Decrypt Failure', null, opts?.jid || null, msg);
+        }
+        throw err;
+      }
+    };
+  }
+
+  if (typeof repo.decryptGroupMessage === 'function') {
+    const origDecryptGroupMessage = repo.decryptGroupMessage.bind(repo);
+    repo.decryptGroupMessage = async (opts) => {
+      try {
+        return await origDecryptGroupMessage(opts);
+      } catch (err) {
+        const msg = err?.message || String(err);
+        if (err?.name !== 'MessageCounterError' && !msg.includes('Key used already')) {
+          logError?.('Signal Group Decrypt Failure', null, opts?.group || null, msg);
+        }
+        throw err;
+      }
+    };
+  }
+
+  return true;
 }
 
 export function wrapAckErrorRecovery(
@@ -417,9 +673,23 @@ export function wrapAckErrorRecovery(
         clearCachedUserDevices(userDevicesCache, remoteJid);
         if (remoteJid.endsWith('@g.us')) {
           groupCache?.delete?.(remoteJid);
-        } else if (typeof sock.assertSessions === 'function' && (isPnOrHostedPnJid(remoteJid) || isLidOrHostedLidJid(remoteJid))) {
+          const keysSet = sock?.authState?.keys?.set;
+          if (typeof keysSet === 'function') {
+            const meId = sock.authState?.creds?.me?.id;
+            const meLid = sock.authState?.creds?.me?.lid;
+            const clears = { [remoteJid]: null };
+            if (meId) clears[`${remoteJid}:${meId}`] = null;
+            if (meLid) clears[`${remoteJid}:${meLid}`] = null;
+            Promise.resolve(keysSet({ 'sender-key-memory': clears })).catch(() => {});
+          }
+        } else if (
+          typeof sock.assertSessions === 'function' &&
+          (isPnOrHostedPnJid(remoteJid) || isLidOrHostedLidJid(remoteJid))
+        ) {
           Promise.resolve(sock.assertSessions([remoteJid], true)).catch(() => {});
         }
+      } else if (errorCode === '463') {
+        clearCachedUserDevices(userDevicesCache, remoteJid);
       }
     }
   });
@@ -460,6 +730,7 @@ export function installSocketResilience(
     fsImpl = fs,
     groupCache = null,
     userDevicesCache = null,
+    failedEncryptJids = null,
     logInfo = console.log,
     logError = null,
   } = {},
@@ -468,12 +739,14 @@ export function installSocketResilience(
   if (wrappedSockets.has(sock)) return true;
 
   wrapLidMappingResilience(sock, { logError });
+  wrapSignalAndSenderKeyGuard(sock, { failedEncryptJids, userDevicesCache, logError });
   wrapAckErrorRecovery(sock, { groupCache, userDevicesCache, logError });
   wrapSendOptionsNormalization(sock);
 
   if (sock?.ev && typeof sock.ev.on === 'function') {
     sock.ev.on('connection.update', ({ connection }) => {
       if (connection === 'open') {
+        normalizeMeCredentials(sock.authState?.creds);
         void ensureHealthyPreKeys(sock, { authDir, fsImpl, logInfo, logError });
       }
     });
