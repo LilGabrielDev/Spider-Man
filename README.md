@@ -56,7 +56,6 @@ Copy `.env-sample` to `.env` and set your variables:
 | `MODE` | Bot mode (`private` or `public`) | `private` |
 | `PREFIXES` | Comma-separated command prefixes | `.` |
 | `PORT` | HTTP server port | `3000` |
-| `OWNER_NUMBER` | Owner phone number (digits only) | — |
 | `OWNER_NAME` | Owner display name | `Spider Man` |
 | `BOT_NAME` | Bot display name | `Spider Man` |
 | `BOT_PIC` | Bot avatar image URL | — |

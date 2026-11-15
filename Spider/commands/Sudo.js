@@ -1,8 +1,8 @@
-import { normalizeJid } from '../france/index.js';
 import { loadSudoList, saveSudoList } from '../../spider/utils/sudoStore.js';
 import { t } from '../france/translator.js';
 import { extractPhoneDigits } from '../../spider/utils/groupRoleResolver.js';
 import { resolveTargetFromMessage } from '../../spider/utils/groupActionHelper.js';
+import { normalizeSudoTarget } from '../../spider/utils/userJid.js';
 
 export const commands = [
   {
@@ -27,7 +27,11 @@ export const commands = [
           return sock.sendMessage(from, { text: emptyMsg }, { quoted: msg });
         }
         const header = await t(from, 'sudo', 'listHeader');
-        const listText = header + users.map((u, idx) => `${idx + 1}. +${u}`).join('\n');
+        const listText =
+          header +
+          users
+            .map((u, idx) => `${idx + 1}. ${String(u).includes('@') ? u : `+${u}`}`)
+            .join('\n');
         return sock.sendMessage(from, { text: listText }, { quoted: msg });
       }
 
@@ -58,10 +62,9 @@ export const commands = [
         return sock.sendMessage(from, { text: noReply }, { quoted: msg });
       }
 
-      const number =
-        resolved.phone ||
-        extractPhoneDigits(targetJid) ||
-        normalizeJid(targetJid).split('@')[0];
+      const number = normalizeSudoTarget(
+        resolved.phone || extractPhoneDigits(targetJid) || targetJid,
+      );
 
       if (!number) {
         const noReply = await t(from, 'sudo', 'noReply');

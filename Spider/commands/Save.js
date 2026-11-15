@@ -3,14 +3,7 @@ import { SILENT_LOGGER } from '../../spider/utils/privacyLogger.js';
 import config from '../../spider/config.js';
 import { t } from '../france/translator.js';
 import { extractContextInfo, sendWithAckCheck } from '../../spider/utils/groupActionHelper.js';
-
-function getOwnerJid() {
-  if (!config.OWNER_NUMBER) return null;
-  let owner = config.OWNER_NUMBER.toString();
-  owner = owner.replace(/[+\s]/g, '');
-  owner = owner.replace(/[^0-9]/g, '');
-  return `${owner}@s.whatsapp.net`;
-}
+import { resolveRuntimeOwnerJid } from '../../spider/utils/userJid.js';
 
 export const commands = [
   {
@@ -23,7 +16,7 @@ export const commands = [
         const noReply = await t(from, 'save', 'noReply');
         return sock.sendMessage(from, { text: noReply }, { quoted: msg });
       }
-      const ownerJid = getOwnerJid();
+      const ownerJid = resolveRuntimeOwnerJid({ sock, config });
       if (!ownerJid) {
         const noOwner = await t(from, 'save', 'noOwner');
         return sock.sendMessage(from, { text: noOwner }, { quoted: msg });

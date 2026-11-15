@@ -1,28 +1,39 @@
 import { ownerNumber } from '../../config/settings.js';
 import { getSudoUsers } from '../../database/config.js';
-
-function digitsOnly(jid) {
-  return String(jid || '').split('@')[0].split(':')[0].replace(/\D/g, '');
-}
+import {
+  cleanUserJid,
+  getLidFromJid,
+  getPhoneFromJid,
+  isOwnerIdentity,
+  normalizeSudoTarget,
+} from '../../../../../spider/utils/userJid.js';
 
 export default async function Ownermiddleware(context = {}, next) {
   const client = context.client || context.sock;
   const m = context.m || {};
-  const senderDigits = digitsOnly(context.sender || m.sender || m.key?.participant || m.key?.remoteJid);
-  const ownerDigits = digitsOnly(ownerNumber || process.env.OWNER_NUMBER);
+  const senderJid = cleanUserJid(context.sender || m.sender || m.key?.participant || m.key?.remoteJid);
+  const senderPhone = getPhoneFromJid(senderJid);
+  const senderLid = getLidFromJid(senderJid);
 
   let isAuthorized = Boolean(
     context.isOwner ||
       context.isSuperUser ||
       m.isOwner ||
       m.fromMe ||
-      (ownerDigits && senderDigits && ownerDigits === senderDigits),
+      isOwnerIdentity({
+        jid: senderJid,
+        ownerNumber,
+        sock: client,
+      }),
   );
 
-  if (!isAuthorized && senderDigits) {
+  if (!isAuthorized && (senderPhone || senderLid)) {
     try {
       const sudoUsers = await getSudoUsers();
-      isAuthorized = sudoUsers.some((u) => digitsOnly(u) === senderDigits);
+      isAuthorized = sudoUsers.some((u) => {
+        const norm = normalizeSudoTarget(u);
+        return Boolean(norm && ((senderPhone && norm === senderPhone) || (senderLid && norm === senderLid)));
+      });
     } catch {
       // keep existing authorization value
     }

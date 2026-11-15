@@ -10,23 +10,29 @@ function normalizeDigits(value) {
 export function cleanJid(jid) {
   const raw = String(jid || '').trim();
   if (!raw) return '';
-  if (raw.includes(':')) {
+  const atIdx = raw.indexOf('@');
+  if (atIdx <= 0) {
     const colonIdx = raw.indexOf(':');
-    const atIdx = raw.indexOf('@', colonIdx);
-    if (colonIdx > 0 && atIdx > colonIdx) {
-      return `${raw.slice(0, colonIdx)}${raw.slice(atIdx)}`;
-    }
-    if (colonIdx > 0 && !raw.includes('@')) {
-      return raw.slice(0, colonIdx);
-    }
+    return colonIdx > 0 ? raw.slice(0, colonIdx) : raw;
   }
-  return raw;
+  let userPart = raw.slice(0, atIdx);
+  const colonIdx = userPart.indexOf(':');
+  if (colonIdx > 0) {
+    userPart = userPart.slice(0, colonIdx);
+  }
+  let domain = raw.slice(atIdx + 1).trim().toLowerCase();
+  if (domain === 'c.us' || domain === 'hosted') {
+    domain = 's.whatsapp.net';
+  } else if (domain === 'hosted.lid') {
+    domain = 'lid';
+  }
+  return `${userPart}@${domain}`;
 }
 
 export function extractLid(jid) {
   const cleaned = cleanJid(jid);
   if (!cleaned) return '';
-  const match = cleaned.match(/^([^@]+)@lid$/i);
+  const match = cleaned.match(/^([^@]+)@(?:lid|hosted\.lid)$/i);
   return match ? `${match[1]}@lid`.toLowerCase() : '';
 }
 

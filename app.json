@@ -19,11 +19,6 @@
       "value": ".",
       "required": false
     },
-    "OWNER_NUMBER": {
-      "description": "Owner phone number, digits only; leave blank to use the linked bot account",
-      "value": "",
-      "required": false
-    },
     "OWNER_NAME": {
       "description": "Owner display name",
       "value": "Spider Man",
@@ -55,10 +50,6 @@
     },
     "SESSION_ID": {
       "description": "LIL~gzip-base64 session or plain base64-encoded creds.json; both formats are accepted",
-      "required": false
-    },
-    "USER_LID": {
-      "description": "Optional comma-separated owner WhatsApp LIDs",
       "required": false
     },
     "TZ": {

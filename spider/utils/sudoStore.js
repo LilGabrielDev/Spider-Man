@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeSudoTarget } from "./userJid.js";
 
 function getDefaultSudoPath() {
   return path.join(process.cwd(), "data", "sudo.json");
@@ -9,9 +10,8 @@ function getLegacySudoPath() {
   return path.join(process.cwd(), "sudo.json");
 }
 
-function normalizePhone(value) {
-  const digits = String(value || "").split(":")[0].split("@")[0].replace(/\D/g, "");
-  return digits;
+function normalizeEntry(value) {
+  return normalizeSudoTarget(value) || "";
 }
 
 export function loadSudoList(filePath) {
@@ -21,7 +21,7 @@ export function loadSudoList(filePath) {
     try {
       const value = JSON.parse(fs.readFileSync(target, "utf8"));
       const entries = Array.isArray(value) ? value : value?.users ?? value?.sudo ?? [];
-      return new Set(entries.map((entry) => normalizePhone(entry) || String(entry).trim()).filter(Boolean));
+      return new Set(entries.map((entry) => normalizeEntry(entry)).filter(Boolean));
     } catch {
       return null;
     }
@@ -36,7 +36,7 @@ export function loadSudoList(filePath) {
 export function saveSudoList(listOrSet, filePath) {
   const resolvedPath = filePath || getDefaultSudoPath();
   const entries = Array.from(listOrSet || [])
-    .map((entry) => normalizePhone(entry) || String(entry).trim())
+    .map((entry) => normalizeEntry(entry))
     .filter(Boolean);
   const unique = Array.from(new Set(entries));
   try {
@@ -50,23 +50,23 @@ export function saveSudoList(listOrSet, filePath) {
   return unique;
 }
 
-export function isSudoNumber(phone, filePath) {
-  const target = normalizePhone(phone);
+export function isSudoNumber(jidOrPhone, filePath) {
+  const target = normalizeEntry(jidOrPhone);
   if (!target) return false;
   if (globalThis.ALLOWED_USERS instanceof Set) {
     for (const entry of globalThis.ALLOWED_USERS) {
-      if (normalizePhone(entry) === target) return true;
+      if (normalizeEntry(entry) === target) return true;
     }
   }
   const stored = loadSudoList(filePath);
   for (const entry of stored) {
-    if (normalizePhone(entry) === target) return true;
+    if (normalizeEntry(entry) === target) return true;
   }
   return false;
 }
 
-export function addSudoNumber(phone, filePath) {
-  const target = normalizePhone(phone);
+export function addSudoNumber(jidOrPhone, filePath) {
+  const target = normalizeEntry(jidOrPhone);
   if (!target) return false;
   if (!(globalThis.ALLOWED_USERS instanceof Set)) {
     globalThis.ALLOWED_USERS = loadSudoList(filePath);
@@ -78,23 +78,22 @@ export function addSudoNumber(phone, filePath) {
   return true;
 }
 
-export function removeSudoNumber(phone, filePath) {
-  const target = normalizePhone(phone);
+export function removeSudoNumber(jidOrPhone, filePath) {
+  const target = normalizeEntry(jidOrPhone);
   if (!target) return false;
   if (globalThis.ALLOWED_USERS instanceof Set) {
     for (const entry of Array.from(globalThis.ALLOWED_USERS)) {
-      if (normalizePhone(entry) === target || String(entry) === String(phone)) {
+      if (normalizeEntry(entry) === target || String(entry) === String(jidOrPhone)) {
         globalThis.ALLOWED_USERS.delete(entry);
       }
     }
   }
   const next = loadSudoList(filePath);
   for (const entry of Array.from(next)) {
-    if (normalizePhone(entry) === target || String(entry) === String(phone)) {
+    if (normalizeEntry(entry) === target || String(entry) === String(jidOrPhone)) {
       next.delete(entry);
     }
   }
   saveSudoList(next, filePath);
   return true;
 }
-

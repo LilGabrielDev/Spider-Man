@@ -17,8 +17,6 @@ services:
         sync: false
       - key: SESSION
         sync: false
-      - key: OWNER_NUMBER
-        sync: false
       - key: OWNER_NAME
         value: Spider Man
       - key: BOT_NAME
