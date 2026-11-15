@@ -3,9 +3,14 @@ import { normalizeMeCredentials, parseJidParts } from './authState.js';
 
 const wrappedSockets = new WeakSet();
 const preKeyCheckedSockets = new WeakSet();
+const preKeyRetryTimers = new WeakMap();
+const preKeyRetryAttempts = new WeakMap();
+const preKeyWriteCounters = new WeakMap();
 const appStateSyncedSockets = new WeakSet();
 const appStateInFlightSockets = new WeakSet();
 const VALID_PN_DOMAINS = new Set(['s.whatsapp.net', 'hosted', 'c.us']);
+export const DEFAULT_PREKEY_RETRY_DELAY_MS = 5_500;
+export const MAX_PREKEY_THROTTLE_RETRIES = 2;
 export const ALL_APP_STATE_COLLECTIONS = [
   'critical_block',
   'critical_unblock_low',
@@ -13,6 +18,39 @@ export const ALL_APP_STATE_COLLECTIONS = [
   'regular_low',
   'regular',
 ];
+
+function recordPreKeyWriteIfPresent(keys, data) {
+  if (!keys || !data || typeof data !== 'object') return;
+  const preKeys = data['pre-key'];
+  if (preKeys && typeof preKeys === 'object' && Object.keys(preKeys).length > 0) {
+    preKeyWriteCounters.set(keys, (preKeyWriteCounters.get(keys) || 0) + 1);
+  }
+}
+
+function getPreKeyWriteCount(keys) {
+  return keys ? preKeyWriteCounters.get(keys) || 0 : 0;
+}
+
+function clearPreKeyRetryTimer(sock) {
+  if (!sock || typeof sock !== 'object') return;
+  const timer = preKeyRetryTimers.get(sock);
+  if (timer) {
+    clearTimeout(timer);
+    preKeyRetryTimers.delete(sock);
+  }
+}
+
+function ensurePreKeyWriteTracking(keys) {
+  if (!keys || typeof keys.set !== 'function') return false;
+  if (keys.__spiderGuarded || keys.__spiderPreKeyTracked) return true;
+  const origSet = keys.set.bind(keys);
+  keys.set = async (data) => {
+    recordPreKeyWriteIfPresent(keys, data);
+    return origSet(data);
+  };
+  keys.__spiderPreKeyTracked = true;
+  return true;
+}
 
 function isPnOrHostedPnJid(jid) {
   const raw = String(jid || '').trim();
@@ -106,6 +144,10 @@ export async function ensureHealthyPreKeys(
     fsImpl = fs,
     minLocalPreKeys = 15,
     replenishCount = 50,
+    retryDelayMs = DEFAULT_PREKEY_RETRY_DELAY_MS,
+    maxRetries = MAX_PREKEY_THROTTLE_RETRIES,
+    retryOnThrottle = true,
+    isSocketActive = null,
     logInfo = console.log,
     logError = null,
   } = {},
@@ -113,14 +155,17 @@ export async function ensureHealthyPreKeys(
   if (!sock || typeof sock.uploadPreKeys !== 'function') return false;
   if (preKeyCheckedSockets.has(sock)) return false;
 
+  const keysObj = sock?.authState?.keys;
+  const hasObservableKeysSet = ensurePreKeyWriteTracking(keysObj);
+
   const nextPreKeyId = Number(sock?.authState?.creds?.nextPreKeyId || 0);
   const localCount = authDir ? countLocalPreKeyFiles(authDir, fsImpl) : 0;
 
   let currentExists = true;
-  if (nextPreKeyId > 1 && typeof sock?.authState?.keys?.get === 'function') {
+  if (nextPreKeyId > 1 && typeof keysObj?.get === 'function') {
     try {
       const currentId = String(nextPreKeyId - 1);
-      const res = await sock.authState.keys.get('pre-key', [currentId]);
+      const res = await keysObj.get('pre-key', [currentId]);
       currentExists = Boolean(res?.[currentId]);
     } catch {
       currentExists = localCount > 0;
@@ -135,13 +180,57 @@ export async function ensureHealthyPreKeys(
     (nextPreKeyId > 1 && !currentExists);
 
   if (!needsReplenish) {
+    clearPreKeyRetryTimer(sock);
+    preKeyRetryAttempts.delete(sock);
     preKeyCheckedSockets.add(sock);
     return false;
   }
 
+  const writesBefore = getPreKeyWriteCount(keysObj);
   preKeyCheckedSockets.add(sock);
   try {
     await sock.uploadPreKeys(replenishCount);
+
+    const writesAfter = getPreKeyWriteCount(keysObj);
+    const afterNextPreKeyId = Number(sock?.authState?.creds?.nextPreKeyId || 0);
+    const afterLocalCount = authDir ? countLocalPreKeyFiles(authDir, fsImpl) : localCount;
+    const uploadExecuted =
+      !hasObservableKeysSet ||
+      writesAfter > writesBefore ||
+      afterNextPreKeyId > nextPreKeyId ||
+      afterLocalCount > localCount;
+
+    if (!uploadExecuted) {
+      // Baileys uploadPreKeys silently returns early within MIN_UPLOAD_INTERVAL (5000ms) right
+      // after CB:success's initial uploadPreKeysToServerIfRequired(). Do not mark done; retry later.
+      preKeyCheckedSockets.delete(sock);
+      const attempts = preKeyRetryAttempts.get(sock) || 0;
+      if (retryOnThrottle && attempts < maxRetries && !preKeyRetryTimers.has(sock)) {
+        preKeyRetryAttempts.set(sock, attempts + 1);
+        const timer = setTimeout(() => {
+          preKeyRetryTimers.delete(sock);
+          if (typeof isSocketActive === 'function' && !isSocketActive()) return;
+          void ensureHealthyPreKeys(sock, {
+            authDir,
+            fsImpl,
+            minLocalPreKeys,
+            replenishCount,
+            retryDelayMs,
+            maxRetries,
+            retryOnThrottle,
+            isSocketActive,
+            logInfo,
+            logError,
+          });
+        }, Math.max(0, Number(retryDelayMs) || DEFAULT_PREKEY_RETRY_DELAY_MS));
+        timer?.unref?.();
+        preKeyRetryTimers.set(sock, timer);
+      }
+      return false;
+    }
+
+    clearPreKeyRetryTimer(sock);
+    preKeyRetryAttempts.delete(sock);
     logInfo?.(
       `[SIGNAL] Uploaded ${replenishCount} fresh pre-keys (local=${localCount}, nextPreKeyId=${nextPreKeyId})`,
     );
@@ -540,12 +629,13 @@ export function createGuardedSignalKeyStore(keys, failedEncryptJids) {
   const failureMap = failedEncryptJids instanceof Map ? failedEncryptJids : new Map();
   const FAILURE_WINDOW_MS = 30_000;
 
-  return {
+  const guardedStore = {
     __spiderGuarded: true,
     __failedEncryptJids: failureMap,
     get: (...args) => keys.get(...args),
     clear: keys.clear ? (...args) => keys.clear(...args) : undefined,
     set: async (data) => {
+      recordPreKeyWriteIfPresent(guardedStore, data);
       if (data && typeof data === 'object' && data['sender-key-memory']) {
         const now = Date.now();
         for (const [k, ts] of failureMap.entries()) {
@@ -575,6 +665,8 @@ export function createGuardedSignalKeyStore(keys, failedEncryptJids) {
       return keys.set(data);
     },
   };
+
+  return guardedStore;
 }
 
 export function wrapSignalAndSenderKeyGuard(
@@ -840,16 +932,26 @@ export function installSocketResilience(
 
   if (sock?.ev && typeof sock.ev.on === 'function') {
     let appStateFallbackTimer = null;
+    let socketClosed = false;
     sock.ev.on('connection.update', ({ connection, receivedPendingNotifications }) => {
       if (connection === 'close') {
+        socketClosed = true;
+        clearPreKeyRetryTimer(sock);
         if (appStateFallbackTimer) {
           clearTimeout(appStateFallbackTimer);
           appStateFallbackTimer = null;
         }
       }
       if (connection === 'open') {
+        socketClosed = false;
         normalizeMeCredentials(sock.authState?.creds);
-        void ensureHealthyPreKeys(sock, { authDir, fsImpl, logInfo, logError });
+        void ensureHealthyPreKeys(sock, {
+          authDir,
+          fsImpl,
+          isSocketActive: () => !socketClosed,
+          logInfo,
+          logError,
+        });
         void ensureActiveOnlinePresence(sock, { defaultPushName, logError });
         if (!appStateSyncedSockets.has(sock) && !appStateFallbackTimer) {
           appStateFallbackTimer = setTimeout(() => {
