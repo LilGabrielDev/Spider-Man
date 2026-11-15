@@ -883,39 +883,55 @@ function shouldEmitDecryptLog(state, context, target, msg, cooldownMs = 15_000) 
   return true;
 }
 
-async function resetBrokenSessionForDecrypt(state, repo, opts) {
+async function resetBrokenSessionForDecrypt(state, repo, opts, errorMsg = '') {
   const jid = opts?.jid;
   if (!jid || opts?.stateless) return false;
+  clearCachedUserDevices(state.userDevicesCache, jid);
   const scope = opts?.scope ? String(opts.scope) : '';
   const cooldownKey = `${jid}:${scope || 'default'}`;
+  const errText = String(errorMsg || '');
+  const isMissingSessionOnly =
+    errText.includes('No session record') &&
+    !errText.includes('Bad MAC') &&
+    !errText.includes('No matching sessions found');
   const now = Date.now();
-  const lastReset = state.decryptCooldown.get(cooldownKey) || 0;
-  if (now - lastReset < 5_000) return false;
-  state.decryptCooldown.set(cooldownKey, now);
-  if (state.decryptCooldown.size > 300) {
-    state.decryptCooldown.delete(state.decryptCooldown.keys().next().value);
+  if (!isMissingSessionOnly) {
+    const lastReset = state.decryptCooldown.get(cooldownKey) || 0;
+    if (now - lastReset < 5_000) return false;
+    state.decryptCooldown.set(cooldownKey, now);
+    if (state.decryptCooldown.size > 300) {
+      state.decryptCooldown.delete(state.decryptCooldown.keys().next().value);
+    }
   }
 
   const keysObj = state.sock?.authState?.keys || state.keys;
   if (!scope) {
+    let deletedViaRepo = false;
     if (typeof repo.deleteSession === 'function') {
       try {
         await repo.deleteSession([jid]);
-        return true;
+        deletedViaRepo = true;
       } catch {
         // Fallback to direct key clear below
       }
     }
-    if (typeof keysObj?.set === 'function' && typeof repo.jidToSignalProtocolAddress === 'function') {
+    const isHostedJid =
+      String(jid).toLowerCase().endsWith('@hosted') ||
+      String(jid).toLowerCase().endsWith('@hosted.lid');
+    if (
+      (!deletedViaRepo || isHostedJid) &&
+      typeof keysObj?.set === 'function' &&
+      typeof repo.jidToSignalProtocolAddress === 'function'
+    ) {
       try {
         const addr = String(repo.jidToSignalProtocolAddress(jid));
         await keysObj.set({ session: { [addr]: null } });
         return true;
       } catch {
-        return false;
+        return deletedViaRepo;
       }
     }
-    return false;
+    return deletedViaRepo;
   }
 
   // Status-scoped (or other explicit scope) session corruption: delete ONLY the scoped session
@@ -933,12 +949,14 @@ async function resetBrokenSessionForDecrypt(state, repo, opts) {
         if (isPnOrHostedPnJid(jid) && typeof repo.lidMapping.getLIDForPN === 'function') {
           const lid = await repo.lidMapping.getLIDForPN(jid);
           if (lid) {
+            clearCachedUserDevices(state.userDevicesCache, lid);
             const lidAddr = String(repo.jidToSignalProtocolAddress(lid));
             clears[`${lidAddr}_${scope}`] = null;
           }
         } else if (isLidOrHostedLidJid(jid) && typeof repo.lidMapping.getPNForLID === 'function') {
           const pn = await repo.lidMapping.getPNForLID(jid);
           if (pn) {
+            clearCachedUserDevices(state.userDevicesCache, pn);
             const pnAddr = String(repo.jidToSignalProtocolAddress(pn));
             clears[`${pnAddr}_${scope}`] = null;
           }
@@ -1093,7 +1111,7 @@ function wrapSignalRepositoryObject(repo, ctx = {}) {
         const msg = err?.message || String(err);
 
         if (isMacOrMissingSessionError(msg) && !opts?.stateless && opts?.jid) {
-          await resetBrokenSessionForDecrypt(state, repo, opts);
+          await resetBrokenSessionForDecrypt(state, repo, opts, msg);
           // Baileys messages-recv.js checks `Bad MAC` / `No session found` to set
           // `isSessionError = true` + `forceIncludeKeys = true`, whereas libsignal.js throws
           // `No matching sessions found for message`. Ensure Bad MAC is present so retry #1

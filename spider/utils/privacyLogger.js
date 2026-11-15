@@ -213,6 +213,16 @@ function isRedundantOrBenignBaileysMessage(lowerSummary) {
                     lowerSummary.includes('key used already') ||
                     lowerSummary.includes('bad mac')
                 )
+            ) ||
+            (
+                !lowerSummary.includes('group=') &&
+                (
+                    lowerSummary.includes('no session record') ||
+                    lowerSummary.includes('no matching sessions found') ||
+                    lowerSummary.includes('no sessions available') ||
+                    lowerSummary.includes('key used already') ||
+                    lowerSummary.includes('bad mac')
+                )
             )
         )
     ) {

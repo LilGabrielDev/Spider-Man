@@ -1273,8 +1273,10 @@ test('processStatusMessage prefers canonical LID, skips expired/own statuses, an
 
 test('wrapSignalAndSenderKeyGuard handles No session record (unscoped and status scope) without noisy logs and enables Bad MAC retry keys', async () => {
   const deletedSessions = [];
+  const clearedDevices = [];
   const keyWrites = [];
   const logged = [];
+  let nextErrMsg = 'No session record';
   const sock = {
     ev: createEmitter(),
     authState: {
@@ -1291,12 +1293,18 @@ test('wrapSignalAndSenderKeyGuard handles No session record (unscoped and status
       jidToSignalProtocolAddress: (jid) => jid.split('@')[0],
       deleteSession: async (jids) => deletedSessions.push(jids),
       decryptMessage: async () => {
-        throw new Error('No session record');
+        throw new Error(nextErrMsg);
       },
     },
   };
 
   wrapSignalAndSenderKeyGuard(sock, {
+    userDevicesCache: {
+      del: (k) => {
+        clearedDevices.push(k);
+        return true;
+      },
+    },
     logError: (ctx, _c, target, msg) => logged.push({ ctx, target, msg }),
   });
 
@@ -1320,9 +1328,12 @@ test('wrapSignalAndSenderKeyGuard handles No session record (unscoped and status
     '556677889925_status': null,
     '254722222225_status': null,
   });
+  assert.equal(clearedDevices.includes('556677889925@lid'), true);
+  assert.equal(clearedDevices.includes('254722222225@s.whatsapp.net'), true);
   assert.equal(logged.length, 0);
 
-  // Unscoped No session record: calls deleteSession, wraps as Bad MAC: No session record, no Signal Decrypt Failure box
+  // Unscoped No session record followed immediately by No matching sessions found on the same JID
+  // must NOT be blocked by the 5s cooldown and must clear userDevicesCache
   await assert.rejects(
     () =>
       sock.signalRepository.decryptMessage({
@@ -1332,7 +1343,31 @@ test('wrapSignalAndSenderKeyGuard handles No session record (unscoped and status
       }),
     /Bad MAC: No session record/,
   );
-  assert.deepEqual(deletedSessions, [['556677889925@lid']]);
+  nextErrMsg = 'No matching sessions found for message';
+  await assert.rejects(
+    () =>
+      sock.signalRepository.decryptMessage({
+        jid: '556677889925@lid',
+        type: 'msg',
+        ciphertext: Buffer.from('x'),
+      }),
+    /Bad MAC: No matching sessions found for message/,
+  );
+  assert.deepEqual(deletedSessions, [['556677889925@lid'], ['556677889925@lid']]);
+
+  // Hosted JID (@hosted.lid) also clears direct session key because Baileys deleteSession skips @hosted
+  nextErrMsg = 'Bad MAC';
+  await assert.rejects(
+    () =>
+      sock.signalRepository.decryptMessage({
+        jid: '991122334438@hosted.lid',
+        type: 'msg',
+        ciphertext: Buffer.from('x'),
+      }),
+    /Bad MAC/,
+  );
+  assert.deepEqual(keyWrites[1].session, { '991122334438': null });
+  assert.equal(clearedDevices.includes('991122334438@hosted.lid'), true);
   assert.equal(logged.length, 0);
 });
 

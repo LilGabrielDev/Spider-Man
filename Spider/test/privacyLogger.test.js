@@ -214,6 +214,14 @@ test('createBaileysSignalLogger filters redundant rollback/newsletter/parking/st
             { key: { remoteJid: '123456789012@lid' }, err: new Error('Invalid PreKey ID') },
             'failed to decrypt message'
         );
+        logger.error(
+            { key: { remoteJid: '445566778838@lid' }, err: new Error('Bad MAC: No session record') },
+            'failed to decrypt message'
+        );
+        logger.error(
+            { key: { remoteJid: '445566778838@lid' }, err: new Error('Bad MAC: No matching sessions found for message') },
+            'failed to decrypt message'
+        );
         logger.warn(
             { attrs: { from: '120363000000000001@g.us', error: '475', class: 'message' } },
             'received error in ack'
@@ -250,7 +258,7 @@ test('createBaileysSignalLogger filters redundant rollback/newsletter/parking/st
 
         const diag = logger.getDiagnostics();
         assert.equal(diag.warnings, 5);
-        assert.equal(diag.errors, 7);
+        assert.equal(diag.errors, 9);
 
         // Structured attrs/key fields are extracted & redacted when onEvent inspects events
         const events = [];
