@@ -459,6 +459,7 @@ const PROTECTED_AUTH_PREFIXES = [
   'app-state-sync-version-',
   'lid-mapping-',
   'device-list-',
+  'sender-key-memory-',
   'retry-message-store.json',
   '.spider-retry-store.json',
 ];
@@ -545,11 +546,20 @@ export function pruneAuthDirectory({
     }
   }
 
+  function extractNumericSuffix(fileName) {
+    const match = String(fileName || '').match(/(\d+)(?:\.[^.]+)?$/);
+    return match ? Number(match[1]) : Number.MAX_SAFE_INTEGER;
+  }
+
   function pruneOldest(list, cap) {
     if (!Number.isFinite(cap) || cap < 0 || list.length <= cap) {
       return list.length;
     }
-    list.sort((a, b) => a.mtimeMs - b.mtimeMs);
+    list.sort((a, b) => {
+      const timeDiff = a.mtimeMs - b.mtimeMs;
+      if (timeDiff !== 0) return timeDiff;
+      return extractNumericSuffix(a.name) - extractNumericSuffix(b.name);
+    });
     const excess = list.length - cap;
     let remaining = list.length;
     for (let i = 0; i < excess; i += 1) {
