@@ -14,6 +14,40 @@ let persistFilePath = '';
 let persistTimer = null;
 let aliasResolver = null;
 
+function toPlainSerializable(value, seen = new WeakSet()) {
+  if (value == null || typeof value !== 'object') return value;
+  if (value instanceof Uint8Array || Buffer.isBuffer(value)) {
+    return value;
+  }
+  if (seen.has(value)) return undefined;
+  seen.add(value);
+
+  if (typeof value?.constructor?.toObject === 'function') {
+    try {
+      return value.constructor.toObject(value, {
+        longs: String,
+        enums: Number,
+        bytes: Buffer,
+        defaults: false,
+      });
+    } catch {
+      // Fallback to recursive copy below
+    }
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => toPlainSerializable(item, seen));
+  }
+
+  const out = {};
+  for (const [k, v] of Object.entries(value)) {
+    if (v !== undefined) {
+      out[k] = toPlainSerializable(v, seen);
+    }
+  }
+  return out;
+}
+
 function serializeValue(_key, value) {
   const raw = this && _key !== '' ? this[_key] : value;
   if (raw instanceof Uint8Array || Buffer.isBuffer(raw)) {
@@ -130,7 +164,7 @@ function persistNow() {
       if (entry?.key?.id && entry?.message) {
         items.push({
           key: entry.key,
-          message: entry.message,
+          message: toPlainSerializable(entry.message),
           timestamp: entry.timestamp || Date.now(),
         });
       }
@@ -325,8 +359,25 @@ export function installMessageRetryStore(sock) {
 
   const originalSendMessage = sock.sendMessage.bind(sock);
   const sendQueues = new Map();
+  const getCanonicalQueueKey = (jid) => {
+    const norm = normalizeChatJid(jid) || String(jid || '');
+    if (!norm) return '';
+    const aliases = chatAliases.get(norm);
+    if (!aliases || aliases.size === 0) return norm;
+    const group = [norm, ...aliases];
+    for (const candidate of group) {
+      if (sendQueues.has(candidate)) return candidate;
+    }
+    group.sort((a, b) => {
+      const aPn = a.endsWith('@s.whatsapp.net') ? 0 : 1;
+      const bPn = b.endsWith('@s.whatsapp.net') ? 0 : 1;
+      if (aPn !== bPn) return aPn - bPn;
+      return a.localeCompare(b);
+    });
+    return group[0];
+  };
   const enqueueMessage = (jid, operation) => {
-    const chatId = normalizeChatJid(jid) || String(jid || '');
+    const chatId = getCanonicalQueueKey(jid);
     const previous = sendQueues.get(chatId) || Promise.resolve();
     const task = previous.catch(() => {}).then(operation);
     const tail = task.catch(() => {});
@@ -341,6 +392,9 @@ export function installMessageRetryStore(sock) {
     const sentMessage = await originalSendMessage(...args);
     if (sentMessage?.key?.remoteJid && targetJid) {
       registerChatAlias(targetJid, sentMessage.key.remoteJid);
+    }
+    if (sentMessage?.key?.remoteJid && sentMessage?.key?.remoteJidAlt) {
+      registerChatAlias(sentMessage.key.remoteJid, sentMessage.key.remoteJidAlt);
     }
     rememberMessage(sentMessage);
     return sentMessage;

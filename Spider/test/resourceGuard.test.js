@@ -355,6 +355,41 @@ test('pruneAuthDirectory protects credentials and prunes oldest excess session/p
   });
 });
 
+test('pruneAuthDirectory preserves sender-key-memory files and keeps highest pre-key IDs on equal mtime', () => {
+  withTempWorkspace((root) => {
+    const authDir = path.join(root, 'auth');
+    fs.mkdirSync(authDir, { recursive: true });
+    const nowMs = Date.now();
+
+    const memoryKey = path.join(authDir, 'sender-key-memory-120363000000000001@g.us.json');
+    fs.writeFileSync(memoryKey, '{}');
+    setFileAge(memoryKey, 60 * 60 * 1000, nowMs);
+
+    for (let i = 1; i <= 5; i += 1) {
+      const sk = path.join(authDir, `sender-key-${i}.json`);
+      const pk = path.join(authDir, `pre-key-${i}.json`);
+      fs.writeFileSync(sk, '{}');
+      fs.writeFileSync(pk, '{}');
+      setFileAge(sk, 5 * 60 * 1000, nowMs);
+      setFileAge(pk, 5 * 60 * 1000, nowMs);
+    }
+
+    pruneAuthDirectory({
+      authDir,
+      maxSenderKeys: 2,
+      maxPreKeys: 2,
+      nowMs,
+    });
+
+    assert.equal(fs.existsSync(memoryKey), true);
+    assert.equal(fs.existsSync(path.join(authDir, 'pre-key-1.json')), false);
+    assert.equal(fs.existsSync(path.join(authDir, 'pre-key-2.json')), false);
+    assert.equal(fs.existsSync(path.join(authDir, 'pre-key-3.json')), false);
+    assert.equal(fs.existsSync(path.join(authDir, 'pre-key-4.json')), true);
+    assert.equal(fs.existsSync(path.join(authDir, 'pre-key-5.json')), true);
+  });
+});
+
 test('createCommandRateLimiter bounds tracked senders under high unique-sender churn', () => {
   const limiter = createCommandRateLimiter({
     limit: 1,

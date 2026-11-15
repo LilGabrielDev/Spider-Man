@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { proto } from '@whiskeysockets/baileys';
 import {
   configureMessageRetryStore,
   flushMessageRetryStore,
@@ -178,8 +179,70 @@ test('live Baileys socket wires getMessage, signal key cache, placeholder resend
   assert.match(source, /'enableRecentMessageCache':!!\[\]/);
   assert.match(source, /configureMessageRetryStore\(/);
   assert.match(source, /installMessageRetryStore\(sock\)/);
+  assert.match(source, /installSocketResilience\(sock/);
   assert.match(source, /'lid-mapping\.update'/);
   assert.match(source, /'messages\.update'/);
   assert.match(source, /messaging-history\.set/);
   assert.match(source, /rememberMessage\(_0x16a3b2\);/);
+});
+
+test('configureMessageRetryStore preserves nested binary fields on proto.Message instances', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'spider-proto-retry-'));
+  const storePath = path.join(tmpDir, 'retry-message-store.json');
+  const msgId = `proto-${Date.now()}`;
+  const mediaKey = Uint8Array.from([10, 20, 30, 40, 50, 60, 70, 80]);
+  const messageSecret = Uint8Array.from([9, 8, 7, 6, 5, 4, 3, 2, 1]);
+  const protoMsg = proto.Message.fromObject({
+    imageMessage: { caption: 'menu', mediaKey },
+    messageContextInfo: { messageSecret },
+  });
+
+  try {
+    resetMessageRetryStore();
+    configureMessageRetryStore({ persistPath: storePath, maxMessages: 50 });
+    rememberMessage({ key: { remoteJid: groupA, id: msgId, fromMe: true }, message: protoMsg });
+    flushMessageRetryStore();
+
+    resetMessageRetryStore();
+    configureMessageRetryStore({ persistPath: storePath, maxMessages: 50 });
+    const restored = await getMessageForRetry({ remoteJid: groupA, id: msgId });
+    assert.equal(restored?.imageMessage?.caption, 'menu');
+    assert.deepEqual(Uint8Array.from(restored.imageMessage.mediaKey), mediaKey);
+    assert.deepEqual(Uint8Array.from(restored.messageContextInfo.messageSecret), messageSecret);
+  } finally {
+    resetMessageRetryStore();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('installMessageRetryStore serializes concurrent sends to aliased PN and LID JIDs', async () => {
+  const pn = '254733333333@s.whatsapp.net';
+  const lid = '776655443322@lid';
+  const events = [];
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const sock = {
+    sendMessage: async (jid, message) => {
+      events.push(`start:${jid}:${message.text}`);
+      await wait(10);
+      events.push(`end:${jid}:${message.text}`);
+      return { key: { remoteJid: jid, id: `${jid}-${message.text}`, fromMe: true }, message };
+    },
+  };
+
+  resetMessageRetryStore();
+  registerChatAlias(pn, lid);
+  installMessageRetryStore(sock);
+
+  await Promise.all([
+    sock.sendMessage(pn, { text: 'first' }),
+    sock.sendMessage(lid, { text: 'second' }),
+  ]);
+
+  assert.deepEqual(events, [
+    `start:${pn}:first`,
+    `end:${pn}:first`,
+    `start:${lid}:second`,
+    `end:${lid}:second`,
+  ]);
+  resetMessageRetryStore();
 });
