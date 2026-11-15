@@ -217,10 +217,11 @@ export function createConnectionController({
     if (info.kind === 'connectionReplaced') replacedRetries += 1;
 
     if (!info.shouldReconnect) {
-      await safeTeardownSocket(activeSock, { flushStores });
-      if (activeSock && isCurrent(gen)) {
-        activeSock = null;
-      }
+      clearTimers();
+      const sockToClose = activeSock;
+      activeSock = null;
+      generation += 1;
+      await safeTeardownSocket(sockToClose, { flushStores });
       onFatalDisconnect?.({ ...info, statusCode, error });
       return { ...info, ignored: false };
     }
