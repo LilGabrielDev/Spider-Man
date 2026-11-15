@@ -176,7 +176,21 @@ test('createBaileysSignalLogger stays silent for info/debug, redacts JIDs/phones
     });
 });
 
-test('createBaileysSignalLogger filters redundant rollback/newsletter noise, normalizes keyId dedupe, and notifies missing app-state keys', async () => {
+test('redactPhoneOrJid and sanitizeConsoleText preserve status@broadcast, keyId numbers, and already-redacted JIDs across repeated passes', () => {
+    assert.equal(redactPhoneOrJid('status@broadcast'), 'status@broadcast');
+    assert.equal(redactPhoneOrJid('••••78@s.whatsapp.net'), '••••78@s.whatsapp.net');
+
+    const msg = 'No session found for keyId=123499, group=status@broadcast::254712345605_1::0 from 254712345678@s.whatsapp.net';
+    const once = sanitizeConsoleText(msg);
+    const twice = sanitizeConsoleText(once);
+    assert.equal(once, twice, 'Repeated sanitization must be idempotent');
+    assert.ok(once.includes('keyId=123499'));
+    assert.ok(once.includes('group=status@broadcast::••••05_1::0'));
+    assert.ok(once.includes('••••78@s.whatsapp.net'));
+    assert.ok(!once.includes('[redacted]@broadcast'));
+});
+
+test('createBaileysSignalLogger filters redundant rollback/newsletter/parking/status noise, strips stacks, normalizes keyId dedupe, and notifies missing app-state keys', async () => {
     await withCapturedConsole((captured) => {
         const missingKeys = [];
         const logger = createBaileysSignalLogger({
@@ -184,30 +198,46 @@ test('createBaileysSignalLogger filters redundant rollback/newsletter noise, nor
             onMissingAppStateKey: (kid) => missingKeys.push(kid)
         });
 
-        // Redundant rollback and benign newsletter notifications stay silent while still tracked
+        // Redundant rollback, benign newsletter, and transient status@broadcast decrypt stay silent while tracked
         logger.error({ err: new Error('No session found to decrypt message') }, 'transaction failed, rolling back');
         logger.warn('Invalid mex newsletter notification content');
+        logger.error(
+            { err: new Error('No session found to decrypt message for keyId=123499, group=status@broadcast::254712345605_1::0') },
+            'failed to decrypt message'
+        );
         assert.equal(captured.length, 0);
 
-        // App-state missing key triggers active recovery hook
+        // App-state missing key triggers active recovery hook even when parked warnings across all 5 collections are suppressed
         logger.warn(
-            { err: new Error('failed to find key "AAAAAHGA" to decode mutation') },
+            { error: 'Error: failed to find key "AAAAAHGA" to decode mutation\n    at getKey (chat-utils.js:250:19)', statusCode: 500 },
+            'critical_block blocked on missing key from v0, parking after 2 attempts'
+        );
+        logger.warn(
+            { error: 'Error: failed to find key "AAAAAHGA" to decode mutation\n    at getKey (chat-utils.js:250:19)', statusCode: 500 },
             'regular_low blocked on missing key from v0, parking after 2 attempts'
         );
-        assert.deepEqual(missingKeys, ['AAAAAHGA']);
+        assert.deepEqual(missingKeys, ['AAAAAHGA', 'AAAAAHGA']);
+        assert.equal(captured.length, 0);
+
+        // Stack frames in error strings are stripped on emitted Baileys errors
+        logger.error(
+            { error: 'Error: Stream errored out\n    at onError (socket.js:12:3)', from: '120363399604046397@g.us' },
+            'app state sync failed'
+        );
         assert.equal(captured.length, 1);
+        assert.ok(!captured[0].includes('at onError'));
 
         // Volatile keyId values are normalized so sibling group decrypt failures throttle cleanly
-        logger.error('failed to decrypt message | No session found to decrypt message for keyId=101, group=status@broadcast::254712345678_1::0');
-        logger.error('failed to decrypt message | No session found to decrypt message for keyId=202, group=status@broadcast::254712345678_1::0');
+        logger.error('failed to decrypt message | No session found to decrypt message for keyId=101, group=120363399604046397@g.us::254712345678_1::0');
+        logger.error('failed to decrypt message | No session found to decrypt message for keyId=202, group=120363399604046397@g.us::254712345678_1::0');
         assert.equal(captured.length, 2);
 
         const joined = captured.join('\n');
         assert.ok(!joined.includes('254712345678'), 'Phone digits must stay redacted');
 
         const diag = logger.getDiagnostics();
-        assert.equal(diag.warnings, 2);
-        assert.equal(diag.errors, 3);
+        assert.equal(diag.warnings, 3);
+        assert.equal(diag.errors, 5);
     });
 });
 

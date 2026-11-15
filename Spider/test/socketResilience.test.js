@@ -1068,4 +1068,35 @@ test('requestMissingAppStateSyncKeys sends APP_STATE_SYNC_KEY_REQUEST, enforces 
   assert.equal(peerCalls.length, 1);
 });
 
+test('ensureAppStateSynced checks post-resync stored versions and requests missing myAppStateKeyId when collections remain parked', async () => {
+  const peerCalls = [];
+  const infoLogs = [];
+  const parkedSock = {
+    authState: {
+      creds: { myAppStateKeyId: 'AAAAAHGA' },
+      keys: {
+        get: async () => ({}),
+      },
+    },
+    resyncAppState: async () => {
+      // Simulates all collections parking due to missing historical key (no versions persisted)
+    },
+    sendPeerMessage: async (msg) => {
+      peerCalls.push(msg);
+      return 'peer-req-1';
+    },
+  };
+
+  const didSync = await ensureAppStateSynced(parkedSock, {
+    logInfo: (m) => infoLogs.push(m),
+  });
+  await new Promise((r) => setTimeout(r, 10));
+
+  assert.equal(didSync, false);
+  assert.ok(!infoLogs.some((m) => /Synced \d+ app-state/.test(m)), 'Should not falsely log Synced when collections parked');
+  assert.equal(peerCalls.length, 1);
+  assert.equal(peerCalls[0].protocolMessage.type, 7);
+});
+
+
 
