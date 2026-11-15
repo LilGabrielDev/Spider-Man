@@ -1,5 +1,7 @@
 import fs from 'node:fs';
+import { proto } from '@whiskeysockets/baileys';
 import { normalizeAuthCreds, normalizeMeCredentials, parseJidParts } from './authState.js';
+import { installConsoleSignalSanitizer } from './privacyLogger.js';
 
 const wrappedSockets = new WeakSet();
 const preKeyCheckedSockets = new WeakSet();
@@ -8,9 +10,10 @@ const preKeyRetryAttempts = new WeakMap();
 const preKeyWriteCounters = new WeakMap();
 const appStateSyncedSockets = new WeakSet();
 const appStateInFlightSockets = new WeakSet();
+const appStateKeyRequestCooldowns = new WeakMap();
 const VALID_PN_DOMAINS = new Set(['s.whatsapp.net', 'hosted', 'c.us']);
 export const DEFAULT_PREKEY_RETRY_DELAY_MS = 5_500;
-export const MAX_PREKEY_THROTTLE_RETRIES = 2;
+export const MAX_PREKEY_THROTTLE_RETRIES = 4;
 export const ALL_APP_STATE_COLLECTIONS = [
   'critical_block',
   'critical_unblock_low',
@@ -186,6 +189,23 @@ export async function ensureHealthyPreKeys(
     return false;
   }
 
+  const firstUnuploaded = Number(sock?.authState?.creds?.firstUnuploadedPreKeyId || 0);
+  if (
+    nextPreKeyId > 1 &&
+    firstUnuploaded > 0 &&
+    firstUnuploaded < nextPreKeyId &&
+    typeof keysObj?.get === 'function'
+  ) {
+    try {
+      const checkRes = await keysObj.get('pre-key', [String(firstUnuploaded)]);
+      if (!checkRes?.[String(firstUnuploaded)]) {
+        sock.authState.creds.firstUnuploadedPreKeyId = nextPreKeyId;
+      }
+    } catch {
+      sock.authState.creds.firstUnuploadedPreKeyId = nextPreKeyId;
+    }
+  }
+
   const writesBefore = getPreKeyWriteCount(keysObj);
   preKeyCheckedSockets.add(sock);
   try {
@@ -322,6 +342,82 @@ export async function ensureAppStateSynced(
     return false;
   } finally {
     appStateInFlightSockets.delete(sock);
+  }
+}
+
+export async function requestMissingAppStateSyncKeys(
+  sock,
+  keyIds,
+  { logInfo = null, cooldownMs = 60_000 } = {},
+) {
+  if (!sock || typeof sock.sendPeerMessage !== 'function') return false;
+  const list = Array.isArray(keyIds) ? keyIds : [keyIds];
+  const uniqueIds = Array.from(
+    new Set(list.map((id) => String(id || '').trim()).filter(Boolean)),
+  );
+  if (uniqueIds.length === 0) return false;
+
+  let cooldownMap = appStateKeyRequestCooldowns.get(sock);
+  if (!cooldownMap) {
+    cooldownMap = new Map();
+    appStateKeyRequestCooldowns.set(sock, cooldownMap);
+  }
+
+  const now = Date.now();
+  const candidates = [];
+  for (const b64KeyId of uniqueIds) {
+    const lastReq = cooldownMap.get(b64KeyId) || 0;
+    if (now - lastReq < cooldownMs) continue;
+    let decoded;
+    try {
+      decoded = Buffer.from(b64KeyId, 'base64');
+    } catch {
+      decoded = null;
+    }
+    if (!decoded || decoded.length === 0) continue;
+    candidates.push({ b64KeyId, buf: decoded });
+  }
+  if (candidates.length === 0) return false;
+
+  // Skip keys already present in local store
+  let toRequest = candidates;
+  const keysGet = sock?.authState?.keys?.get;
+  if (typeof keysGet === 'function') {
+    try {
+      const existing = await keysGet(
+        'app-state-sync-key',
+        candidates.map((c) => c.b64KeyId),
+      );
+      toRequest = candidates.filter((c) => !existing?.[c.b64KeyId]);
+    } catch {
+      // Proceed with candidates
+    }
+  }
+  if (toRequest.length === 0) return false;
+
+  for (const item of toRequest) {
+    cooldownMap.set(item.b64KeyId, now);
+    if (cooldownMap.size > 100) {
+      cooldownMap.delete(cooldownMap.keys().next().value);
+    }
+  }
+
+  const requestType = proto?.Message?.ProtocolMessage?.Type?.APP_STATE_SYNC_KEY_REQUEST ?? 7;
+  try {
+    await sock.sendPeerMessage({
+      protocolMessage: {
+        type: requestType,
+        appStateSyncKeyRequest: {
+          keyIds: toRequest.map((item) => ({ keyId: item.buf })),
+        },
+      },
+    });
+    logInfo?.(
+      `[APP-STATE] Requested ${toRequest.length} missing app-state sync key(s) from primary device`,
+    );
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -707,20 +803,140 @@ export function createGuardedSignalKeyStore(keys, failedEncryptJids) {
   return guardedStore;
 }
 
+function isTransientRetryableDecryptError(msg, err) {
+  if (err?.name === 'MessageCounterError') return true;
+  const text = String(msg || err?.message || '');
+  return (
+    text.includes('Key used already') ||
+    text.includes('Invalid PreKey ID') ||
+    text.includes('No session found') ||
+    text.includes('No SenderKeyRecord found') ||
+    text.includes('No matching sessions found') ||
+    text.includes('No sessions available') ||
+    text.includes('Bad MAC')
+  );
+}
+
+function isMacOrMissingSessionError(msg) {
+  const text = String(msg || '');
+  return (
+    text.includes('No matching sessions found') ||
+    text.includes('No sessions available') ||
+    text.includes('Bad MAC')
+  );
+}
+
+function normalizeDecryptErrorForDedupe(msg) {
+  return String(msg || '')
+    .replace(/keyId=[^,\s]+/g, 'keyId=*')
+    .replace(/group=[^,\s]+/g, 'group=*')
+    .slice(0, 140);
+}
+
+function shouldEmitDecryptLog(state, context, target, msg, cooldownMs = 15_000) {
+  const key = `${context}:${target || ''}:${normalizeDecryptErrorForDedupe(msg)}`;
+  const now = Date.now();
+  const prev = state.decryptLogCooldown.get(key) || 0;
+  if (now - prev < cooldownMs) return false;
+  state.decryptLogCooldown.set(key, now);
+  if (state.decryptLogCooldown.size > 300) {
+    state.decryptLogCooldown.delete(state.decryptLogCooldown.keys().next().value);
+  }
+  return true;
+}
+
+async function resetBrokenSessionForDecrypt(state, repo, opts) {
+  const jid = opts?.jid;
+  if (!jid || opts?.stateless) return false;
+  const scope = opts?.scope ? String(opts.scope) : '';
+  const cooldownKey = `${jid}:${scope || 'default'}`;
+  const now = Date.now();
+  const lastReset = state.decryptCooldown.get(cooldownKey) || 0;
+  if (now - lastReset < 5_000) return false;
+  state.decryptCooldown.set(cooldownKey, now);
+  if (state.decryptCooldown.size > 300) {
+    state.decryptCooldown.delete(state.decryptCooldown.keys().next().value);
+  }
+
+  const keysObj = state.sock?.authState?.keys || state.keys;
+  if (!scope) {
+    if (typeof repo.deleteSession === 'function') {
+      try {
+        await repo.deleteSession([jid]);
+        return true;
+      } catch {
+        // Fallback to direct key clear below
+      }
+    }
+    if (typeof keysObj?.set === 'function' && typeof repo.jidToSignalProtocolAddress === 'function') {
+      try {
+        const addr = String(repo.jidToSignalProtocolAddress(jid));
+        await keysObj.set({ session: { [addr]: null } });
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  }
+
+  // Status-scoped (or other explicit scope) session corruption: delete ONLY the scoped session
+  // so default DM sessions and group sender keys remain intact.
+  if (typeof keysObj?.set !== 'function' || typeof repo.jidToSignalProtocolAddress !== 'function') {
+    return false;
+  }
+  try {
+    const clears = {};
+    const primaryAddr = String(repo.jidToSignalProtocolAddress(jid));
+    clears[`${primaryAddr}_${scope}`] = null;
+
+    if (repo.lidMapping) {
+      try {
+        if (isPnOrHostedPnJid(jid) && typeof repo.lidMapping.getLIDForPN === 'function') {
+          const lid = await repo.lidMapping.getLIDForPN(jid);
+          if (lid) {
+            const lidAddr = String(repo.jidToSignalProtocolAddress(lid));
+            clears[`${lidAddr}_${scope}`] = null;
+          }
+        } else if (isLidOrHostedLidJid(jid) && typeof repo.lidMapping.getPNForLID === 'function') {
+          const pn = await repo.lidMapping.getPNForLID(jid);
+          if (pn) {
+            const pnAddr = String(repo.jidToSignalProtocolAddress(pn));
+            clears[`${pnAddr}_${scope}`] = null;
+          }
+        }
+      } catch {
+        // Best-effort alias clear
+      }
+    }
+    await keysObj.set({ session: clears });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function wrapSignalRepositoryObject(repo, ctx = {}) {
   if (!repo || typeof repo !== 'object') return false;
 
   const state = repo.__spiderCtx || {
     sock: null,
     creds: null,
+    keys: null,
+    authDir: '',
     trackedFailures: new Map(),
     userDevicesCache: null,
     logError: null,
     refreshCooldown: new Map(),
+    decryptCooldown: new Map(),
+    decryptLogCooldown: new Map(),
+    preKeyReplenishAt: 0,
   };
 
   if (ctx.sock) state.sock = ctx.sock;
   if (ctx.creds) state.creds = ctx.creds;
+  if (ctx.keys) state.keys = ctx.keys;
+  if (ctx.authDir) state.authDir = ctx.authDir;
   if (ctx.failedEncryptJids instanceof Map) state.trackedFailures = ctx.failedEncryptJids;
   else if (ctx.sock?.authState?.keys?.__failedEncryptJids instanceof Map) {
     state.trackedFailures = ctx.sock.authState.keys.__failedEncryptJids;
@@ -835,11 +1051,40 @@ function wrapSignalRepositoryObject(repo, ctx = {}) {
       try {
         return await origDecryptMessage(opts);
       } catch (err) {
+        let outErr = err;
         const msg = err?.message || String(err);
-        if (err?.name !== 'MessageCounterError' && !msg.includes('Key used already')) {
+
+        if (isMacOrMissingSessionError(msg) && !opts?.stateless && opts?.jid) {
+          await resetBrokenSessionForDecrypt(state, repo, opts);
+          // Baileys messages-recv.js checks `Bad MAC` / `No session found` to set
+          // `isSessionError = true` + `forceIncludeKeys = true`, whereas libsignal.js throws
+          // `No matching sessions found for message`. Ensure Bad MAC is present so retry #1
+          // includes fresh pre-keys and triggers immediate session renegotiation.
+          if (!msg.includes('Bad MAC')) {
+            const wrapped = new Error(`Bad MAC: ${msg}`);
+            if (err?.name) wrapped.name = err.name;
+            if (err?.stack) wrapped.stack = err.stack;
+            outErr = wrapped;
+          }
+        } else if (msg.includes('Invalid PreKey ID') && state.sock) {
+          const now = Date.now();
+          if (now - state.preKeyReplenishAt >= 10_000) {
+            state.preKeyReplenishAt = now;
+            void ensureHealthyPreKeys(state.sock, {
+              authDir: state.authDir,
+              logInfo: null,
+              logError: null,
+            });
+          }
+        }
+
+        if (
+          !isTransientRetryableDecryptError(msg, err) &&
+          shouldEmitDecryptLog(state, 'Signal Decrypt Failure', opts?.jid, msg)
+        ) {
           state.logError?.('Signal Decrypt Failure', null, opts?.jid || null, msg);
         }
-        throw err;
+        throw outErr;
       }
     };
   }
@@ -851,7 +1096,10 @@ function wrapSignalRepositoryObject(repo, ctx = {}) {
         return await origDecryptGroupMessage(opts);
       } catch (err) {
         const msg = err?.message || String(err);
-        if (err?.name !== 'MessageCounterError' && !msg.includes('Key used already')) {
+        if (
+          !isTransientRetryableDecryptError(msg, err) &&
+          shouldEmitDecryptLog(state, 'Signal Group Decrypt Failure', opts?.group, msg)
+        ) {
           state.logError?.('Signal Group Decrypt Failure', null, opts?.group || null, msg);
         }
         throw err;
@@ -874,6 +1122,7 @@ export function createHardenedSignalRepository(
     const repo = baseFactory(auth, logger, pnToLIDFunc);
     wrapSignalRepositoryObject(repo, {
       creds: auth?.creds || null,
+      keys: auth?.keys || null,
       failedEncryptJids,
       userDevicesCache,
       logError,
@@ -884,13 +1133,15 @@ export function createHardenedSignalRepository(
 
 export function wrapSignalAndSenderKeyGuard(
   sock,
-  { failedEncryptJids = null, userDevicesCache = null, logError = null } = {},
+  { failedEncryptJids = null, userDevicesCache = null, logError = null, authDir = '' } = {},
 ) {
   if (!sock || typeof sock !== 'object') return false;
   if (sock.__spiderSignalGuardWrapped) {
     wrapSignalRepositoryObject(sock.signalRepository, {
       sock,
       creds: sock.authState?.creds || null,
+      keys: sock.authState?.keys || null,
+      authDir,
       failedEncryptJids,
       userDevicesCache,
       logError,
@@ -919,6 +1170,8 @@ export function wrapSignalAndSenderKeyGuard(
   wrapSignalRepositoryObject(sock.signalRepository, {
     sock,
     creds: sock.authState?.creds || null,
+    keys: sock.authState?.keys || null,
+    authDir,
     failedEncryptJids,
     userDevicesCache,
     logError,
@@ -1041,9 +1294,10 @@ export function installSocketResilience(
   if (!sock || typeof sock !== 'object') return false;
   if (wrappedSockets.has(sock)) return true;
 
+  installConsoleSignalSanitizer();
   wrapWebSocketTagSanitizer(sock, { userDevicesCache, logError });
   wrapLidMappingResilience(sock, { logError, userDevicesCache });
-  wrapSignalAndSenderKeyGuard(sock, { failedEncryptJids, userDevicesCache, logError });
+  wrapSignalAndSenderKeyGuard(sock, { failedEncryptJids, userDevicesCache, logError, authDir });
   wrapAckErrorRecovery(sock, { groupCache, userDevicesCache, logError });
   wrapSendOptionsNormalization(sock);
   wrapPresenceResilience(sock, { defaultPushName });
@@ -1076,7 +1330,7 @@ export function installSocketResilience(
           appStateFallbackTimer = setTimeout(() => {
             appStateFallbackTimer = null;
             void ensureAppStateSynced(sock, { logInfo, logError });
-          }, 1500);
+          }, 6000);
           appStateFallbackTimer?.unref?.();
         }
       }

@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 import {
     SILENT_LOGGER,
     createBaileysSignalLogger,
+    isLibsignalConsoleNoise,
+    installConsoleSignalSanitizer,
     redactPhoneOrJid,
     sanitizeConsoleText,
     logIncomingMessage,
@@ -173,3 +175,80 @@ test('createBaileysSignalLogger stays silent for info/debug, redacts JIDs/phones
         assert.equal(diag.sessionErrors, 1);
     });
 });
+
+test('createBaileysSignalLogger filters redundant rollback/newsletter noise, normalizes keyId dedupe, and notifies missing app-state keys', async () => {
+    await withCapturedConsole((captured) => {
+        const missingKeys = [];
+        const logger = createBaileysSignalLogger({
+            throttleMs: 60_000,
+            onMissingAppStateKey: (kid) => missingKeys.push(kid)
+        });
+
+        // Redundant rollback and benign newsletter notifications stay silent while still tracked
+        logger.error({ err: new Error('No session found to decrypt message') }, 'transaction failed, rolling back');
+        logger.warn('Invalid mex newsletter notification content');
+        assert.equal(captured.length, 0);
+
+        // App-state missing key triggers active recovery hook
+        logger.warn(
+            { err: new Error('failed to find key "AAAAAHGA" to decode mutation') },
+            'regular_low blocked on missing key from v0, parking after 2 attempts'
+        );
+        assert.deepEqual(missingKeys, ['AAAAAHGA']);
+        assert.equal(captured.length, 1);
+
+        // Volatile keyId values are normalized so sibling group decrypt failures throttle cleanly
+        logger.error('failed to decrypt message | No session found to decrypt message for keyId=101, group=status@broadcast::254712345678_1::0');
+        logger.error('failed to decrypt message | No session found to decrypt message for keyId=202, group=status@broadcast::254712345678_1::0');
+        assert.equal(captured.length, 2);
+
+        const joined = captured.join('\n');
+        assert.ok(!joined.includes('254712345678'), 'Phone digits must stay redacted');
+
+        const diag = logger.getDiagnostics();
+        assert.equal(diag.warnings, 2);
+        assert.equal(diag.errors, 3);
+    });
+});
+
+test('isLibsignalConsoleNoise and installConsoleSignalSanitizer suppress raw libsignal dumps and sanitize console strings', () => {
+    assert.equal(isLibsignalConsoleNoise(['Failed to decrypt message with any known session...']), true);
+    assert.equal(
+        isLibsignalConsoleNoise([
+            'Session error:Error: Bad MAC Error: Bad MAC\n    at Object.verifyMAC (/app/node_modules/libsignal/src/crypto.js:87:15)'
+        ]),
+        true
+    );
+    assert.equal(isLibsignalConsoleNoise([{ _chains: {}, currentRatchet: {} }]), true);
+    assert.equal(isLibsignalConsoleNoise(['Closing open session in favor of incoming prekey bundle']), true);
+    assert.equal(isLibsignalConsoleNoise(['Normal error for 254712345678@s.whatsapp.net']), false);
+
+    const prevError = console.error;
+    const prevWarn = console.warn;
+    const prevInstalled = console.__spiderSignalSanitizerInstalled;
+    const emitted = [];
+    try {
+        delete console.__spiderSignalSanitizerInstalled;
+        console.error = (...args) => emitted.push(['error', ...args]);
+        console.warn = (...args) => emitted.push(['warn', ...args]);
+
+        assert.equal(installConsoleSignalSanitizer(), true);
+        console.error('Failed to decrypt message with any known session...');
+        console.error('Session error:', new Error('Bad MAC'));
+        console.warn('Timeout contacting 254712345678@s.whatsapp.net');
+
+        assert.equal(emitted.length, 1);
+        assert.equal(emitted[0][0], 'warn');
+        assert.ok(!String(emitted[0][1]).includes('254712345678'));
+        assert.ok(String(emitted[0][1]).includes('••••78@s.whatsapp.net'));
+    } finally {
+        console.error = prevError;
+        console.warn = prevWarn;
+        if (prevInstalled === undefined) {
+            delete console.__spiderSignalSanitizerInstalled;
+        } else {
+            console.__spiderSignalSanitizerInstalled = prevInstalled;
+        }
+    }
+});
+
