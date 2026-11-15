@@ -165,8 +165,7 @@ function isTransientStatus(status) {
 function waitMs(ms) {
     if (!Number.isFinite(ms) || ms <= 0) return Promise.resolve();
     return new Promise((resolve) => {
-        const t = setTimeout(resolve, ms);
-        t?.unref?.();
+        setTimeout(resolve, ms);
     });
 }
 
@@ -174,11 +173,12 @@ async function fetchShortSessionFromServers(
     cleanedInput,
     payload,
     fetchImpl,
-    { retries = 2, retryDelayMs = 200 } = {}
+    { retries = 2, retryDelayMs = 200, timeoutMs = 15_000 } = {}
 ) {
     const baseUrls = SESSION_SERVER_URLS;
     const lookupIds = cleanedInput !== payload ? [payload, cleanedInput] : [payload];
     const maxAttempts = Math.max(1, (Number(retries) || 0) + 1);
+    const reqTimeoutMs = Math.max(500, Number(timeoutMs) || 15_000);
     let lastError = null;
 
     for (const baseUrl of baseUrls) {
@@ -190,10 +190,14 @@ async function fetchShortSessionFromServers(
 
             for (const url of paths) {
                 for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+                    const controller = new AbortController();
+                    const timer = setTimeout(() => {
+                        controller.abort(new Error(`Request timed out after ${reqTimeoutMs}ms`));
+                    }, reqTimeoutMs);
                     try {
                         const response = await fetchImpl(url, {
                             headers: { accept: "text/plain, application/json;q=0.9, */*;q=0.8" },
-                            signal: AbortSignal.timeout(15_000),
+                            signal: controller.signal,
                         });
 
                         if (!response.ok) {
@@ -229,6 +233,8 @@ async function fetchShortSessionFromServers(
                             continue;
                         }
                         break;
+                    } finally {
+                        clearTimeout(timer);
                     }
                 }
             }
@@ -257,6 +263,7 @@ export async function resolveShortSession(options = {}) {
         fetchImpl = globalThis.fetch,
         retries = 2,
         retryDelayMs = 200,
+        timeoutMs = 15_000,
     } = options;
 
     if (loadEnv) {
@@ -275,6 +282,7 @@ export async function resolveShortSession(options = {}) {
             const fullSession = await fetchShortSessionFromServers(cleaned, payload, fetchImpl, {
                 retries,
                 retryDelayMs,
+                timeoutMs,
             });
             process.env[variable] = fullSession;
         } catch (error) {

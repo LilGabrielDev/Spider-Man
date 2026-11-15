@@ -347,3 +347,115 @@ test("spider/index.js binds HTTP PORT immediately and stays alive in standby mod
     }
 });
 
+test("index.js supervisor + worker binds PORT before plugin loading and never blocks on short LIL~ lookup", async () => {
+    const port = await getFreePort();
+    const tmpAuthDir = fs.mkdtempSync(path.join(os.tmpdir(), "spider-supervisor-boot-"));
+    const child = spawn(process.execPath, ["index.js"], {
+        cwd: process.cwd(),
+        env: {
+            ...process.env,
+            PORT: String(port),
+            AUTH_DIR: tmpAuthDir,
+            SESSION: "",
+            SESSION_ID: "LIL~renderbootcheck1",
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
+    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+
+    try {
+        let ready = false;
+        let lastErr = null;
+        const deadline = Date.now() + 10_000;
+        while (Date.now() < deadline) {
+            if (child.exitCode !== null) {
+                throw new Error(`Supervisor exited prematurely with code ${child.exitCode}\nSTDOUT:\n${stdout}\nSTDERR:\n${stderr}`);
+            }
+            try {
+                const res = await fetch(`http://127.0.0.1:${port}/`);
+                if (res.status === 200) {
+                    const body = await res.text();
+                    assert.match(body, /Running/);
+                    ready = true;
+                    break;
+                }
+            } catch (err) {
+                lastErr = err;
+            }
+            await new Promise((r) => setTimeout(r, 50));
+        }
+
+        assert.equal(ready, true, `Supervisor did not expose HTTP PORT ${port} in time: ${lastErr?.message || ""}\nSTDOUT:\n${stdout}\nSTDERR:\n${stderr}`);
+        assert.doesNotMatch(stderr, /unsettled top-level await/i);
+
+        // Wait briefly for startup logs if plugin loading is still finishing
+        const logDeadline = Date.now() + 5_000;
+        while (Date.now() < logDeadline && !stdout.includes("[LEGACY] Registered")) {
+            await new Promise((r) => setTimeout(r, 50));
+        }
+        const httpIdx = stdout.indexOf(`HTTP server listening on 0.0.0.0:${port}`);
+        const legacyIdx = stdout.indexOf("[LEGACY] Registered");
+        assert.ok(httpIdx !== -1, `Expected HTTP listening log in stdout:\n${stdout}`);
+        if (legacyIdx !== -1) {
+            assert.ok(httpIdx < legacyIdx, `Expected HTTP server to listen before plugin registration.\nSTDOUT:\n${stdout}`);
+        }
+
+        const exitPromise = new Promise((resolve) => child.once("exit", (code, sig) => resolve({ code, sig })));
+        child.kill("SIGTERM");
+        const exited = await exitPromise;
+        assert.equal(exited.code, 0, `Expected clean exit 0 on SIGTERM, got ${JSON.stringify(exited)}\nSTDERR:\n${stderr}`);
+    } finally {
+        if (child.exitCode === null) {
+            child.kill("SIGKILL");
+        }
+        fs.rmSync(tmpAuthDir, { recursive: true, force: true });
+    }
+});
+
+test("top-level await resolveShortSession completes retries without Node exit code 13", async () => {
+    let attempts = 0;
+    await withServer((_req, res) => {
+        attempts += 1;
+        res.writeHead(503);
+        res.end("Service Unavailable");
+    }, async (baseUrl) => {
+        const script = `
+            import { resolveShortSession } from "./spider/session-resolver.js";
+            process.env.SESSION = "";
+            process.env.SESSION_ID = "LIL~topawait503";
+            const localBase = ${JSON.stringify(baseUrl)};
+            const fetchImpl = (url, init) => {
+                const target = String(url).replace("https://lilgabriel-session.onrender.com", localBase);
+                return globalThis.fetch(target, init);
+            };
+            await resolveShortSession({
+                loadEnv: false,
+                credsPath: "/nonexistent/creds.json",
+                fetchImpl,
+                retries: 2,
+                retryDelayMs: 40,
+                timeoutMs: 2000,
+            });
+        `;
+        const child = spawn(process.execPath, ["--input-type=module", "-e", script], {
+            cwd: process.cwd(),
+            stdio: ["ignore", "pipe", "pipe"],
+        });
+        let stderr = "";
+        child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+
+        const exited = await new Promise((resolve) => {
+            child.once("exit", (code, signal) => resolve({ code, signal }));
+        });
+        assert.notEqual(exited.code, 13, `Node exited with status 13 (unsettled top-level await):\n${stderr}`);
+        assert.equal(exited.code, 1, `Expected normal rejection exit code 1, got ${JSON.stringify(exited)}\n${stderr}`);
+        assert.doesNotMatch(stderr, /unsettled top-level await/i);
+        assert.match(stderr, /Short Spider-Man session lookup failed \(503\)/);
+        assert.ok(attempts >= 3, `Expected retries to execute cleanly, saw ${attempts} attempts`);
+    });
+});
+

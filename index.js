@@ -13,12 +13,6 @@ const WORKER_SCRIPT = path.join(__dirname, "spider", "index.js");
 
 clearTemporarySessionsAndCache({ cwd: __dirname, maxAgeMs: 60 * 1000, tempMaxAgeMs: 60 * 1000, preserveSignalKeys: true });
 
-try {
-    await resolveShortSession();
-} catch (error) {
-    console.warn(`⚠️ Short session lookup deferred (${error.message}); starting worker HTTP server in standby mode.`);
-}
-
 let activeChild = null;
 let restartTimer = null;
 let shuttingDown = false;
