@@ -1,7 +1,8 @@
 import { createRequire } from 'node:module';
 import { downloadMediaMessage } from '@whiskeysockets/baileys';
 import _0x21bd49 from '../../spider/config.js';
-import { collectSenderIdentities, resolveGroupRolesAsync } from '../../spider/utils/groupRoleResolver.js';
+import { collectSenderIdentities, extractPhoneDigits, resolveGroupRolesAsync } from '../../spider/utils/groupRoleResolver.js';
+import { resolveRuntimeOwnerPhone } from '../../spider/utils/userJid.js';
 import {
   deleteMessageSafely,
   extractContextInfo,
@@ -124,7 +125,7 @@ function typeFromMessage(content = {}) {
 }
 
 function normalizeNumber(jid) {
-  return String(jid || '').split('@')[0].split(':')[0].replace(/\D/g, '');
+  return extractPhoneDigits(jid);
 }
 
 function makeMessageView({ raw, sock, from, sender, senderNumber, isOwner, groupMeta, isAdmin, isBotAdmin }) {
@@ -253,7 +254,7 @@ export async function loadLegacyCommands() {
   legacyConfig.PACK_NAME = legacyConfig.BOT_NAME;
   legacyConfig.BOT_PIC = _0x21bd49.BOT_PIC;
   if (_0x21bd49.BOT_PIC) process.env.BOT_PIC = _0x21bd49.BOT_PIC;
-  legacyConfig.OWNER_NUMBER = _0x21bd49.OWNER_NUMBER || process.env.OWNER_NUMBER || '';
+  legacyConfig.OWNER_NUMBER = resolveRuntimeOwnerPhone({ config: _0x21bd49 });
   legacyConfig.OWNER_NAME = _0x21bd49.OWNER_NAME || 'Spider Man Owner';
   legacyConfig.MODE = _0x21bd49.MODE;
   legacyConfig.BOT_PREFIX = _0x21bd49.PREFIXES?.[0] || '.';
@@ -278,6 +279,10 @@ export async function loadLegacyCommands() {
       adminOnly: Boolean(adminOnly),
       execute: async (ctx) => {
         legacyConfig.MODE = ctx.config.MODE;
+        legacyConfig.OWNER_NUMBER = resolveRuntimeOwnerPhone({
+          sock: ctx.sock,
+          config: ctx.config || _0x21bd49,
+        });
         const groupCtx = ctx.groupMeta
           ? {
               groupMeta: ctx.groupMeta,

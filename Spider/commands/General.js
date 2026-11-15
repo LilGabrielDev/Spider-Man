@@ -2,6 +2,11 @@ import _0x5acc47 from 'axios';
 import _0xutil from 'util';
 import { translateText, getBibleVerse, getRandomFact, getRandomQuote, defineTerm, MESSAGES } from '../france/index.js';
 import { extractContextInfo, safeDeleteTempMessage } from '../../spider/utils/groupActionHelper.js';
+import {
+  resolveBotPhoneFromLidAsync,
+  resolveRuntimeOwnerJid,
+  resolveRuntimeOwnerPhone,
+} from '../../spider/utils/userJid.js';
 
 export const commands = [
   {
@@ -69,13 +74,27 @@ export const commands = [
     execute: async ({ sock, from, msg, config }) => {
       const botName = config.BOT_NAME || 'Spider Man';
       const botVersion = config.BOT_VERSION || '1.0.0';
-      const connectedId = sock.user?.id?.split(':')[0]?.split('@')[0] || '';
-      const ownerNumber = String(config.OWNER_NUMBER || connectedId).replace(/\D/g, '');
-      const ownerName = config.OWNER_NAME || 'LilTech';
+      let ownerNumber = resolveRuntimeOwnerPhone({ sock, config });
       if (!ownerNumber) {
+        await resolveBotPhoneFromLidAsync(sock, { config });
+        ownerNumber = resolveRuntimeOwnerPhone({ sock, config });
+      }
+      const ownerJid = resolveRuntimeOwnerJid({ sock, config });
+      const ownerName = config.OWNER_NAME || 'LilTech';
+      if (!ownerNumber && !ownerJid) {
         return sock.sendMessage(
           from,
-          { text: 'Owner contact is not configured. Set OWNER_NUMBER or connect the owner WhatsApp account.' },
+          { text: 'Owner contact is not available yet. Link a WhatsApp account first.' },
+          { quoted: msg },
+        );
+      }
+      if (!ownerNumber && ownerJid) {
+        return sock.sendMessage(
+          from,
+          {
+            text: `*${ownerName}*\n${botName} ${botVersion}\n@${ownerJid.split('@')[0]}`,
+            mentions: [ownerJid],
+          },
           { quoted: msg },
         );
       }

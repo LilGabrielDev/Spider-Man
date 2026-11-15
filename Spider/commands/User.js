@@ -32,9 +32,10 @@ export const commands = [
     execute: async ({ sock, from, text, args = [], msg }) => {
       const metadata = await fetchMetaSafe(sock, from);
       const resolved = resolveTargetFromMessage({ sock, from, msg, text, args, metadata });
+      const rawText = String(text || '').trim();
       const targetJid =
         resolved.targetJid ||
-        (text ? (String(text).includes('@s.whatsapp.net') ? String(text).trim() : formatJid(text)) : '');
+        (rawText ? (rawText.includes('@') ? cleanJid(rawText) : formatJid(rawText)) : '');
 
       if (!targetJid) {
         const noTarget = await t(from, 'user', 'blockNoTarget');
@@ -64,9 +65,10 @@ export const commands = [
     execute: async ({ sock, from, text, args = [], msg }) => {
       const metadata = await fetchMetaSafe(sock, from);
       const resolved = resolveTargetFromMessage({ sock, from, msg, text, args, metadata });
+      const rawText = String(text || '').trim();
       const targetJid =
         resolved.targetJid ||
-        (text ? (String(text).includes('@s.whatsapp.net') ? String(text).trim() : formatJid(text)) : '');
+        (rawText ? (rawText.includes('@') ? cleanJid(rawText) : formatJid(rawText)) : '');
 
       if (!targetJid) {
         const noTarget = await t(from, 'user', 'unblockNoTarget');

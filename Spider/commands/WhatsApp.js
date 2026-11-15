@@ -12,16 +12,9 @@ import {
   isViewOnceMessage,
   resolveTargetFromMessage,
 } from '../../spider/utils/groupActionHelper.js';
+import { getPhoneFromJid, resolveRuntimeOwnerJid } from '../../spider/utils/userJid.js';
 
 const S_WHATSAPP_NET = 's.whatsapp.net';
-
-function getOwnerJid() {
-  if (!config.OWNER_NUMBER) return null;
-  let owner = config.OWNER_NUMBER.toString();
-  owner = owner.replace(/[+\s]/g, '');
-  owner = owner.replace(/[^0-9]/g, '');
-  return `${owner}@s.whatsapp.net`;
-}
 
 async function getBuffer(mediaMsg, mediaType) {
   const stream = await downloadContentFromMessage(mediaMsg, mediaType);
@@ -89,7 +82,7 @@ export const commands = [
         console.error('=== FULLPP ERROR ===', err.message);
         const errMsg = await t(from, 'whatsapp', 'fullpp.error');
         await sock.sendMessage(from, { text: errMsg }, { quoted: msg });
-        const ownerJid = getOwnerJid();
+        const ownerJid = resolveRuntimeOwnerJid({ sock, config });
         if (ownerJid) {
           await sock.sendMessage(ownerJid, {
             text: `Fullpp error in ${from}:\n${err.message}\n\nStack: ${err.stack?.slice(0, 200)}`,
@@ -431,8 +424,14 @@ export const commands = [
     category: 'WhatsApp',
     execute: async ({ sock, from, text, msg }) => {
       const resolved = resolveTargetFromMessage({ sock, from, msg, text });
+      const rawText = String(text || '').trim();
       const targetJid =
-        resolved.targetJid || (text ? `${String(text).replace(/[^0-9]/g, '')}@s.whatsapp.net` : from);
+        resolved.targetJid ||
+        (rawText
+          ? rawText.includes('@')
+            ? cleanJid(rawText)
+            : `${rawText.replace(/[^0-9]/g, '')}@s.whatsapp.net`
+          : from);
       try {
         const profile = await sock.getBusinessProfile(targetJid);
         const tpl = await t(from, 'whatsapp', 'bizprofile.result');
@@ -454,7 +453,16 @@ export const commands = [
     ownerOnly: true,
     execute: async ({ sock, from, msg }) => {
       try {
-        const selfJid = cleanJid(sock.user?.id || sock.user?.jid || '') || from;
+        const selfJid =
+          cleanJid(
+            sock.user?.id ||
+              sock.user?.jid ||
+              sock.authState?.creds?.me?.id ||
+              sock.user?.lid ||
+              '',
+          ) ||
+          resolveRuntimeOwnerJid({ sock, config }) ||
+          from;
         const res = await sock.removeProfilePicture(selfJid);
         if (isSendMessageFailure(res)) throw new Error('removedp-failed');
         const successMsg = await t(from, 'whatsapp', 'removedp.success');
@@ -542,9 +550,9 @@ export const commands = [
             quotedMessage.audioMessage?.viewOnce,
         );
       if (!isVo) return;
-      const ownerJid = getOwnerJid();
+      const ownerJid = resolveRuntimeOwnerJid({ sock, config });
       if (!ownerJid) {
-        console.log('Owner number not configured in config.js');
+        console.log('Owner/linked-account JID not available');
         return;
       }
       try {
@@ -644,10 +652,21 @@ export const commands = [
         } catch {}
       }
       const resolved = resolveTargetFromMessage({ sock, from, msg, metadata });
-      const waid =
+      let waid =
         resolved.phone ||
-        extractPhoneDigits(participant) ||
-        cleanJid(participant).split('@')[0];
+        extractPhoneDigits(contextInfo?.participantAlt) ||
+        extractPhoneDigits(contextInfo?.participantPn) ||
+        extractPhoneDigits(contextInfo?.senderPn) ||
+        extractPhoneDigits(participant);
+      if (!waid && String(participant).toLowerCase().includes('@lid') && typeof sock?.signalRepository?.lidMapping?.getPNForLID === 'function') {
+        try {
+          const pn = await sock.signalRepository.lidMapping.getPNForLID(cleanJid(participant));
+          waid = getPhoneFromJid(pn) || '';
+        } catch {}
+      }
+      if (!waid) {
+        waid = cleanJid(participant).split('@')[0];
+      }
       const displayName = text;
       const vcard = `BEGIN:VCARD\nVERSION:3.0\nFN:${displayName}\nTEL;type=CELL;type=VOICE;waid=${waid}:${waid}\nEND:VCARD`;
       await sock.sendMessage(
