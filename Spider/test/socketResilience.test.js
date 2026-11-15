@@ -1108,5 +1108,169 @@ test('ensureAppStateSynced checks post-resync stored versions and requests missi
   assert.equal(peerCalls[0].protocolMessage.type, 7);
 });
 
+test('wrapSendOptionsNormalization normalizes status@broadcast reactions to LID and wrapAckErrorRecovery handles status 400 acks cleanly', async () => {
+  const ev = createEmitter();
+  const dispatched = [];
+  const deletedDeviceKeys = [];
+  const logged = [];
+  const sock = {
+    ev,
+    authState: {
+      creds: {
+        me: {
+          id: '254700000000:1@s.whatsapp.net',
+          lid: '999988887777:1@lid',
+        },
+      },
+    },
+    signalRepository: {
+      lidMapping: {
+        getLIDForPN: async (pn) => (pn === '254712345601@s.whatsapp.net' ? '111122223333@lid' : null),
+      },
+    },
+    sendMessage: async (jid, content, options) => {
+      dispatched.push({ jid, content, options });
+      return { key: { remoteJid: jid, fromMe: true, id: '3EB0STATUSREACT1' } };
+    },
+  };
+  const userDevicesCache = {
+    del: (k) => {
+      deletedDeviceKeys.push(k);
+      return true;
+    },
+  };
+
+  wrapSendOptionsNormalization(sock);
+  wrapAckErrorRecovery(sock, {
+    userDevicesCache,
+    logError: (ctx, _c, jid, detail) => logged.push({ ctx, jid, detail }),
+  });
+
+  // 1. PN + device-suffixed JIDs and noisy Baileys v7 key fields are normalized to canonical LID
+  await sock.sendMessage(
+    'status@broadcast',
+    {
+      react: {
+        text: '🔥',
+        key: {
+          remoteJid: 'status@broadcast',
+          fromMe: false,
+          id: 'STATUS_MSG_1',
+          participant: '254712345601:2@s.whatsapp.net',
+          participantAlt: '254712345601@s.whatsapp.net',
+          addressingMode: 'lid',
+        },
+      },
+    },
+    { statusJidList: ['254712345601:2@s.whatsapp.net', '999988887777@lid'] },
+  );
+
+  assert.equal(dispatched.length, 1);
+  assert.deepEqual(dispatched[0].options.statusJidList, ['111122223333@lid']);
+  assert.deepEqual(dispatched[0].content.react.key, {
+    remoteJid: 'status@broadcast',
+    fromMe: false,
+    id: 'STATUS_MSG_1',
+    participant: '111122223333@lid',
+  });
+
+  // 2. Self-only status reaction is skipped cleanly before dispatch
+  const skippedRes = await sock.sendMessage(
+    'status@broadcast',
+    {
+      react: {
+        text: '❤️',
+        key: { remoteJid: 'status@broadcast', fromMe: true, id: 'OWN_STATUS', participant: '254700000000@s.whatsapp.net' },
+      },
+    },
+    { statusJidList: ['254700000000@s.whatsapp.net'] },
+  );
+  assert.equal(dispatched.length, 1);
+  assert.equal(skippedRes.key.remoteJid, 'status@broadcast');
+
+  // 3. Server 400 ack on status@broadcast clears tracked target device cache without noisy error box
+  ev.emit('messages.update', [
+    {
+      key: { remoteJid: 'status@broadcast', id: '3EB0STATUSREACT1' },
+      update: { status: 0, messageStubParameters: ['400'] },
+    },
+  ]);
+  assert.equal(deletedDeviceKeys.includes('111122223333@lid'), true);
+  assert.equal(logged.length, 0);
+});
+
+test('processStatusMessage prefers canonical LID, skips expired/own statuses, and views cleanly before reacting', async () => {
+  const { processStatusMessage, seenStatusIds } = await import('../../spider/bc.js');
+  const reads = [];
+  const sends = [];
+  const mockSock = {
+    authState: {
+      creds: {
+        me: { id: '254700000000:1@s.whatsapp.net', lid: '999988887777:1@lid' },
+      },
+    },
+    readMessages: async (keys) => {
+      reads.push(keys);
+    },
+    sendMessage: async (jid, content, opts) => {
+      sends.push({ jid, content, opts });
+      return { key: { id: 'REACT_ID' } };
+    },
+    onWhatsApp: async () => [{ notify: 'Tester' }],
+  };
+
+  // 1. Expired status (>24h old) is ignored without triggering readMessages or sendMessage
+  const staleId = 'STALE_STATUS_' + Date.now();
+  await processStatusMessage(
+    {
+      key: { remoteJid: 'status@broadcast', id: staleId, participant: '445566778899@lid', fromMe: false },
+      messageTimestamp: Math.floor(Date.now() / 1000) - 90_000,
+      message: { conversation: 'expired status' },
+    },
+    mockSock,
+  );
+  assert.equal(seenStatusIds.has(staleId), true);
+  assert.equal(reads.length, 0);
+  assert.equal(sends.length, 0);
+
+  // 2. Own account status (matching me.lid even if fromMe flag omitted) is ignored
+  const selfId = 'OWN_STATUS_' + Date.now();
+  await processStatusMessage(
+    {
+      key: { remoteJid: 'status@broadcast', id: selfId, participant: '999988887777:2@lid', fromMe: false },
+      messageTimestamp: Math.floor(Date.now() / 1000),
+      message: { conversation: 'own synced status' },
+    },
+    mockSock,
+  );
+  assert.equal(seenStatusIds.has(selfId), true);
+  assert.equal(reads.length, 0);
+
+  // 3. Fresh LID status prefers canonical stripped @lid over participantAlt PN
+  const freshId = 'FRESH_LID_STATUS_' + Date.now();
+  await processStatusMessage(
+    {
+      key: {
+        remoteJid: 'status@broadcast',
+        id: freshId,
+        participant: '445566778899:3@lid',
+        participantAlt: '254712345699@s.whatsapp.net',
+        fromMe: false,
+      },
+      messageTimestamp: Math.floor(Date.now() / 1000),
+      message: { conversation: 'hello status' },
+    },
+    mockSock,
+  );
+  await new Promise((r) => setTimeout(r, 2100));
+  assert.equal(reads.length >= 1, true);
+  assert.equal(reads[0][0].participant, '445566778899@lid');
+  if (sends.length > 0) {
+    assert.deepEqual(sends[0].opts.statusJidList, ['445566778899@lid']);
+    assert.equal(sends[0].content.react.key.participant, '445566778899@lid');
+  }
+});
+
+
 
 
