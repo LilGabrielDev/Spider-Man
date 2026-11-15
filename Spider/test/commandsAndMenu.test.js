@@ -605,7 +605,7 @@ test('quoted media & interactive commands handle valid quoted inputs', async (t)
   }
 });
 
-test('all 189 commands execute safely without throwing uncaught exceptions', async (t) => {
+test('local and mocked commands execute safely without throwing uncaught exceptions', async (t) => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'spider-all-cmds-'));
   const origMode = config.MODE;
   const origProcessMode = process.env.MODE;
@@ -657,6 +657,12 @@ test('all 189 commands execute safely without throwing uncaught exceptions', asy
     'restart', 'restartbot', 'shutdown', 'kill', 'update', 'triggerupdate',
     'exec', 'eval', 'eval2', 'broadcast', 'bc', 'kickall', 'purge', 'left', 'zip',
   ]);
+  // These handlers call APIs through node-fetch or third-party media clients, which the
+  // axios/global-fetch mocks below cannot intercept; keep this broad smoke pass offline.
+  const networkDependentCommands = new Set([
+    'jokes', 'advice', 'trivia', 'inspire', 'fact', 'quotes',
+    'video-dl', 'bible', 'element', 'attp',
+  ]);
 
   const failures = [];
   try {
@@ -668,6 +674,7 @@ test('all 189 commands execute safely without throwing uncaught exceptions', asy
       if (['restart', 'restartbot', 'shutdown', 'kill', 'update', 'triggerupdate', 'exec', 'zip'].includes(name)) {
         return;
       }
+      if (networkDependentCommands.has(name)) return;
       try {
         await Promise.race([
           cmd.execute(makeCtx(name, { sock, text: '', args: [] })),
@@ -683,6 +690,7 @@ test('all 189 commands execute safely without throwing uncaught exceptions', asy
       if (externalArgCommands.has(name) || noArgOnlyCommands.has(name)) {
         return;
       }
+      if (networkDependentCommands.has(name)) return;
       const text =
         name === 'poll' ? 'Test?/Yes,No'
         : name === 'math' ? '2+2'
@@ -764,4 +772,3 @@ test('CHANNEL_JID defaults to blank and commands/wrapper handle empty channel JI
     else process.env.NEWSLETTER_JID = origNewsletterJid;
   }
 });
-

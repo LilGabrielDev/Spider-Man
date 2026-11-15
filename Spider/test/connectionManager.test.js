@@ -66,6 +66,45 @@ test('safeTeardownSocket flushes stores before closing and removing socket liste
   assert.deepEqual(order, ['flushStores', 'end', 'ws.close', 'removeAllListeners']);
 });
 
+test('fatal auth disconnect cancels pending transient reconnects and invalidates stale events', async () => {
+  let socketCreates = 0;
+  let fatalDisconnects = 0;
+  const controller = createConnectionController({
+    createSocket: async () => {
+      socketCreates += 1;
+      return { end() {}, ws: { close() {} }, ev: { removeAllListeners() {} } };
+    },
+    onFatalDisconnect: () => {
+      fatalDisconnects += 1;
+    },
+    baseDelayMs: 1,
+    maxDelayMs: 1,
+  });
+
+  try {
+    await controller.start();
+    const generation = controller.getGeneration();
+    const originalRandom = Math.random;
+    Math.random = () => 0;
+    try {
+      await controller.handleDisconnect({ generation, statusCode: 408 });
+    } finally {
+      Math.random = originalRandom;
+    }
+
+    const fatal = await controller.handleDisconnect({ generation, statusCode: 401 });
+    assert.equal(fatal.fatal, true);
+    assert.equal(controller.isCurrent(generation), false);
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(socketCreates, 1, 'fatal auth failure must not restart the socket');
+    assert.equal(fatalDisconnects, 1);
+    assert.equal(controller.getActiveSocket(), null);
+  } finally {
+    await controller.shutdown();
+  }
+});
+
 test('createConnectionController prevents concurrent starts, isolates stale generations, and shuts down cleanly', async () => {
   const gate = createDeferred();
   const createdSockets = [];
