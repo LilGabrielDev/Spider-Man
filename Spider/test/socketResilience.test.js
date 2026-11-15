@@ -673,4 +673,112 @@ test('spider/index.js enables markOnlineOnConnect for active delivery receipts a
   assert.doesNotMatch(source, /1027934701/);
   assert.match(source, /_0xbaileysDefaultVersion/);
   assert.match(source, /defaultPushName:/);
+  assert.doesNotMatch(source, /sendPresenceUpdate\([^)]*unavailable/);
 });
+
+test('ensureHealthyPreKeys detects Baileys MIN_UPLOAD_INTERVAL silent skip and retries until pre-keys replenish', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'spider-prekey-throttle-'));
+  try {
+    // Simulate CB:success uploadPreKeysToServerIfRequired() having just uploaded 5 pre-keys (<15)
+    for (let i = 51; i <= 55; i += 1) {
+      fs.writeFileSync(path.join(tmpDir, `pre-key-${i}.json`), '{}');
+    }
+
+    const ev = createEmitter();
+    const uploadAttempts = [];
+    const loggedInfo = [];
+    let throttled = true;
+
+    const innerKeys = {
+      get: async (_type, ids) => Object.fromEntries(ids.map((id) => [id, id === '55' ? {} : null])),
+      set: async (data) => {
+        if (data?.['pre-key']) {
+          for (const [id, val] of Object.entries(data['pre-key'])) {
+            fs.writeFileSync(path.join(tmpDir, `pre-key-${id}.json`), JSON.stringify(val));
+          }
+        }
+      },
+    };
+
+    const guardedKeys = createGuardedSignalKeyStore(innerKeys, new Map());
+    const sock = {
+      ev,
+      authState: {
+        creds: { nextPreKeyId: 56 },
+        keys: guardedKeys,
+      },
+      uploadPreKeys: async (count) => {
+        uploadAttempts.push({ count, throttled });
+        if (throttled) {
+          // Simulate Baileys socket.js skipping upload silently when within MIN_UPLOAD_INTERVAL
+          return;
+        }
+        const batch = {};
+        const startId = sock.authState.creds.nextPreKeyId;
+        for (let i = 0; i < count; i += 1) {
+          batch[String(startId + i)] = { keyPair: {} };
+        }
+        await sock.authState.keys.set({ 'pre-key': batch });
+        sock.authState.creds.nextPreKeyId = startId + count;
+      },
+    };
+
+    // First call during throttle: returns false (not permanently cached) and schedules retry
+    const firstResult = await ensureHealthyPreKeys(sock, {
+      authDir: tmpDir,
+      retryDelayMs: 30,
+      maxRetries: 2,
+      logInfo: (msg) => loggedInfo.push(msg),
+    });
+    assert.equal(firstResult, false);
+    assert.equal(uploadAttempts.length, 1);
+    assert.equal(countLocalPreKeyFiles(tmpDir), 5);
+
+    // Throttle expires before the scheduled retry runs
+    throttled = false;
+    await new Promise((r) => setTimeout(r, 80));
+
+    assert.equal(uploadAttempts.length, 2);
+    assert.equal(countLocalPreKeyFiles(tmpDir), 55);
+    assert.equal(sock.authState.creds.nextPreKeyId, 106);
+    assert.match(loggedInfo[0], /Uploaded 50 fresh pre-keys/);
+
+    // Subsequent call now sees healthy dir and is a no-op
+    assert.equal(await ensureHealthyPreKeys(sock, { authDir: tmpDir }), false);
+    assert.equal(uploadAttempts.length, 2);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('installSocketResilience cancels scheduled pre-key retry cleanly when socket closes', async () => {
+  const ev = createEmitter();
+  const calls = [];
+  const sock = {
+    ev,
+    authState: {
+      creds: { nextPreKeyId: 40, me: { id: '254700000001:1@s.whatsapp.net' } },
+      keys: {
+        get: async () => ({}),
+        set: async () => {},
+      },
+    },
+    uploadPreKeys: async (n) => {
+      calls.push(n);
+      // Never calls keys.set -> simulates silent throttle
+    },
+    sendPresenceUpdate: async () => {},
+    signalRepository: { lidMapping: { getLIDsForPNs: async () => [] } },
+    query: async () => ({ tag: 'iq', attrs: { type: 'result' }, content: [] }),
+    sendMessage: async (_j, _c, o) => o,
+  };
+
+  installSocketResilience(sock, { authDir: '', logInfo: () => {} });
+  ev.emit('connection.update', { connection: 'open' });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(calls.length, 1);
+
+  // Closing the socket cancels the pending retry timer without throwing
+  ev.emit('connection.update', { connection: 'close' });
+});
+

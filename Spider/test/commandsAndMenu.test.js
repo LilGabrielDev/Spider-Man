@@ -772,3 +772,43 @@ test('CHANNEL_JID defaults to blank and commands/wrapper handle empty channel JI
     else process.env.NEWSLETTER_JID = origNewsletterJid;
   }
 });
+
+test('". Menu" and " . Menu" resolve case-insensitively and execute Menu cleanly with AUTO_READ off by default', async () => {
+  globalThis.__spiderCategoryMenuSessions?.clear?.();
+  assert.equal(config.AUTO_READ, false);
+
+  const indexSrc = fs.readFileSync(path.resolve(process.cwd(), 'spider/index.js'), 'utf8');
+  assert.ok(indexSrc.includes('_0xtrimmedCmdInput'), 'spider/index.js should trim leading whitespace before prefix match');
+
+  for (const rawInput of ['. Menu', ' . Menu', '.Menu']) {
+    const trimmed = String(rawInput || '').trimStart();
+    const matchedPrefix = config.PREFIXES.find((p) => trimmed.startsWith(p));
+    assert.ok(matchedPrefix, `Expected prefix match for "${rawInput}"`);
+
+    const stripped = trimmed.slice(matchedPrefix.length);
+    const [rawCmd, ...args] = stripped.trim().split(/\s+/);
+    const resolvedName = aliasesMap.get(rawCmd.toLowerCase()) || rawCmd.toLowerCase();
+    assert.equal(resolvedName, 'menu');
+
+    const sent = [];
+    const sock = createMockSock(sent);
+    const cmd = commandsMap.get(resolvedName);
+    assert.ok(cmd);
+
+    await cmd.execute(makeCtx(resolvedName, {
+      sock,
+      text: args.join(' '),
+      args,
+      msg: {
+        key: { id: `in-${rawInput}`, remoteJid: '254700000001@s.whatsapp.net', fromMe: true },
+        pushName: 'Owner',
+        message: { conversation: rawInput },
+      },
+    }));
+
+    assert.ok(sent.length >= 1, `Expected "${rawInput}" to send menu response`);
+    const body = sent.map((m) => m.payload.caption || m.payload.text || '').join('\n');
+    assert.match(body, /SYSTEM MENU/);
+  }
+});
+
