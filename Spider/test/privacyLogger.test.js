@@ -206,6 +206,11 @@ test('createBaileysSignalLogger filters redundant rollback/newsletter/parking/st
             'failed to decrypt message'
         );
         logger.error(
+            { key: { remoteJid: 'status@broadcast', participant: '556677889925@lid' }, err: new Error('No session record') },
+            'failed to decrypt message'
+        );
+        logger.warn({ trace: 'Error: Cannot find package link-preview-js' }, 'url generation failed');
+        logger.error(
             { key: { remoteJid: '123456789012@lid' }, err: new Error('Invalid PreKey ID') },
             'failed to decrypt message'
         );
@@ -244,8 +249,8 @@ test('createBaileysSignalLogger filters redundant rollback/newsletter/parking/st
         assert.ok(!joined.includes('254712345678'), 'Phone digits must stay redacted');
 
         const diag = logger.getDiagnostics();
-        assert.equal(diag.warnings, 4);
-        assert.equal(diag.errors, 6);
+        assert.equal(diag.warnings, 5);
+        assert.equal(diag.errors, 7);
 
         // Structured attrs/key fields are extracted & redacted when onEvent inspects events
         const events = [];

@@ -1271,6 +1271,98 @@ test('processStatusMessage prefers canonical LID, skips expired/own statuses, an
   }
 });
 
+test('wrapSignalAndSenderKeyGuard handles No session record (unscoped and status scope) without noisy logs and enables Bad MAC retry keys', async () => {
+  const deletedSessions = [];
+  const keyWrites = [];
+  const logged = [];
+  const sock = {
+    ev: createEmitter(),
+    authState: {
+      creds: { me: { id: '254700000001:1@s.whatsapp.net', lid: '1122334455:1@lid' } },
+      keys: {
+        get: async () => ({}),
+        set: async (data) => keyWrites.push(data),
+      },
+    },
+    signalRepository: {
+      lidMapping: {
+        getPNForLID: async (lid) => (lid === '556677889925@lid' ? '254722222225@s.whatsapp.net' : null),
+      },
+      jidToSignalProtocolAddress: (jid) => jid.split('@')[0],
+      deleteSession: async (jids) => deletedSessions.push(jids),
+      decryptMessage: async () => {
+        throw new Error('No session record');
+      },
+    },
+  };
+
+  wrapSignalAndSenderKeyGuard(sock, {
+    logError: (ctx, _c, target, msg) => logged.push({ ctx, target, msg }),
+  });
+
+  // Status-scoped No session record: clears only *_status, wraps as Bad MAC: No session record, no Signal Decrypt Failure box
+  await assert.rejects(
+    () =>
+      sock.signalRepository.decryptMessage({
+        jid: '556677889925@lid',
+        scope: 'status',
+        type: 'msg',
+        ciphertext: Buffer.from('x'),
+      }),
+    (err) => {
+      assert.match(err.message, /Bad MAC: No session record/);
+      assert.match(err.message, /No session record/);
+      return true;
+    },
+  );
+  assert.equal(deletedSessions.length, 0);
+  assert.deepEqual(keyWrites[0].session, {
+    '556677889925_status': null,
+    '254722222225_status': null,
+  });
+  assert.equal(logged.length, 0);
+
+  // Unscoped No session record: calls deleteSession, wraps as Bad MAC: No session record, no Signal Decrypt Failure box
+  await assert.rejects(
+    () =>
+      sock.signalRepository.decryptMessage({
+        jid: '556677889925@lid',
+        type: 'msg',
+        ciphertext: Buffer.from('x'),
+      }),
+    /Bad MAC: No session record/,
+  );
+  assert.deepEqual(deletedSessions, [['556677889925@lid']]);
+  assert.equal(logged.length, 0);
+});
+
+test('wrapSendOptionsNormalization disables missing link-preview-js lookup on URL text while preserving explicit getUrlInfo', async () => {
+  const calls = [];
+  const sock = {
+    sendMessage: async (jid, content, options) => {
+      calls.push({ jid, content, options });
+      return { key: { remoteJid: jid, fromMe: true, id: 'URL_TEST' } };
+    },
+  };
+
+  wrapSendOptionsNormalization(sock);
+
+  await sock.sendMessage('254712345678@s.whatsapp.net', {
+    text: 'Join https://whatsapp.com/channel/0029VbDh88NCMY0Fartkxm1g',
+  });
+  assert.equal(Object.prototype.hasOwnProperty.call(calls[0].options, 'getUrlInfo'), true);
+  assert.equal(calls[0].options.getUrlInfo, undefined);
+
+  const customGetUrlInfo = async () => undefined;
+  await sock.sendMessage(
+    '254712345678@s.whatsapp.net',
+    { text: 'Check https://example.com' },
+    { getUrlInfo: customGetUrlInfo },
+  );
+  assert.equal(calls[1].options.getUrlInfo, customGetUrlInfo);
+});
+
+
 
 
 

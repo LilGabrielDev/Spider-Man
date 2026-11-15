@@ -193,6 +193,12 @@ function isRedundantOrBenignBaileysMessage(lowerSummary) {
         return true;
     }
     if (
+        lowerSummary === 'url generation failed' ||
+        lowerSummary.startsWith('url generation failed |')
+    ) {
+        return true;
+    }
+    if (
         lowerSummary.startsWith('failed to decrypt message') &&
         (
             lowerSummary.includes('invalid prekey id') ||
@@ -200,8 +206,11 @@ function isRedundantOrBenignBaileysMessage(lowerSummary) {
                 lowerSummary.includes('status@broadcast') &&
                 (
                     lowerSummary.includes('no session found') ||
+                    lowerSummary.includes('no session record') ||
                     lowerSummary.includes('no senderkeyrecord found') ||
                     lowerSummary.includes('no matching sessions found') ||
+                    lowerSummary.includes('no sessions available') ||
+                    lowerSummary.includes('key used already') ||
                     lowerSummary.includes('bad mac')
                 )
             )
