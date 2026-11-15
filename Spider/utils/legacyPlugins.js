@@ -315,12 +315,29 @@ export async function loadLegacyCommands() {
           sender: ctx.sender,
           senderNumber: ctx.senderNumber,
           pushName: view.pushName,
+          pushname: view.pushName,
+          participants: view.participants,
           msg: ctx.msg,
           m: view,
           text: ctx.text,
           body: view.body,
           args: ctx.args,
           command: name,
+          commandName: ctx.command || name,
+          prefix: ctx.prefix || legacyConfig.BOT_PREFIX || '.',
+          packname: legacyConfig.PACK_NAME || legacyConfig.BOT_NAME || 'SPIDER-MAN-MD',
+          mode: legacyConfig.MODE || 'public',
+          pict: legacyConfig.BOT_PIC || _0x21bd49.BOT_PIC,
+          botname: legacyConfig.BOT_NAME || _0x21bd49.BOT_NAME || 'SPIDER-MAN MD',
+          botspeed: Number(ctx.botspeed || 12),
+          sendJson: async (client, jid, payload) => {
+            if (!client) return null;
+            if (typeof client.relayMessage === 'function') {
+              const id = typeof client.generateMessageTag === 'function' ? client.generateMessageTag() : undefined;
+              return client.relayMessage(jid, payload, id ? { messageId: id } : {});
+            }
+            return client.sendMessage?.(jid, payload);
+          },
           groupMeta,
           isGroup: view.isGroup,
           isAdmin,

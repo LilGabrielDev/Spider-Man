@@ -1,7 +1,7 @@
 import { downloadContentFromMessage } from '@whiskeysockets/baileys';
 import fs from 'fs-extra';
+import os from 'os';
 import path from 'path';
-import { Jimp } from 'jimp';
 import config from '../../spider/config.js';
 import { t } from '../france/translator.js';
 import { cleanJid, extractPhoneDigits } from '../../spider/utils/groupRoleResolver.js';
@@ -31,14 +31,30 @@ async function getBuffer(mediaMsg, mediaType) {
 }
 
 const resizeImage = async (filePath) => {
-  const image = await Jimp.read(filePath);
-  const cropped = image
-    .crop({ x: 0, y: 0, w: image.bitmap.width, h: image.bitmap.height })
-    .scaleToFit({ w: 720, h: 720 });
-  return {
-    img: await cropped.getBuffer('image/jpeg'),
-    preview: await cropped.normalize().getBuffer('image/jpeg'),
-  };
+  try {
+    const mod = await import('jimp');
+    const JimpCls = mod?.Jimp || mod?.default?.Jimp || mod?.default;
+    if (JimpCls && typeof JimpCls.read === 'function') {
+      const image = await JimpCls.read(filePath);
+      const cropped = image
+        .crop({ x: 0, y: 0, w: image.bitmap.width, h: image.bitmap.height })
+        .scaleToFit({ w: 720, h: 720 });
+      return {
+        img: await cropped.getBuffer('image/jpeg'),
+        preview: await cropped.normalize().getBuffer('image/jpeg'),
+      };
+    }
+  } catch {}
+  try {
+    const sharpMod = await import('sharp');
+    const sharpFn = sharpMod?.default || sharpMod;
+    if (typeof sharpFn === 'function') {
+      const img = await sharpFn(filePath).resize(720, 720, { fit: 'inside' }).jpeg().toBuffer();
+      return { img, preview: img };
+    }
+  } catch {}
+  const raw = await fs.readFile(filePath);
+  return { img: raw, preview: raw };
 };
 
 export const commands = [
@@ -58,8 +74,7 @@ export const commands = [
       let tempPath = null;
       try {
         const mediaBuffer = await getBuffer(imageMsg, 'image');
-        tempPath = path.join(process.cwd(), 'temp', `${Date.now()}.jpg`);
-        await fs.ensureDir(path.dirname(tempPath));
+        tempPath = path.join(os.tmpdir(), `spider-pp-${Date.now()}.jpg`);
         await fs.writeFile(tempPath, mediaBuffer);
         const { img } = await resizeImage(tempPath);
         const res = await sock.query({

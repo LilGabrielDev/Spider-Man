@@ -1,0 +1,1 @@
+{"tables":{"business_ads":{"columns":["jid","name","desc","contact","location","hours","website","posted","created_at","updated_at"],"defaults":{"hours":"''","website":"''","posted":"0","created_at":"(unixepoch()","updated_at":"(unixepoch()"},"primaryKeys":["jid"],"autoIncrementCol":null,"nextAutoId":1,"nextRowId":1,"rows":[]}}}

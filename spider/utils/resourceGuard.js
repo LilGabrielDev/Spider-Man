@@ -380,6 +380,7 @@ export function cleanupDiskArtifacts({
 
   const dedicatedTempDirs = [
     '/tmp/ultra-lil-temp',
+    tmpDir ? path.join(tmpDir, 'ultra-lil-temp') : null,
     cwd ? path.join(cwd, 'temp') : null,
     cwd ? path.join(cwd, 'tmp') : null,
     cwd ? path.join(cwd, 'spider', 'temp') : null,

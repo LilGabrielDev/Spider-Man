@@ -363,6 +363,15 @@ export function detectHostingProvider({
   if (safeEnv.SOLARHOSTING) {
     return 'SolarHosting';
   }
+  if (safeEnv.WITHERHOSTING) {
+    return 'WitherHosting';
+  }
+  if (safeEnv.BISECTHOSTING) {
+    return 'BisectHosting';
+  }
+  if (safeEnv.FALIXNODES || safeEnv.FALIX) {
+    return 'FalixNodes';
+  }
 
   if (
     safeEnv.RAILWAY_ENVIRONMENT ||
@@ -385,7 +394,9 @@ export function detectHostingProvider({
   }
 
   if (
+    safeEnv.KOYEB ||
     safeEnv.KOYEB_ENV ||
+    safeEnv.KOYEB_SERVICE_NAME ||
     safeEnv.KOYEB_SERVICE_ID ||
     safeEnv.KOYEB_APP_NAME ||
     safeEnv.KOYEB_REGION ||
@@ -433,7 +444,7 @@ export function detectHostingProvider({
     return 'AWS';
   }
 
-  if (safeEnv.WEBSITE_SITE_NAME || safeEnv.CONTAINER_APP_NAME || safeEnv.AZURE_FUNCTIONS_ENVIRONMENT) {
+  if (safeEnv.WEBSITE_SITE_NAME || safeEnv.WEBSITE_INSTANCE_ID || safeEnv.CONTAINER_APP_NAME || safeEnv.AZURE_FUNCTIONS_ENVIRONMENT) {
     return 'Azure';
   }
 

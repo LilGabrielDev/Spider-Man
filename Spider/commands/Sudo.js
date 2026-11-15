@@ -1,5 +1,5 @@
-import { normalizeJid, saveSudoList } from '../france/index.js';
-import { loadSudoList } from '../../spider/utils/sudoStore.js';
+import { normalizeJid } from '../france/index.js';
+import { loadSudoList, saveSudoList } from '../../spider/utils/sudoStore.js';
 import { t } from '../france/translator.js';
 import { extractPhoneDigits } from '../../spider/utils/groupRoleResolver.js';
 import { resolveTargetFromMessage } from '../../spider/utils/groupActionHelper.js';

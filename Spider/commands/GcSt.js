@@ -129,6 +129,7 @@ async function sendGroupStatus(sock, groupJid, payload) {
       },
     },
     {},
+    { userJid: sock?.user?.id, timestamp: new Date() },
   );
   await sock.relayMessage(groupJid, waMsg.message, { messageId: waMsg.key.id });
   return waMsg;
