@@ -117,6 +117,9 @@ export async function safeTeardownSocket(sock, { flushStores = null, timeoutMs =
   try {
     sock.ev?.removeAllListeners?.();
   } catch {}
+  try {
+    sock.ev?.flush?.();
+  } catch {}
 }
 
 export function createConnectionController({
