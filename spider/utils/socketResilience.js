@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import { proto } from '@whiskeysockets/baileys';
 import { normalizeAuthCreds, normalizeMeCredentials, parseJidParts } from './authState.js';
 import { installConsoleSignalSanitizer } from './privacyLogger.js';
+import { cleanUserJid } from './userJid.js';
 
 const wrappedSockets = new WeakSet();
 const preKeyCheckedSockets = new WeakSet();
@@ -11,6 +12,7 @@ const preKeyWriteCounters = new WeakMap();
 const appStateSyncedSockets = new WeakSet();
 const appStateInFlightSockets = new WeakSet();
 const appStateKeyRequestCooldowns = new WeakMap();
+const statusReactionTargetsBySock = new WeakMap();
 const VALID_PN_DOMAINS = new Set(['s.whatsapp.net', 'hosted', 'c.us']);
 export const DEFAULT_PREKEY_RETRY_DELAY_MS = 5_500;
 export const MAX_PREKEY_THROTTLE_RETRIES = 4;
@@ -1225,6 +1227,17 @@ export function wrapAckErrorRecovery(
         recentRecoveryCooldown.delete(recentRecoveryCooldown.keys().next().value);
       }
 
+      if (remoteJid === 'status@broadcast' && errorCode === '400') {
+        const trackedTargets = statusReactionTargetsBySock.get(sock)?.get(msgId);
+        if (Array.isArray(trackedTargets)) {
+          for (const targetJid of trackedTargets) {
+            clearCachedUserDevices(userDevicesCache, targetJid);
+          }
+          statusReactionTargetsBySock.get(sock)?.delete(msgId);
+        }
+        continue;
+      }
+
       logError?.(
         'Message Delivery Error',
         null,
@@ -1281,13 +1294,74 @@ export function wrapAckErrorRecovery(
   return true;
 }
 
+function normalizeBroadcastUserJid(jid) {
+  const cleaned = cleanUserJid(jid);
+  if (!cleaned) return '';
+  const lower = cleaned.toLowerCase();
+  if (
+    lower === 'status@broadcast' ||
+    lower.endsWith('@g.us') ||
+    lower.endsWith('@broadcast') ||
+    lower.endsWith('@newsletter')
+  ) {
+    return '';
+  }
+  return cleaned.includes('@') ? cleaned : '';
+}
+
+function isOwnBroadcastAccount(jid, sock) {
+  const target = normalizeBroadcastUserJid(jid);
+  if (!target) return false;
+  const targetLower = target.toLowerCase();
+  const targetUser = extractUserPart(target);
+  const meCandidates = [
+    sock?.authState?.creds?.me?.id,
+    sock?.authState?.creds?.me?.lid,
+    sock?.user?.id,
+    sock?.user?.lid,
+  ];
+  for (const rawMe of meCandidates) {
+    const cleanMe = normalizeBroadcastUserJid(rawMe);
+    if (!cleanMe) continue;
+    if (cleanMe.toLowerCase() === targetLower) return true;
+    if (targetUser && extractUserPart(cleanMe) === targetUser) return true;
+  }
+  return false;
+}
+
+async function resolveStatusTargetToLid(jid, sock) {
+  const cleaned = normalizeBroadcastUserJid(jid);
+  if (!cleaned) return '';
+  if (isLidOrHostedLidJid(cleaned)) return cleaned;
+  const lidMapping = sock?.signalRepository?.lidMapping;
+  if (!lidMapping) return cleaned;
+  try {
+    if (typeof lidMapping.getLIDForPN === 'function') {
+      const mapped = await lidMapping.getLIDForPN(cleaned);
+      const cleanMapped = normalizeBroadcastUserJid(mapped);
+      if (cleanMapped) return cleanMapped;
+    }
+    if (typeof lidMapping.getKnownLIDsForPNs === 'function') {
+      const known = await lidMapping.getKnownLIDsForPNs([cleaned]);
+      const pair = Array.isArray(known) ? known.find((p) => p?.lid) : null;
+      const cleanMapped = normalizeBroadcastUserJid(pair?.lid);
+      if (cleanMapped) return cleanMapped;
+    }
+  } catch {
+    // Fallback to cleaned JID
+  }
+  return cleaned;
+}
+
 export function wrapSendOptionsNormalization(sock) {
   if (!sock || typeof sock.sendMessage !== 'function') return false;
   if (sock.sendMessage.__spiderOptsNormalized) return true;
 
   const origSendMessage = sock.sendMessage.bind(sock);
   const wrappedSend = async (jid, content, options) => {
+    let nextContent = content;
     let nextOptions = options;
+
     if (
       options &&
       typeof options === 'object' &&
@@ -1300,7 +1374,100 @@ export function wrapSendOptionsNormalization(sock) {
         nextOptions = { ...options, ephemeralExpiration: exp };
       }
     }
-    return origSendMessage(jid, content, nextOptions);
+
+    if (jid === 'status@broadcast') {
+      const hasStatusList = Array.isArray(nextOptions?.statusJidList);
+      const isReaction = Boolean(content && typeof content === 'object' && content.react && typeof content.react === 'object');
+
+      if (hasStatusList || isReaction) {
+        const resolvedTargets = [];
+        const seenTargets = new Set();
+
+        const addResolvedTarget = async (rawTarget) => {
+          const cleaned = normalizeBroadcastUserJid(rawTarget);
+          if (!cleaned || isOwnBroadcastAccount(cleaned, sock)) return;
+          const preferred = isReaction ? await resolveStatusTargetToLid(cleaned, sock) : cleaned;
+          if (!preferred || isOwnBroadcastAccount(preferred, sock)) return;
+          const dedupeKey = preferred.toLowerCase();
+          if (!seenTargets.has(dedupeKey)) {
+            seenTargets.add(dedupeKey);
+            resolvedTargets.push(preferred);
+          }
+        };
+
+        if (hasStatusList) {
+          for (const rawTarget of nextOptions.statusJidList) {
+            await addResolvedTarget(rawTarget);
+          }
+        }
+
+        if (isReaction && content.react.key && typeof content.react.key === 'object') {
+          const rawKey = content.react.key;
+          const rawParticipant = rawKey.participant || (resolvedTargets[0] || '');
+          let cleanParticipant = normalizeBroadcastUserJid(rawParticipant);
+          if (cleanParticipant && !isOwnBroadcastAccount(cleanParticipant, sock)) {
+            cleanParticipant = await resolveStatusTargetToLid(cleanParticipant, sock);
+          }
+          if (!hasStatusList && cleanParticipant && !isOwnBroadcastAccount(cleanParticipant, sock)) {
+            await addResolvedTarget(cleanParticipant);
+          }
+
+          const cleanKey = {
+            remoteJid: 'status@broadcast',
+            fromMe: Boolean(rawKey.fromMe),
+            id: String(rawKey.id || ''),
+            ...(cleanParticipant ? { participant: cleanParticipant } : {}),
+            ...(rawKey.isGroupStatus ? { isGroupStatus: true } : {}),
+          };
+
+          if (!cleanKey.id || resolvedTargets.length === 0) {
+            return {
+              key: {
+                remoteJid: 'status@broadcast',
+                fromMe: true,
+                id: cleanKey.id || '',
+              },
+            };
+          }
+
+          nextContent = {
+            ...content,
+            react: {
+              ...content.react,
+              key: cleanKey,
+            },
+          };
+          nextOptions = {
+            ...(nextOptions || {}),
+            statusJidList: resolvedTargets,
+          };
+        } else if (hasStatusList) {
+          nextOptions = {
+            ...(nextOptions || {}),
+            statusJidList: resolvedTargets,
+          };
+        }
+      }
+    }
+
+    const res = await origSendMessage(jid, nextContent, nextOptions);
+    if (
+      jid === 'status@broadcast' &&
+      res?.key?.id &&
+      Array.isArray(nextOptions?.statusJidList) &&
+      nextOptions.statusJidList.length > 0
+    ) {
+      let tracked = statusReactionTargetsBySock.get(sock);
+      if (!tracked) {
+        tracked = new Map();
+        statusReactionTargetsBySock.set(sock, tracked);
+      }
+      tracked.set(res.key.id, nextOptions.statusJidList);
+      if (tracked.size > 200) {
+        tracked.delete(tracked.keys().next().value);
+      }
+    }
+    return res;
   };
   wrappedSend.__spiderOptsNormalized = true;
   sock.sendMessage = wrappedSend;
