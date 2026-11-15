@@ -92,9 +92,16 @@ function summarizeErrorPayload(arg) {
         }
         if (arg.reason) parts.push(`reason=${sanitizeConsoleText(String(arg.reason))}`);
         if (arg.statusCode) parts.push(`status=${Number(arg.statusCode) || sanitizeConsoleText(String(arg.statusCode))}`);
-        if (arg.jid) parts.push(`jid=${redactPhoneOrJid(arg.jid)}`);
-        if (arg.participant) parts.push(`participant=${redactPhoneOrJid(arg.participant)}`);
-        if (arg.from) parts.push(`from=${redactPhoneOrJid(arg.from)}`);
+        const effectiveJid = arg.jid || (!arg.from ? arg.key?.remoteJid : '');
+        const effectiveParticipant = arg.participant || arg.key?.participant;
+        const effectiveFrom = arg.from || arg.attrs?.from;
+        if (effectiveJid) parts.push(`jid=${redactPhoneOrJid(effectiveJid)}`);
+        if (effectiveParticipant) parts.push(`participant=${redactPhoneOrJid(effectiveParticipant)}`);
+        if (effectiveFrom) parts.push(`from=${redactPhoneOrJid(effectiveFrom)}`);
+        if (arg.attrs?.class) parts.push(`class=${sanitizeConsoleText(String(arg.attrs.class))}`);
+        if (arg.attrs?.type) parts.push(`type=${sanitizeConsoleText(String(arg.attrs.type))}`);
+        if (arg.attrs?.error) parts.push(`ackError=${sanitizeConsoleText(String(arg.attrs.error))}`);
+        if (arg.attrs?.code) parts.push(`code=${sanitizeConsoleText(String(arg.attrs.code))}`);
         if (arg.retryCount !== undefined) parts.push(`retry=${Number(arg.retryCount) || 0}`);
         return parts.join(' ');
     }
@@ -187,15 +194,22 @@ function isRedundantOrBenignBaileysMessage(lowerSummary) {
     }
     if (
         lowerSummary.startsWith('failed to decrypt message') &&
-        lowerSummary.includes('status@broadcast') &&
         (
-            lowerSummary.includes('no session found') ||
-            lowerSummary.includes('no senderkeyrecord found') ||
             lowerSummary.includes('invalid prekey id') ||
-            lowerSummary.includes('no matching sessions found') ||
-            lowerSummary.includes('bad mac')
+            (
+                lowerSummary.includes('status@broadcast') &&
+                (
+                    lowerSummary.includes('no session found') ||
+                    lowerSummary.includes('no senderkeyrecord found') ||
+                    lowerSummary.includes('no matching sessions found') ||
+                    lowerSummary.includes('bad mac')
+                )
+            )
         )
     ) {
+        return true;
+    }
+    if (lowerSummary.startsWith('received error in ack')) {
         return true;
     }
     return false;
