@@ -600,3 +600,52 @@ test('Admin clearcache command is owner-only and reports cleaned artifacts', asy
   assert.match(sent[1].payload.text, /DISK & CACHE CLEANER/);
   assert.match(sent[1].payload.text, /SESSION TEMP FILES/);
 });
+
+test('pruneAuthDirectory and clearTemporarySessionsAndCache preserve Signal keys and backups when preserveSignalKeys=true', () => {
+  withTempWorkspace((root) => {
+    const authDir = path.join(root, 'auth');
+    fs.mkdirSync(authDir, { recursive: true });
+    const nowMs = Date.now();
+    const oldAge = 60 * 60 * 1000;
+
+    const signalFiles = [
+      'creds.json',
+      'creds.json.bak',
+      'sender-key-1.json',
+      'sender-key-2.json',
+      'session-1.json',
+      'session-2.json',
+      'pre-key-1.json',
+      'pre-key-2.json',
+      'tctoken-1.json',
+      'tctoken-2.json',
+    ];
+    for (const file of signalFiles) {
+      const p = path.join(authDir, file);
+      fs.writeFileSync(p, '{}');
+      setFileAge(p, oldAge, nowMs);
+    }
+
+    const orphanTmp = path.join(authDir, 'creds.json.tmp-123');
+    fs.writeFileSync(orphanTmp, '{');
+    setFileAge(orphanTmp, oldAge, nowMs);
+
+    const summary = clearTemporarySessionsAndCache({
+      authDir,
+      cwd: root,
+      maxSenderKeys: 1,
+      maxSessionFiles: 1,
+      maxPreKeys: 1,
+      maxTcTokens: 1,
+      tempMaxAgeMs: 10 * 60 * 1000,
+      preserveSignalKeys: true,
+      nowMs,
+    });
+
+    assert.equal(summary.auth.removedFiles, 1);
+    assert.equal(fs.existsSync(orphanTmp), false);
+    for (const file of signalFiles) {
+      assert.equal(fs.existsSync(path.join(authDir, file)), true, `${file} must survive when preserveSignalKeys=true`);
+    }
+  });
+});

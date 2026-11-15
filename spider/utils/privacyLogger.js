@@ -70,3 +70,106 @@ export function logCommandExecution() {
 export function logStatusUpdate() {
     return undefined;
 }
+
+function summarizeErrorPayload(arg) {
+    if (!arg) return '';
+    if (typeof arg === 'string') return sanitizeConsoleText(arg);
+    if (arg instanceof Error) return sanitizeConsoleText(arg.message || arg.name || 'Error');
+    if (typeof arg === 'object') {
+        const parts = [];
+        const err = arg.err || arg.error;
+        if (err) {
+            parts.push(sanitizeConsoleText(err.message || err));
+        }
+        if (arg.reason) parts.push(`reason=${sanitizeConsoleText(String(arg.reason))}`);
+        if (arg.statusCode) parts.push(`status=${Number(arg.statusCode) || sanitizeConsoleText(String(arg.statusCode))}`);
+        if (arg.jid) parts.push(`jid=${redactPhoneOrJid(arg.jid)}`);
+        if (arg.participant) parts.push(`participant=${redactPhoneOrJid(arg.participant)}`);
+        if (arg.from) parts.push(`from=${redactPhoneOrJid(arg.from)}`);
+        if (arg.retryCount !== undefined) parts.push(`retry=${Number(arg.retryCount) || 0}`);
+        return parts.join(' ');
+    }
+    return sanitizeConsoleText(String(arg));
+}
+
+export function createBaileysSignalLogger({ onEvent = null, level = 'warn', throttleMs = 10_000 } = {}) {
+    const diagnostics = {
+        warnings: 0,
+        errors: 0,
+        decryptFailures: 0,
+        encryptFailures: 0,
+        retryFailures: 0,
+        sessionErrors: 0,
+        lastEventAt: 0,
+        lastSummary: '',
+    };
+    const recentMessages = new Map();
+
+    function recordAndEmit(severity, args) {
+        const [first, second] = args;
+        const msgPart = typeof first === 'string' ? first : (typeof second === 'string' ? second : '');
+        const metaPart = typeof first === 'object' && first !== null ? first : null;
+        const cleanMsg = sanitizeConsoleText(msgPart);
+        const cleanMeta = summarizeErrorPayload(metaPart);
+        const combined = [cleanMsg, cleanMeta].filter(Boolean).join(' | ');
+        const lower = combined.toLowerCase();
+
+        if (severity === 'warn') diagnostics.warnings += 1;
+        else diagnostics.errors += 1;
+
+        if (lower.includes('decrypt') || lower.includes('bad mac') || lower.includes('invalid prekey')) {
+            diagnostics.decryptFailures += 1;
+        }
+        if (lower.includes('encrypt')) {
+            diagnostics.encryptFailures += 1;
+        }
+        if (lower.includes('retry') || lower.includes('sending message again') || lower.includes('placeholder')) {
+            diagnostics.retryFailures += 1;
+        }
+        if (lower.includes('session') || lower.includes('sender key') || lower.includes('sender-key') || lower.includes('identity')) {
+            diagnostics.sessionErrors += 1;
+        }
+
+        const summary = combined || 'Unknown Baileys diagnostic event';
+        diagnostics.lastEventAt = Date.now();
+        diagnostics.lastSummary = summary;
+
+        if (typeof onEvent === 'function') {
+            try {
+                onEvent({ severity, summary, diagnostics: { ...diagnostics } });
+            } catch {}
+            return;
+        }
+
+        const now = Date.now();
+        const dedupeKey = `${severity}:${summary}`;
+        const prev = recentMessages.get(dedupeKey) || 0;
+        if (now - prev < throttleMs) return;
+        recentMessages.set(dedupeKey, now);
+        if (recentMessages.size > 100) {
+            recentMessages.delete(recentMessages.keys().next().value);
+        }
+
+        const fn = severity === 'warn' ? console.warn : console.error;
+        fn(`[BAILEYS ${severity.toUpperCase()}] ${summary}`);
+    }
+
+    const logger = {
+        level,
+        trace: noop,
+        debug: noop,
+        info: noop,
+        warn: (...args) => recordAndEmit('warn', args),
+        error: (...args) => recordAndEmit('error', args),
+        fatal: (...args) => recordAndEmit('fatal', args),
+        child() {
+            return logger;
+        },
+        getDiagnostics() {
+            return { ...diagnostics };
+        },
+    };
+
+    return logger;
+}
+

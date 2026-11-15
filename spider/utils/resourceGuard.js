@@ -473,8 +473,9 @@ function isProtectedAuthFile(fileName) {
   );
 }
 
-function isTempSessionFile(fileName) {
+function isTempSessionFile(fileName, { preserveBackups = false } = {}) {
   if (fileName === 'creds.json') return false;
+  if (preserveBackups && fileName === 'creds.json.bak') return false;
   return TEMP_SESSION_FILE_PATTERN.test(fileName);
 }
 
@@ -485,6 +486,7 @@ export function pruneAuthDirectory({
   maxPreKeys = 900,
   maxTcTokens = 200,
   tempMaxAgeMs = DEFAULT_SESSION_TEMP_AGE_MS,
+  preserveSignalKeys = false,
   nowMs = Date.now(),
   fsImpl = fs,
 } = {}) {
@@ -511,7 +513,7 @@ export function pruneAuthDirectory({
     const st = safeStat(fsImpl, fullPath);
     if (!st || st.isDirectory()) continue;
 
-    if (isTempSessionFile(name)) {
+    if (isTempSessionFile(name, { preserveBackups: preserveSignalKeys })) {
       const ageMs = nowMs - (st.mtimeMs || st.ctimeMs || 0);
       if (tempMaxAgeMs <= 0 || ageMs >= tempMaxAgeMs) {
         try {
@@ -524,6 +526,11 @@ export function pruneAuthDirectory({
       } else {
         otherCount += 1;
       }
+      continue;
+    }
+
+    if (preserveSignalKeys && name === 'creds.json.bak') {
+      protectedCount += 1;
       continue;
     }
 
@@ -552,7 +559,7 @@ export function pruneAuthDirectory({
   }
 
   function pruneOldest(list, cap) {
-    if (!Number.isFinite(cap) || cap < 0 || list.length <= cap) {
+    if (preserveSignalKeys || !Number.isFinite(cap) || cap < 0 || list.length <= cap) {
       return list.length;
     }
     list.sort((a, b) => {
@@ -630,6 +637,7 @@ export function clearTemporarySessionsAndCache({
   maxSessionFiles = 500,
   maxPreKeys = 900,
   maxTcTokens = 200,
+  preserveSignalKeys = false,
   nowMs = Date.now(),
   fsImpl = fs,
 } = {}) {
@@ -667,6 +675,7 @@ export function clearTemporarySessionsAndCache({
       maxPreKeys,
       maxTcTokens,
       tempMaxAgeMs,
+      preserveSignalKeys,
       nowMs,
       fsImpl,
     });
@@ -708,6 +717,7 @@ export function startResourceMaintenance({
   maxSessionFiles = 500,
   maxPreKeys = 900,
   maxTcTokens = 200,
+  preserveSignalKeys = false,
   memoryHighWaterRatio = 0.85,
   quiet = false,
   env = process.env,
@@ -760,6 +770,7 @@ export function startResourceMaintenance({
         maxSessionFiles,
         maxPreKeys,
         maxTcTokens,
+        preserveSignalKeys,
         nowMs,
       });
 

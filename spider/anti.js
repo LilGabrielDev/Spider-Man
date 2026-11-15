@@ -1,5 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { generateMessageIDV2 } from '@whiskeysockets/baileys';
+
+const sendContextStorage = new AsyncLocalStorage();
 
 export const messageStore = new Map();
 const messagesByChatAndId = new Map();
@@ -353,6 +357,26 @@ export async function getMessageForRetry(key) {
   return messageStore.get(key.id)?.message;
 }
 
+export function createPreSendPatchCapture(basePatcher = null) {
+  return async (message, recipientJids) => {
+    const patched =
+      typeof basePatcher === 'function' ? await basePatcher(message, recipientJids) : message;
+    const ctx = sendContextStorage.getStore();
+    if (ctx?.remoteJid && ctx?.messageId) {
+      const msgToCache = Array.isArray(patched)
+        ? patched[0]?.message || message
+        : patched || message;
+      if (msgToCache && typeof msgToCache === 'object') {
+        rememberMessage({
+          key: { remoteJid: ctx.remoteJid, id: ctx.messageId, fromMe: true },
+          message: msgToCache,
+        });
+      }
+    }
+    return patched;
+  };
+}
+
 export function installMessageRetryStore(sock) {
   if (!sock || typeof sock.sendMessage !== 'function') return false;
   if (wrappedSockets.has(sock)) return true;
@@ -389,7 +413,27 @@ export function installMessageRetryStore(sock) {
   };
   sock.sendMessage = (...args) => enqueueMessage(args[0], async () => {
     const targetJid = args[0];
-    const sentMessage = await originalSendMessage(...args);
+    const content = args[1];
+    const options = args[2];
+    const isLiveSocket = Boolean(sock?.user?.id);
+    const explicitMsgId = options && typeof options === 'object' ? options.messageId : undefined;
+    const nextMsgId = explicitMsgId || (isLiveSocket ? generateMessageIDV2(sock.user.id) : undefined);
+
+    const runSend = async () => {
+      if (isLiveSocket && !explicitMsgId && nextMsgId) {
+        const nextOptions =
+          options && typeof options === 'object' && !Array.isArray(options)
+            ? { ...options, messageId: nextMsgId }
+            : { messageId: nextMsgId };
+        return originalSendMessage(targetJid, content, nextOptions);
+      }
+      return originalSendMessage(...args);
+    };
+
+    const sentMessage = nextMsgId
+      ? await sendContextStorage.run({ remoteJid: targetJid, messageId: nextMsgId }, runSend)
+      : await runSend();
+
     if (sentMessage?.key?.remoteJid && targetJid) {
       registerChatAlias(targetJid, sentMessage.key.remoteJid);
     }

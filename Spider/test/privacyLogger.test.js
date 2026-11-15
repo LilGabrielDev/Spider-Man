@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
     SILENT_LOGGER,
+    createBaileysSignalLogger,
     redactPhoneOrJid,
     sanitizeConsoleText,
     logIncomingMessage,
@@ -144,4 +145,31 @@ test('spider modules do not expose raw message loggers or pass console to downlo
         const src = fs.readFileSync(path.join(ROOT_DIR, relPath), 'utf8');
         assert.ok(!/['"]?logger['"]?\s*:\s*console\b/.test(src), `${relPath} still passes raw console to downloadMediaMessage`);
     }
+});
+
+test('createBaileysSignalLogger stays silent for info/debug, redacts JIDs/phones, throttles duplicates, and tracks Signal diagnostics', async () => {
+    await withCapturedConsole((captured) => {
+        const logger = createBaileysSignalLogger({ throttleMs: 60_000 });
+        logger.trace('trace secret 254712345678@s.whatsapp.net');
+        logger.debug('debug secret 254712345678');
+        logger.info({ jid: '254712345678@s.whatsapp.net' }, 'info secret');
+        assert.equal(captured.length, 0);
+
+        logger.warn({ jid: '254712345678@s.whatsapp.net', err: new Error('Bad MAC during decrypt') }, 'failed decrypt from 998877665544@lid');
+        logger.warn({ jid: '254712345678@s.whatsapp.net', err: new Error('Bad MAC during decrypt') }, 'failed decrypt from 998877665544@lid');
+        logger.error({ from: '120363399604046397@g.us', retryCount: 2 }, 'sending message again missing sender key session');
+
+        const joined = captured.join('\n');
+        assert.ok(!joined.includes('254712345678'), 'Phone/JID should be redacted');
+        assert.ok(!joined.includes('998877665544'), 'LID should be redacted');
+        assert.ok(!joined.includes('120363399604046397'), 'Group JID should be redacted');
+        assert.equal(captured.length, 2, 'Duplicate warn within throttleMs must be throttled');
+
+        const diag = logger.getDiagnostics();
+        assert.equal(diag.warnings, 2);
+        assert.equal(diag.errors, 1);
+        assert.equal(diag.decryptFailures, 2);
+        assert.equal(diag.retryFailures, 1);
+        assert.equal(diag.sessionErrors, 1);
+    });
 });

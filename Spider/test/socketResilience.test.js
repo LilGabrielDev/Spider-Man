@@ -6,12 +6,14 @@ import path from 'node:path';
 import {
   clearCachedUserDevices,
   countLocalPreKeyFiles,
+  createGuardedSignalKeyStore,
   ensureHealthyPreKeys,
   installSocketResilience,
   syncMessageKeyAliases,
   wrapAckErrorRecovery,
   wrapLidMappingResilience,
   wrapSendOptionsNormalization,
+  wrapSignalAndSenderKeyGuard,
 } from '../../spider/utils/socketResilience.js';
 
 function createEmitter() {
@@ -263,9 +265,23 @@ test('wrapAckErrorRecovery clears stale caches and recreates sessions on 421/479
   const refreshedGroups = [];
   const asserted = [];
   const logged = [];
+  const keyWrites = [];
 
   const sock = {
     ev,
+    authState: {
+      creds: {
+        me: {
+          id: '254700000000:5@s.whatsapp.net',
+          lid: '887766554433:5@lid',
+        },
+      },
+      keys: {
+        set: async (data) => {
+          keyWrites.push(data);
+        },
+      },
+    },
     groupMetadata: async (jid) => {
       refreshedGroups.push(jid);
       return { id: jid };
@@ -316,6 +332,17 @@ test('wrapAckErrorRecovery clears stale caches and recreates sessions on 421/479
   assert.ok(deletedKeys.includes('554433221100@lid'));
   assert.deepEqual(asserted, [{ jids: ['554433221100:2@lid'], force: true }]);
   assert.equal(logged.length, 2);
+
+  // 479 in group clears groupCache and invalidates sender-key-memory entries
+  ev.emit('messages.update', [
+    {
+      key: { remoteJid: '120363000000000001@g.us', id: 'm4' },
+      update: { messageStubParameters: ['479'] },
+    },
+  ]);
+  assert.equal(keyWrites.length, 1);
+  assert.equal(keyWrites[0]['sender-key-memory']['120363000000000001@g.us'], null);
+  assert.equal(keyWrites[0]['sender-key-memory']['120363000000000001@g.us:887766554433:5@lid'], null);
 
   assert.equal(clearCachedUserDevices(null, 'x'), false);
 });
@@ -397,4 +424,145 @@ test('installSocketResilience wires connection.update open prekey check and all 
   ev.emit('connection.update', { connection: 'open' });
   await new Promise((r) => setTimeout(r, 20));
   assert.deepEqual(uploaded, [50]);
+});
+
+test('stripPartialEncryptErrors isolates errored user nodes without discarding valid sessions', async () => {
+  const errors = [];
+  const sock = {
+    signalRepository: {
+      lidMapping: {
+        getLIDsForPNs: async () => [],
+      },
+    },
+    query: async () => ({
+      tag: 'iq',
+      attrs: { type: 'result' },
+      content: [
+        {
+          tag: 'list',
+          attrs: {},
+          content: [
+            { tag: 'user', attrs: { jid: '1111@lid' }, content: [{ tag: 'identity' }] },
+            { tag: 'user', attrs: { jid: '2222@lid' }, content: [{ tag: 'error', attrs: { code: '404' } }] },
+          ],
+        },
+      ],
+    }),
+  };
+
+  wrapLidMappingResilience(sock, { logError: (...a) => errors.push(a) });
+  const res = await sock.query({
+    tag: 'iq',
+    attrs: { xmlns: 'encrypt', type: 'get' },
+    content: [{ tag: 'key', attrs: {}, content: [{ tag: 'user', attrs: { jid: '1111@lid' } }] }],
+  });
+
+  assert.equal(res.content[0].content.length, 1);
+  assert.equal(res.content[0].content[0].attrs.jid, '1111@lid');
+  assert.equal(errors.length, 1);
+  assert.match(errors[0][3], /Isolated 1 errored recipient key bundle/);
+});
+
+test('createGuardedSignalKeyStore and wrapSignalAndSenderKeyGuard prevent sender-key poisoning and fix bare LIDs', async () => {
+  const ev = createEmitter();
+  const persistedSets = [];
+  const asserted = [];
+  const clearedDevices = [];
+  const recordedGroupCalls = [];
+  const failedEncryptJids = new Map();
+
+  const innerKeys = {
+    get: async () => ({}),
+    set: async (data) => {
+      persistedSets.push(data);
+    },
+  };
+  const guardedKeys = createGuardedSignalKeyStore(innerKeys, failedEncryptJids);
+
+  const sock = {
+    ev,
+    authState: {
+      creds: {
+        me: {
+          id: '254712345678:12@s.whatsapp.net',
+          lid: '998877665544@lid',
+        },
+      },
+      keys: guardedKeys,
+    },
+    assertSessions: async (jids, force) => {
+      asserted.push({ jids, force });
+      return true;
+    },
+    signalRepository: {
+      encryptGroupMessage: async (opts) => {
+        recordedGroupCalls.push(['encryptGroupMessage', opts.meId]);
+        return { ciphertext: Buffer.from('ok'), senderKeyDistributionMessage: Buffer.from('skdm') };
+      },
+      hasSenderKey: async (opts) => {
+        recordedGroupCalls.push(['hasSenderKey', opts.meId]);
+        return false;
+      },
+      getSenderKeyDistributionMessage: async (opts) => {
+        recordedGroupCalls.push(['getSenderKeyDistributionMessage', opts.meId]);
+        return Buffer.from('skdm');
+      },
+      encryptMessage: async ({ jid }) => {
+        if (jid === 'badrecipient:0@lid') {
+          throw new Error('No session record');
+        }
+        return { type: 'pkmsg', ciphertext: Buffer.from('enc') };
+      },
+    },
+  };
+
+  const userDevicesCache = {
+    del: (k) => {
+      clearedDevices.push(k);
+      return true;
+    },
+  };
+
+  assert.equal(
+    wrapSignalAndSenderKeyGuard(sock, { failedEncryptJids, userDevicesCache }),
+    true,
+  );
+  // Immediately normalizes creds.me.lid on init
+  assert.equal(sock.authState.creds.me.lid, '998877665544:12@lid');
+
+  // Re-emitted bare me.lid via creds.update is normalized in-place
+  const update = { me: { lid: '998877665544@lid' } };
+  ev.emit('creds.update', update);
+  assert.equal(update.me.lid, '998877665544:12@lid');
+
+  // Bare LID passed into group Signal methods is rewritten to device-suffixed :12@lid
+  await sock.signalRepository.hasSenderKey({ group: '120363@g.us', meId: '998877665544@lid' });
+  await sock.signalRepository.getSenderKeyDistributionMessage({ group: '120363@g.us', meId: '998877665544@lid' });
+  await sock.signalRepository.encryptGroupMessage({ group: '120363@g.us', meId: '998877665544@lid', data: Buffer.from('hi') });
+  assert.deepEqual(recordedGroupCalls, [
+    ['hasSenderKey', '998877665544:12@lid'],
+    ['getSenderKeyDistributionMessage', '998877665544:12@lid'],
+    ['encryptGroupMessage', '998877665544:12@lid'],
+  ]);
+
+  // Failing SKDM encryption records failed JID, clears userDevicesCache, force-asserts session,
+  // and strips that JID from sender-key-memory persistence while preserving successful recipients.
+  await assert.rejects(
+    () => sock.signalRepository.encryptMessage({ jid: 'badrecipient:0@lid', data: Buffer.from('x') }),
+    /No session record/,
+  );
+  assert.equal(clearedDevices.includes('badrecipient:0@lid'), true);
+  assert.deepEqual(asserted, [{ jids: ['badrecipient:0@lid'], force: true }]);
+
+  await sock.authState.keys.set({
+    'sender-key-memory': {
+      '120363@g.us': {
+        'badrecipient:0@lid': true,
+        'goodrecipient:0@lid': true,
+      },
+    },
+  });
+  assert.deepEqual(persistedSets[0]['sender-key-memory']['120363@g.us'], {
+    'goodrecipient:0@lid': true,
+  });
 });
