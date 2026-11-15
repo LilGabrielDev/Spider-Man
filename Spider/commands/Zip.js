@@ -28,58 +28,68 @@ export const commands = [
         const output = fs.createWriteStream(zipPath);
         const archive = new ZipArchive({ zlib: { level: 9 } });
 
-        output.on('close', async () => {
-          try {
-            const bytes = archive.pointer();
-            const sizeMb = (bytes / 1024 / 1024).toFixed(2);
-            await safeDeleteTempMessage(sock, from, tempMsg);
+        const archiveDone = new Promise((resolve, reject) => {
+          let settled = false;
+          const finish = (err) => {
+            if (settled) return;
+            settled = true;
+            if (err) reject(err);
+            else resolve();
+          };
+          output.on('close', async () => {
+            try {
+              const bytes = archive.pointer();
+              const sizeMb = (bytes / 1024 / 1024).toFixed(2);
+              await safeDeleteTempMessage(sock, from, tempMsg);
 
-            if (bytes > 50 * 1024 * 1024) {
-              const tooLarge = await t(from, 'zip', 'tooLarge');
+              if (bytes > 50 * 1024 * 1024) {
+                const tooLarge = await t(from, 'zip', 'tooLarge');
+                const powered = await t(from, 'zip', 'powered');
+                await sock.sendMessage(
+                  from,
+                  { text: `${tooLarge.replace('{size}', sizeMb)}\n\n${powered} ${botName}` },
+                  { quoted: msg },
+                );
+                return finish();
+              }
+
+              const successMsg = await t(from, 'zip', 'success');
               const powered = await t(from, 'zip', 'powered');
               await sock.sendMessage(
                 from,
-                { text: `${tooLarge.replace('{size}', sizeMb)}\n\n${powered} ${botName}` },
+                { text: `${successMsg}\n\n📦 ${fileName}\n💾 ${sizeMb} MB\n📅 ${new Date().toLocaleString()}\n\n${powered} ${botName}` },
                 { quoted: msg },
               );
-              return;
+
+              const captionPrefix = await t(from, 'zip', 'caption');
+              await sock.sendMessage(
+                from,
+                {
+                  document: fs.readFileSync(zipPath),
+                  fileName,
+                  mimetype: 'application/zip',
+                  caption: `${captionPrefix}\nSize: ${sizeMb}MB`,
+                },
+                { quoted: msg },
+              );
+              finish();
+            } catch (closeErr) {
+              finish(closeErr);
+            } finally {
+              try {
+                if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
+              } catch {}
             }
-
-            const successMsg = await t(from, 'zip', 'success');
-            const powered = await t(from, 'zip', 'powered');
-            await sock.sendMessage(
-              from,
-              { text: `${successMsg}\n\n📦 ${fileName}\n💾 ${sizeMb} MB\n📅 ${new Date().toLocaleString()}\n\n${powered} ${botName}` },
-              { quoted: msg },
-            );
-
-            const captionPrefix = await t(from, 'zip', 'caption');
-            await sock.sendMessage(
-              from,
-              {
-                document: fs.readFileSync(zipPath),
-                fileName,
-                mimetype: 'application/zip',
-                caption: `${captionPrefix}\nSize: ${sizeMb}MB`,
-              },
-              { quoted: msg },
-            );
-          } finally {
-            try {
-              if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
-            } catch {}
-          }
-        });
-
-        archive.on('warning', (err) => {
-          if (err.code === 'ENOENT') {
-            console.warn('Archive warning:', err);
-          } else {
-            throw err;
-          }
-        });
-        archive.on('error', (err) => {
-          throw err;
+          });
+          output.on('error', finish);
+          archive.on('warning', (err) => {
+            if (err.code === 'ENOENT') {
+              console.warn('Archive warning:', err);
+            } else {
+              finish(err);
+            }
+          });
+          archive.on('error', finish);
         });
 
         archive.pipe(output);
@@ -91,6 +101,7 @@ export const commands = [
           dot: false,
         });
         await archive.finalize();
+        await archiveDone;
       } catch (err) {
         console.error('Backup error:', err);
         await safeDeleteTempMessage(sock, from, tempMsg);
