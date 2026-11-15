@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { EventEmitter } from 'node:events';
 
 import {
   cleanJid,
@@ -163,12 +164,22 @@ test('handleAntiScamMessage and handleAntiFloodMessage recognize bot and sender 
     };
 
     const sent = [];
+    const ws = new EventEmitter();
+    let seq = 0;
     const sock = {
       user: { id: '254700000099:1@s.whatsapp.net', lid: `${botLid.split('@')[0]}:2@lid` },
+      ws,
       groupMetadata: async () => metadata,
       sendMessage: async (jid, payload) => {
+        seq += 1;
+        const id = `m-${seq}`;
         sent.push({ jid, payload });
-        return { key: { id: `m-${sent.length}`, remoteJid: jid, fromMe: true } };
+        if (payload?.delete) {
+          queueMicrotask(() => {
+            ws.emit('CB:ack,class:message', { attrs: { id } });
+          });
+        }
+        return { key: { id, remoteJid: jid, fromMe: true } };
       },
       groupParticipantsUpdate: async () => [],
     };

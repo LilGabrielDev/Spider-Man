@@ -184,36 +184,55 @@ export const commands = [
       });
       const targetJid = resolved.targetJid || from;
       const targetNum = resolved.displayUser || cleanJid(targetJid).split('@')[0];
+      const candidates = Array.from(
+        new Set(
+          [
+            resolved.phone ? `${resolved.phone}@s.whatsapp.net` : '',
+            targetJid,
+            ...(Array.isArray(resolved.alternateJids) ? resolved.alternateJids : []),
+          ].filter(Boolean),
+        ),
+      );
 
       let ppUrl;
-      try {
-        ppUrl = await sock.profilePictureUrl(targetJid, 'image');
-      } catch {
+      for (const cand of candidates) {
+        try {
+          const fetched = await sock.profilePictureUrl(cand, 'image');
+          if (fetched) {
+            ppUrl = fetched;
+            break;
+          }
+        } catch {}
+      }
+      if (!ppUrl) {
         ppUrl = await t(from, 'user', 'whoisDefaultImage');
       }
 
       let statusText = 'No status';
       let setDate = 'Unknown';
       let setTime = 'Unknown';
-      try {
-        const statuses = await sock.fetchStatus(targetJid);
-        if (statuses && statuses[0] && statuses[0].status) {
-          const entry = statuses[0].status;
-          statusText = entry.status || 'Unknown';
-          if (entry.setAt) {
-            const dt = new Date(entry.setAt);
-            if (!isNaN(dt.getTime())) {
-              setDate = dt.toLocaleDateString('en-GB');
-              setTime = dt.toLocaleTimeString('en-GB');
+      for (const cand of candidates) {
+        try {
+          const statuses = await sock.fetchStatus(cand);
+          if (statuses && statuses[0] && statuses[0].status) {
+            const entry = statuses[0].status;
+            statusText = entry.status || 'Unknown';
+            if (entry.setAt) {
+              const dt = new Date(entry.setAt);
+              if (!isNaN(dt.getTime())) {
+                setDate = dt.toLocaleDateString('en-GB');
+                setTime = dt.toLocaleTimeString('en-GB');
+              }
             }
+            break;
           }
+        } catch (err) {
+          console.log('[WHOIS] fetchStatus error:', err.message);
         }
-      } catch (err) {
-        console.log('[WHOIS] fetchStatus error:', err.message);
       }
 
       try {
-        await sock.onWhatsApp(targetJid);
+        await sock.onWhatsApp(candidates[0] || targetJid);
       } catch {}
 
       const aboutLabel = await t(from, 'user', 'whoisAbout');

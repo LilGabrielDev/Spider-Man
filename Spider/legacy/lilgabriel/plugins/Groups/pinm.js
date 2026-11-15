@@ -104,12 +104,13 @@ export default {
           ...(quotedParticipant ? { participant: quotedParticipant } : {}),
         };
         global._spiderPinPending.set(m.chat, { key: pinKey, ts: Date.now() });
-        setTimeout(() => {
+        const pinTimeout = setTimeout(() => {
           const entry = global._spiderPinPending.get(m.chat);
           if (entry && Date.now() - entry.ts > 5 * 60 * 1000) {
             global._spiderPinPending.delete(m.chat);
           }
         }, 5 * 60 * 1000);
+        pinTimeout?.unref?.();
 
         if (!duration) {
           await client.sendMessage(m.chat, { react: { text: '📌', key: m.reactKey } }).catch(() => {});

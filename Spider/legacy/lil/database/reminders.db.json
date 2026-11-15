@@ -1,0 +1,1 @@
+{"tables":{"reminders":{"columns":["id","requester","target_jid","chat_jid","message","remind_at","snoozed_from","is_done","created_at"],"defaults":{"is_done":"0"},"primaryKeys":["id"],"autoIncrementCol":"id","nextAutoId":1,"nextRowId":1,"rows":[]}}}

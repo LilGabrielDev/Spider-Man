@@ -1,0 +1,1 @@
+{"tables":{"meta_memory":{"columns":["jid","role","content","ts"],"defaults":{"ts":"(unixepoch()"},"primaryKeys":[],"autoIncrementCol":null,"nextAutoId":1,"nextRowId":1,"rows":[]}}}

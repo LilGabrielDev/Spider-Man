@@ -1,11 +1,39 @@
 import { downloadContentFromMessage } from '@whiskeysockets/baileys';
 import fs from 'fs-extra';
+import os from 'os';
 import path from 'path';
-import { Jimp } from 'jimp';
 import { MESSAGES } from '../france/index.js';
 import { extractContextInfo, isSendMessageFailure } from '../../spider/utils/groupActionHelper.js';
 
 const S_WHATSAPP_NET = 's.whatsapp.net';
+
+async function loadJimpClass() {
+  try {
+    const mod = await import('jimp');
+    return mod?.Jimp || mod?.default?.Jimp || mod?.default || null;
+  } catch {
+    return null;
+  }
+}
+
+async function resizeGroupImage(buf) {
+  const JimpCls = await loadJimpClass();
+  if (JimpCls && typeof JimpCls.read === 'function') {
+    const image = await JimpCls.read(buf);
+    const resized = image
+      .crop({ x: 0, y: 0, w: image.bitmap.width, h: image.bitmap.height })
+      .scaleToFit({ w: 720, h: 720 });
+    return resized.getBuffer('image/jpeg');
+  }
+  try {
+    const sharpMod = await import('sharp');
+    const sharpFn = sharpMod?.default || sharpMod;
+    if (typeof sharpFn === 'function') {
+      return await sharpFn(buf).resize(720, 720, { fit: 'inside' }).jpeg().toBuffer();
+    }
+  } catch {}
+  return buf;
+}
 
 async function getBuffer(mediaMsg, mediaType) {
   const stream = await downloadContentFromMessage(mediaMsg, mediaType);
@@ -32,14 +60,9 @@ export const commands = [
       let tempPath = null;
       try {
         const buf = await getBuffer(imageMsg, 'image');
-        tempPath = path.join(process.cwd(), 'temp', `${Date.now()}.jpg`);
-        await fs.ensureDir(path.dirname(tempPath));
-        await fs.writeFile(tempPath, buf);
-        const image = await Jimp.read(tempPath);
-        const resized = image
-          .crop({ x: 0, y: 0, w: image.bitmap.width, h: image.bitmap.height })
-          .scaleToFit({ w: 720, h: 720 });
-        const imgBuffer = await resized.getBuffer('image/jpeg');
+        tempPath = path.join(os.tmpdir(), `spider-gpp-${Date.now()}.jpg`);
+        await fs.writeFile(tempPath, buf).catch(() => {});
+        const imgBuffer = await resizeGroupImage(buf);
 
         let res;
         if (typeof sock.updateProfilePicture === 'function') {
