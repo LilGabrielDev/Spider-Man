@@ -331,12 +331,29 @@ export async function ensureAppStateSynced(
       return false;
     }
 
+    const myKeyId = String(sock.authState?.creds?.myAppStateKeyId || '').trim();
+    if (myKeyId) {
+      void requestMissingAppStateSyncKeys(sock, myKeyId, { logInfo });
+    }
+
     await sock.resyncAppState(unsynced, true);
-    appStateSyncedSockets.add(sock);
-    logInfo?.(
-      `[APP-STATE] Synced ${unsynced.length} app-state collection(s): ${unsynced.join(', ')}`,
+
+    const afterVersions = await sock.authState.keys.get(
+      'app-state-sync-version',
+      unsynced,
     );
-    return true;
+    const syncedNow = unsynced.filter((name) => Boolean(afterVersions?.[name]));
+    const stillUnsynced = unsynced.filter((name) => !afterVersions?.[name]);
+    if (stillUnsynced.length === 0) {
+      appStateSyncedSockets.add(sock);
+    }
+    if (syncedNow.length > 0) {
+      logInfo?.(
+        `[APP-STATE] Synced ${syncedNow.length} app-state collection(s): ${syncedNow.join(', ')}`,
+      );
+      return true;
+    }
+    return false;
   } catch (err) {
     logError?.('App State Sync', null, null, err?.message || String(err));
     return false;

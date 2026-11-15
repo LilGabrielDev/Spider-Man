@@ -20,8 +20,12 @@ export function redactPhoneOrJid(value) {
 
     const atIdx = str.indexOf('@');
     if (atIdx > 0) {
+        if (str.toLowerCase() === 'status@broadcast') return 'status@broadcast';
         const local = str.slice(0, atIdx).split(':')[0];
         const domain = str.slice(atIdx);
+        if (local.startsWith('••••') || local === '[redacted]') {
+            return `${local}${domain}`;
+        }
         if (local.length <= 2) return `[redacted]${domain}`;
         return `••••${local.slice(-2)}${domain}`;
     }
@@ -42,14 +46,15 @@ export function sanitizeConsoleText(value) {
     text = text.replace(/\b(?:LIL|SPIDER)~[A-Za-z0-9+/=_:-]+/g, '[redacted-token]');
     text = text.replace(/\bBearer\s+[A-Za-z0-9._-]+/gi, 'Bearer [redacted]');
 
-    // Redact WhatsApp JIDs / LIDs / newsletter / broadcast identifiers
+    // Redact WhatsApp JIDs / LIDs / newsletter / broadcast identifiers (skip already-redacted •••• tokens)
     text = text.replace(
-        /[A-Za-z0-9+._:-]+@(?:s\.whatsapp\.net|g\.us|lid|newsletter|broadcast)/gi,
-        (match) => redactPhoneOrJid(match)
+        /(••••|\[redacted\])?([A-Za-z0-9+._:-]+@(?:s\.whatsapp\.net|g\.us|lid|newsletter|broadcast))/gi,
+        (full, maskPrefix, match) => (maskPrefix ? full : redactPhoneOrJid(match))
     );
 
-    // Redact standalone phone numbers (7+ digits, optional + / spaces / hyphens)
-    text = text.replace(/\+?\d[\d\s-]{5,}\d/g, (match) => {
+    // Redact standalone phone numbers (7+ digits, optional + / spaces / hyphens), skipping keyId=...
+    text = text.replace(/(\bkeyId=)?(\+?\d[\d\s-]{5,}\d)/gi, (match, prefix) => {
+        if (prefix) return match;
         const digits = match.replace(/\D/g, '');
         if (digits.length < 7) return match;
         return `••••${digits.slice(-2)}`;
@@ -79,7 +84,11 @@ function summarizeErrorPayload(arg) {
         const parts = [];
         const err = arg.err || arg.error;
         if (err) {
-            parts.push(sanitizeConsoleText(err.message || err));
+            const rawErrText = typeof err === 'string'
+                ? err
+                : (err?.message ? String(err.message) : String(err));
+            const singleLineErr = rawErrText.split(/\r?\n\s*at\s+/)[0].trim();
+            parts.push(sanitizeConsoleText(singleLineErr));
         }
         if (arg.reason) parts.push(`reason=${sanitizeConsoleText(String(arg.reason))}`);
         if (arg.statusCode) parts.push(`status=${Number(arg.statusCode) || sanitizeConsoleText(String(arg.statusCode))}`);
@@ -167,6 +176,25 @@ function isRedundantOrBenignBaileysMessage(lowerSummary) {
         lowerSummary.includes('invalid mex newsletter notification content') ||
         lowerSummary.includes('invalid mex newsletter notification') ||
         lowerSummary.includes('unknown newsletter notification child')
+    ) {
+        return true;
+    }
+    if (
+        lowerSummary.includes('blocked on missing key') &&
+        lowerSummary.includes('parking after')
+    ) {
+        return true;
+    }
+    if (
+        lowerSummary.startsWith('failed to decrypt message') &&
+        lowerSummary.includes('status@broadcast') &&
+        (
+            lowerSummary.includes('no session found') ||
+            lowerSummary.includes('no senderkeyrecord found') ||
+            lowerSummary.includes('invalid prekey id') ||
+            lowerSummary.includes('no matching sessions found') ||
+            lowerSummary.includes('bad mac')
+        )
     ) {
         return true;
     }
