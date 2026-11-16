@@ -114,7 +114,7 @@ const LIBSIGNAL_CONSOLE_NOISE_PATTERNS = [
     /\bSession error:\s*Error:\s*Bad MAC\b/i,
     /\bat Object\.verifyMAC\b/i,
     /\bat SessionCipher\.(?:doDecryptWhisperMessage|decryptWithSessions|decryptWhisperMessage)\b/i,
-    /\b(?:Closing open session|Closing session:|Removing old closed session:|Decrypted message with closed session:)/i,
+    /\b(?:Closing open session|Closing session:|Opening session:|Removing old closed session:?|Migrating session to:|Decrypted message with closed session\.?|Session already closed|Session already open)/i,
 ];
 
 function consoleArgToText(arg) {
@@ -155,6 +155,7 @@ export function installConsoleSignalSanitizer() {
     if (console.__spiderSignalSanitizerInstalled) return true;
     const origError = console.error.bind(console);
     const origWarn = console.warn.bind(console);
+    const origInfo = console.info.bind(console);
 
     const wrapMethod = (origFn) => (...args) => {
         if (isLibsignalConsoleNoise(args)) {
@@ -169,6 +170,7 @@ export function installConsoleSignalSanitizer() {
     try {
         console.error = wrapMethod(origError);
         console.warn = wrapMethod(origWarn);
+        console.info = wrapMethod(origInfo);
         console.__spiderSignalSanitizerInstalled = true;
     } catch {
         return false;
@@ -199,31 +201,23 @@ function isRedundantOrBenignBaileysMessage(lowerSummary) {
         return true;
     }
     if (
+        lowerSummary === 'timed out waiting for message' ||
+        lowerSummary.startsWith('timed out waiting for message |') ||
+        lowerSummary.includes('lids are not supported with onwhatsapp')
+    ) {
+        return true;
+    }
+    if (
         lowerSummary.startsWith('failed to decrypt message') &&
         (
             lowerSummary.includes('invalid prekey id') ||
-            (
-                lowerSummary.includes('status@broadcast') &&
-                (
-                    lowerSummary.includes('no session found') ||
-                    lowerSummary.includes('no session record') ||
-                    lowerSummary.includes('no senderkeyrecord found') ||
-                    lowerSummary.includes('no matching sessions found') ||
-                    lowerSummary.includes('no sessions available') ||
-                    lowerSummary.includes('key used already') ||
-                    lowerSummary.includes('bad mac')
-                )
-            ) ||
-            (
-                !lowerSummary.includes('group=') &&
-                (
-                    lowerSummary.includes('no session record') ||
-                    lowerSummary.includes('no matching sessions found') ||
-                    lowerSummary.includes('no sessions available') ||
-                    lowerSummary.includes('key used already') ||
-                    lowerSummary.includes('bad mac')
-                )
-            )
+            lowerSummary.includes('no session found') ||
+            lowerSummary.includes('no session record') ||
+            lowerSummary.includes('no senderkeyrecord found') ||
+            lowerSummary.includes('no matching sessions found') ||
+            lowerSummary.includes('no sessions available') ||
+            lowerSummary.includes('key used already') ||
+            lowerSummary.includes('bad mac')
         )
     ) {
         return true;

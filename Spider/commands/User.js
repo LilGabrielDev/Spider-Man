@@ -234,7 +234,10 @@ export const commands = [
       }
 
       try {
-        await sock.onWhatsApp(candidates[0] || targetJid);
+        const pnCand = candidates.find((c) => /@(?:s\.whatsapp\.net|c\.us)$/i.test(c));
+        if (pnCand) {
+          await sock.onWhatsApp(pnCand);
+        }
       } catch {}
 
       const aboutLabel = await t(from, 'user', 'whoisAbout');
