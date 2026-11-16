@@ -1312,9 +1312,16 @@ function buildActionCaseForCommand(name) {
     case 'welcome':
     case 'goodbye':
     case 'antilink':
+    case 'globalantilink':
     case 'antiadvertisement':
     case 'antiflood':
     case 'antiscam':
+    case 'antibadword':
+    case 'antitag':
+    case 'antimention':
+    case 'globalantimention':
+    case 'antispam':
+    case 'antidemote':
       return {
         text: 'status',
         args: ['status'],
@@ -1350,6 +1357,8 @@ function buildActionCaseForCommand(name) {
     case 'adminprotection':
     case 'antidelete':
     case 'antiedit':
+    case 'anticall':
+    case 'antivv':
     case 'autoview':
     case 'autolike':
     case 'events':

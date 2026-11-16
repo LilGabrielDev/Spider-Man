@@ -12,8 +12,9 @@ import { extractContextInfo } from '../../spider/utils/groupActionHelper.js';
 
 function normalizeAction(raw) {
   const value = String(raw || '').trim().toLowerCase();
-  if (value === 'del') return 'delete';
-  if (value === 'remove' || value === 'ban') return 'kick';
+  if (value === 'del' || value === 'delete-only') return 'delete';
+  if (value === 'delete+warn' || value === 'delete-warn' || value === 'deletewarn') return 'warn';
+  if (value === 'delete+kick' || value === 'delete-kick' || value === 'deletekick' || value === 'remove' || value === 'ban') return 'kick';
   if (value === 'warn-kick' || value === 'warn_kick' || value === 'limit') return 'warnkick';
   if (value === 'lock' || value === 'close') return 'mute';
   return ANTISCAM_ACTIONS.includes(value) ? value : null;
@@ -142,7 +143,7 @@ export const commands = [
       const restText = tokens.slice(1).join(' ').trim();
       const current = defaultAntiscamStore.getGroupConfig(from);
 
-      if (!sub || sub === 'status' || sub === 'info') {
+      if (!sub || sub === 'status' || sub === 'info' || sub === 'get') {
         return sock.sendMessage(
           from,
           { text: formatStatusCard(botName, prefix, current) },
@@ -214,7 +215,7 @@ export const commands = [
       }
 
       const directAction = normalizeAction(sub);
-      if (directAction || sub === 'action' || sub === 'mode') {
+      if (directAction || sub === 'action' || sub === 'mode' || sub === 'set') {
         const chosenAction = directAction || normalizeAction(tokens[1]);
         if (!chosenAction) {
           return sock.sendMessage(

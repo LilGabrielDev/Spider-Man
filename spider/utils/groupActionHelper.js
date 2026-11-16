@@ -381,20 +381,27 @@ export function resolveSenderDisplayAndMention({
   metadata = null,
   getPhoneFn = null,
 } = {}) {
-  const ordered = dedupeUserJids([
+  const seed = dedupeUserJids([
     senderRole?.targetJid,
     senderJid,
     ...(Array.isArray(senderCandidates) ? senderCandidates : []),
     ...collectParticipantAlternates(metadata, [senderRole?.targetJid, senderJid, ...(senderCandidates || [])]),
   ]);
 
+  const phone =
+    extractPhoneDigits(seed[0] || '', getPhoneFn) ||
+    seed.map((c) => extractPhoneDigits(c, getPhoneFn)).find(Boolean) ||
+    '';
+
+  const synthesizedPn =
+    phone && /^\d{5,16}$/.test(phone) && !seed.some((c) => extractPhoneDigits(c) === phone && !extractLid(c))
+      ? `${phone}@s.whatsapp.net`
+      : '';
+
+  const ordered = dedupeUserJids([...seed, ...(synthesizedPn ? [synthesizedPn] : [])]);
   const targetJid = ordered[0] || '';
   const mentionJid = targetJid;
   const mentionUser = mentionJid ? mentionJid.split('@')[0] : '';
-  const phone =
-    extractPhoneDigits(mentionJid, getPhoneFn) ||
-    ordered.map((c) => extractPhoneDigits(c, getPhoneFn)).find(Boolean) ||
-    '';
   const targetUser = mentionUser || phone || 'user';
 
   return {
@@ -506,7 +513,7 @@ export function resolveQuotedDeleteTarget({ from, msg, sock = null, metadata = n
   };
 }
 
-export async function resolveQuotedDeleteTargetAsync({ from, msg, sock = null, metadata = null } = {}) {
+export async function resolveQuotedDeleteTargetAsync({ from, msg, sock = null, metadata = null, getPhoneFn = null } = {}) {
   const { contextInfo, rawQuotedMessage } = extractContextInfo(msg);
   const stanzaId = contextInfo?.stanzaId || '';
   if (!stanzaId && !rawQuotedMessage) {
@@ -526,8 +533,15 @@ export async function resolveQuotedDeleteTargetAsync({ from, msg, sock = null, m
     ...metaAlternates,
     ...signalAlternates,
   ]);
+  const mappedPns = [];
+  for (const item of [rawParticipant, ...metaAlternates, ...signalAlternates, ...fullAlternates]) {
+    const ph = extractPhoneDigits(item, getPhoneFn);
+    if (ph && /^\d{5,16}$/.test(ph)) {
+      mappedPns.push(`${ph}@s.whatsapp.net`);
+    }
+  }
   const candidates = orderParticipantsByAddressingMode(
-    [rawParticipant, ...metaAlternates, ...signalAlternates, ...fullAlternates],
+    [rawParticipant, ...metaAlternates, ...signalAlternates, ...fullAlternates, ...mappedPns],
     { metadata, msg, preferGroupParticipants: isGroup },
   );
 
@@ -778,25 +792,57 @@ export async function sendWithAckCheck({
 
 function selectDistinctFormatAlternates(winningKey, allCandidates) {
   const list = dedupeUserJids(allCandidates);
-  if (list.length <= 1) return [];
-
-  const winningParticipant = cleanJid(winningKey?.participant || '');
-  const winLower = winningParticipant.toLowerCase();
-  const winIsLid = Boolean(extractLid(winningParticipant));
-  const winIsPn = winningParticipant.toLowerCase().endsWith('@s.whatsapp.net');
+  const winningRaw = String(winningKey?.participant || '').trim();
+  const winRawLower = winningRaw.toLowerCase();
+  const winningClean = cleanJid(winningRaw);
+  const winCleanLower = winningClean.toLowerCase();
 
   const alternates = [];
-  if (!winIsLid) {
-    const lidAlt = list.find((c) => Boolean(extractLid(c)) && c.toLowerCase() !== winLower);
-    if (lidAlt) alternates.push(lidAlt);
+  const seen = new Set();
+  if (winRawLower) seen.add(winRawLower);
+
+  // If the winning key carried a :device suffix (e.g. 2547...@s.whatsapp.net vs 2547...:17@s.whatsapp.net),
+  // also send a revoke using the clean bare JID so single-device / mobile clients drop it too.
+  if (winRawLower && winCleanLower && winRawLower !== winCleanLower) {
+    seen.add(winCleanLower);
+    alternates.push(winningClean);
+  } else if (winCleanLower) {
+    seen.add(winCleanLower);
   }
-  if (!winIsPn) {
-    const pnAlt = list.find(
-      (c) => c.toLowerCase().endsWith('@s.whatsapp.net') && c.toLowerCase() !== winLower,
-    );
-    if (pnAlt) alternates.push(pnAlt);
+
+  // Send distinct LID and PN variants across all known identities so both sides delete for everyone.
+  for (const candidate of list) {
+    const cleanCand = cleanJid(candidate);
+    const lower = cleanCand.toLowerCase();
+    if (!cleanCand || seen.has(lower)) continue;
+    const isLid = Boolean(extractLid(cleanCand));
+    const isPn = lower.endsWith('@s.whatsapp.net');
+    if (isLid || isPn) {
+      seen.add(lower);
+      alternates.push(cleanCand);
+    }
   }
   return alternates;
+}
+
+function markModeratedDeletedId(id) {
+  if (!id) return;
+  try {
+    if (!(globalThis.__spiderModeratedDeletedIds instanceof Map)) {
+      globalThis.__spiderModeratedDeletedIds = new Map();
+    }
+    const store = globalThis.__spiderModeratedDeletedIds;
+    const now = Date.now();
+    store.set(String(id), now);
+    if (store.size > 1000) {
+      for (const [k, ts] of store.entries()) {
+        if (now - ts > 120000 || store.size > 1000) {
+          store.delete(k);
+        }
+        if (store.size <= 800) break;
+      }
+    }
+  } catch {}
 }
 
 export async function deleteMessageSafely({
@@ -806,6 +852,7 @@ export async function deleteMessageSafely({
   targetJid = '',
   senderCandidates = [],
   metadata = null,
+  getPhoneFn = null,
   allowFromMeFallback = false,
   broadcastAlternates = false,
   ackTimeoutMs = null,
@@ -836,15 +883,31 @@ export async function deleteMessageSafely({
       ? collectParticipantAlternates(metadata, [...seedCandidates, ...metaAlternates, ...signalAlternates])
       : [];
 
+  const resolvedPhones = [];
+  if (typeof getPhoneFn === 'function') {
+    for (const cand of [...seedCandidates, ...metaAlternates, ...signalAlternates, ...postMetaAlternates]) {
+      const ph = extractPhoneDigits(cand, getPhoneFn);
+      if (ph && /^\d{5,16}$/.test(ph)) {
+        resolvedPhones.push(`${ph}@s.whatsapp.net`);
+      }
+    }
+  }
+
   const orderedParticipantCandidates = orderParticipantsByAddressingMode(
-    [...seedCandidates, ...metaAlternates, ...signalAlternates, ...postMetaAlternates],
-    { metadata, msg },
+    [...seedCandidates, ...metaAlternates, ...signalAlternates, ...postMetaAlternates, ...resolvedPhones],
+    { metadata, msg, preferGroupParticipants: isGroup },
   );
   const originalParticipantRaw = String(msg.key.participant || '').trim();
   const originalParticipant = cleanJid(originalParticipantRaw);
+  const hasDeviceSuffix = Boolean(
+    originalParticipantRaw &&
+      originalParticipant &&
+      originalParticipantRaw.toLowerCase() !== originalParticipant.toLowerCase(),
+  );
   const rawParticipantCandidates = originalParticipantRaw
     ? [
         originalParticipantRaw,
+        ...(broadcastAlternates && hasDeviceSuffix ? [originalParticipant] : []),
         ...orderedParticipantCandidates.filter(
           (candidate) => cleanJid(candidate).toLowerCase() !== originalParticipant.toLowerCase(),
         ),
@@ -987,6 +1050,7 @@ export async function deleteMessageSafely({
     }
 
     if (winningResult !== null || (firstTry.ok && !firstTry.timedOut && firstTry.acked)) {
+      markModeratedDeletedId(msg.key.id);
       let alternateKeysSent = 0;
       if (isGroup && broadcastAlternates && rawParticipantCandidates.length > 1) {
         const distinctAlternates = selectDistinctFormatAlternates(key, rawParticipantCandidates);

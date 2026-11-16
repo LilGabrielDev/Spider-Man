@@ -168,7 +168,7 @@ export const commands = [
       const current = defaultAntilinkStore.getGroupConfig(from);
       const sub = String(tokens[0] || '').toLowerCase();
 
-      if (!sub || sub === 'status' || sub === 'info') {
+      if (!sub || sub === 'status' || sub === 'info' || sub === 'get') {
         const usage = await t(from, 'antilink', 'usage');
         const warnCount = Object.keys(current.warns || {}).length;
         const statusText = [
@@ -177,7 +177,7 @@ export const commands = [
           `⚠️ *Warn Limit:* ${current.maxWarns || 3} (${warnCount} user(s) warned)`,
           '',
           usage,
-          'Extra: .antilink warnlimit <1-10> | .antilink resetwarns [@user]',
+          'Extra: .antilink set <delete|kick|warn> | .antilink warnlimit <1-10> | .antilink resetwarns [@user]',
         ].join('\n');
         return sock.sendMessage(from, { text: statusText }, { quoted: msg });
       }
@@ -224,6 +224,32 @@ export const commands = [
         return sock.sendMessage(
           from,
           { text: '✅ Cleared all antilink warnings for this group.' },
+          { quoted: msg },
+        );
+      }
+
+      if (sub === 'set' || sub === 'action' || sub === 'mode') {
+        const chosenAction = String(tokens[1] || '').toLowerCase();
+        if (!ANTILINK_ACTIONS.includes(chosenAction)) {
+          return sock.sendMessage(
+            from,
+            { text: '❌ Usage: *.antilink set <delete|kick|warn>*' },
+            { quoted: msg },
+          );
+        }
+        const updated = defaultAntilinkStore.setGroupConfig(from, {
+          ...current,
+          enabled: true,
+          action: chosenAction,
+        });
+        const template = await t(from, 'antilink', 'success');
+        return sock.sendMessage(
+          from,
+          {
+            text: template
+              .replace('{option}', updated.enabled ? 'ON' : 'OFF')
+              .replace('{action}', updated.action.toUpperCase()),
+          },
           { quoted: msg },
         );
       }

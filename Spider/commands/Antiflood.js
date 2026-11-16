@@ -14,8 +14,9 @@ import { extractContextInfo } from '../../spider/utils/groupActionHelper.js';
 
 function normalizeAction(raw) {
   const value = String(raw || '').trim().toLowerCase();
-  if (value === 'del') return 'delete';
-  if (value === 'remove' || value === 'ban') return 'kick';
+  if (value === 'del' || value === 'delete-only') return 'delete';
+  if (value === 'delete+warn' || value === 'delete-warn' || value === 'deletewarn') return 'warn';
+  if (value === 'delete+kick' || value === 'delete-kick' || value === 'deletekick' || value === 'remove' || value === 'ban') return 'kick';
   if (value === 'warn-kick' || value === 'warn_kick' || value === 'wk') return 'warnkick';
   if (value === 'lock' || value === 'close') return 'mute';
   return ANTIFLOOD_ACTIONS.includes(value) ? value : null;
@@ -132,7 +133,7 @@ export const commands = [
       const sub = String(tokens[0] || '').toLowerCase();
       const current = defaultAntifloodStore.getGroupConfig(from);
 
-      if (!sub || sub === 'status' || sub === 'info') {
+      if (!sub || sub === 'status' || sub === 'info' || sub === 'get') {
         return sock.sendMessage(
           from,
           { text: formatStatusCard(botName, prefix, current) },
@@ -140,9 +141,23 @@ export const commands = [
         );
       }
 
-      if (sub === 'on' || sub === 'enable') {
+      if (sub === 'on' || sub === 'enable' || sub === 'strict') {
+        const isStrictPreset = sub === 'strict' && String(tokens[1] || '').toLowerCase() !== 'off';
+        if (sub === 'strict' && String(tokens[1] || '').toLowerCase() === 'off') {
+          defaultAntifloodStore.setGroupConfig(from, {
+            ...current,
+            enabled: false,
+          });
+          defaultFloodTracker.resetGroup(from);
+          const textOut = [
+            spiderHeader(botName, 'ANTIFLOOD DISABLED'),
+            spiderRow('STATUS', 'OFF ❌', '⛨'),
+            spiderFooter(`USE ${prefix}antiflood on TO RE-ENABLE`),
+          ].join('\n');
+          return sock.sendMessage(from, { text: textOut }, { quoted: msg });
+        }
         const requestedAction = normalizeAction(tokens[1]);
-        if (tokens[1] && !requestedAction) {
+        if (tokens[1] && !requestedAction && sub !== 'strict') {
           return sock.sendMessage(
             from,
             {
@@ -151,15 +166,16 @@ export const commands = [
             { quoted: msg },
           );
         }
-        const nextAction = requestedAction || current.action || 'delete';
+        const nextAction = requestedAction || (isStrictPreset ? 'kick' : current.action || 'delete');
         const updated = defaultAntifloodStore.setGroupConfig(from, {
           ...current,
           enabled: true,
           action: nextAction,
+          ...(isStrictPreset ? { limit: 5, windowSec: 10 } : {}),
         });
         defaultFloodTracker.resetGroup(from);
         const textOut = [
-          spiderHeader(botName, 'ANTIFLOOD ENABLED'),
+          spiderHeader(botName, isStrictPreset ? 'ANTIFLOOD STRICT ENABLED' : 'ANTIFLOOD ENABLED'),
           spiderRow('STATUS', 'ON ✅', '⛨'),
           spiderRow('ACTION', actionLabel(updated.action), '⚡'),
           spiderRow('THRESHOLD', `${updated.limit} msgs / ${updated.windowSec}s`, '◷'),
@@ -269,7 +285,24 @@ export const commands = [
         );
       }
 
-      if (sub === 'set' || sub === 'rate') {
+      if (sub === 'set' || sub === 'rate' || sub === 'setlimit') {
+        const setAction = sub === 'set' ? normalizeAction(tokens[1]) : null;
+        if (setAction) {
+          const updated = defaultAntifloodStore.setGroupConfig(from, {
+            ...current,
+            enabled: true,
+            action: setAction,
+          });
+          const textOut = [
+            spiderHeader(botName, 'ANTIFLOOD MODE UPDATED'),
+            spiderRow('STATUS', 'ON ✅', '⛨'),
+            spiderRow('ACTION', actionLabel(updated.action), '⚡'),
+            spiderRow('THRESHOLD', `${updated.limit} msgs / ${updated.windowSec}s`, '◷'),
+            spiderRow('WARN LIMIT', `${updated.maxWarns} warn(s)`, '▣'),
+            spiderFooter('PROTECTION POLICY SAVED'),
+          ].join('\n');
+          return sock.sendMessage(from, { text: textOut }, { quoted: msg });
+        }
         const limitNum = Number.parseInt(String(tokens[1] || ''), 10);
         const windowNum = Number.parseInt(String(tokens[2] || ''), 10);
         if (
@@ -283,7 +316,7 @@ export const commands = [
           return sock.sendMessage(
             from,
             {
-              text: `❌ Usage: *${prefix}antiflood set <limit ${ANTIFLOOD_MIN_LIMIT}-${ANTIFLOOD_MAX_LIMIT}> <seconds ${ANTIFLOOD_MIN_WINDOW_SEC}-${ANTIFLOOD_MAX_WINDOW_SEC}>*\nExample: *${prefix}antiflood set 6 10*`,
+              text: `❌ Usage: *${prefix}antiflood set <limit ${ANTIFLOOD_MIN_LIMIT}-${ANTIFLOOD_MAX_LIMIT}> <seconds ${ANTIFLOOD_MIN_WINDOW_SEC}-${ANTIFLOOD_MAX_WINDOW_SEC}>* or *${prefix}antiflood set <delete|warn|kick|warnkick|mute>*`,
             },
             { quoted: msg },
           );
