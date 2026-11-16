@@ -366,6 +366,79 @@ test('wrapAckErrorRecovery clears stale caches and recreates sessions on 421/479
   assert.equal(clearCachedUserDevices(null, 'x'), false);
 });
 
+test('group sends reset sender-key memory before each message and fail closed if reset fails', async () => {
+  const groupJid = '120363000000000001@g.us';
+  const calls = [];
+  const sock = {
+    authState: {
+      creds: { me: { id: '254700000000:5@s.whatsapp.net', lid: '887766554433:5@lid' } },
+      keys: {
+        set: async (data) => calls.push({ type: 'reset', data }),
+      },
+    },
+    sendMessage: async (jid, content) => {
+      calls.push({ type: 'send', jid, content });
+      return { key: { remoteJid: jid, id: 'outbound' } };
+    },
+  };
+
+  assert.equal(wrapSendOptionsNormalization(sock), true);
+  await sock.sendMessage(groupJid, { text: 'first reply' }, { quoted: { key: { id: 'cmd-1' } } });
+  await sock.sendMessage(groupJid, { text: 'second reply' });
+  await sock.sendMessage('254711111111@s.whatsapp.net', { text: 'direct reply' });
+
+  assert.deepEqual(calls.map((call) => call.type), ['reset', 'send', 'reset', 'send', 'send']);
+  const expectedMemoryClear = {
+    [groupJid]: null,
+    [`${groupJid}:254700000000:5@s.whatsapp.net`]: null,
+    [`${groupJid}:887766554433:5@lid`]: null,
+  };
+  assert.deepEqual(calls[0].data, { 'sender-key-memory': expectedMemoryClear });
+  assert.deepEqual(calls[2].data, { 'sender-key-memory': expectedMemoryClear });
+
+  let sendAttempted = false;
+  const loggedErrors = [];
+  const brokenSock = {
+    authState: {
+      creds: { me: { id: '254700000000:5@s.whatsapp.net', lid: '887766554433:5@lid' } },
+      keys: { set: async () => { throw new Error('auth store unavailable'); } },
+    },
+    sendMessage: async () => { sendAttempted = true; },
+  };
+  wrapSendOptionsNormalization(brokenSock, {
+    logError: (context, _command, _jid, detail) => loggedErrors.push({ context, detail }),
+  });
+  await assert.rejects(() => brokenSock.sendMessage(groupJid, { text: 'do not send stale key' }), /auth store unavailable/);
+  assert.equal(sendAttempted, false);
+  assert.equal(loggedErrors[0].context, 'Group Sender-Key Refresh');
+});
+
+test('wrapAckErrorRecovery logs outbound delivery transitions without message or JID data', () => {
+  const ev = createEmitter();
+  const logs = [];
+  const sock = { ev };
+  wrapAckErrorRecovery(sock, { logInfo: (message) => logs.push(message) });
+
+  for (const status of [2, 3, 4]) {
+    ev.emit('messages.update', [{
+      key: { fromMe: true, remoteJid: '120363private-group@g.us', id: 'private-message-id' },
+      update: { status },
+    }]);
+  }
+  ev.emit('messages.update', [{
+    key: { fromMe: false, remoteJid: '120363private-group@g.us', id: 'incoming-message-id' },
+    update: { status: 3 },
+  }]);
+
+  assert.deepEqual(logs, [
+    '[WA-DELIVERY] group status=server_ack',
+    '[WA-DELIVERY] group status=delivered',
+    '[WA-DELIVERY] group status=read',
+  ]);
+  assert.equal(logs.join(' ').includes('private-group'), false);
+  assert.equal(logs.join(' ').includes('private-message-id'), false);
+});
+
 test('wrapSendOptionsNormalization propagates ephemeralExpiration only when omitted', async () => {
   const calls = [];
   const sock = {
@@ -1493,7 +1566,6 @@ test('ensureAppStateSynced schedules bounded retry when initial sync only comple
   assert.match(infoLogs[0], /Synced 3 app-state collection/);
   assert.match(infoLogs[1], /Synced 2 app-state collection\(s\): critical_unblock_low, regular/);
 });
-
 
 
 
