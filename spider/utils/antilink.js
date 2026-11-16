@@ -7,12 +7,15 @@ import {
   cleanJid,
   collectBotIdentities,
   collectSenderIdentities,
+  extractPhoneDigits,
   resolveGroupRolesAsync,
 } from './groupRoleResolver.js';
 import {
   deleteMessageSafely,
   executeParticipantsAction,
+  extractContextInfo,
   resolveSenderDisplayAndMention,
+  unwrapMessageContent,
 } from './groupActionHelper.js';
 
 export const ANTILINK_ACTIONS = ['warn', 'kick', 'delete'];
@@ -31,7 +34,95 @@ const LINK_PATTERNS = [
     name: 'External URL',
     regex: /\b(?:https?:\/\/|www\.)[^\s<>"'`]+/i,
   },
+  {
+    name: 'External Shortener / Bare Domain Link',
+    regex: /(?<![@\w.-])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:com|net|org|io|co|me|gg|ly|to|be|tv|in|ke|ng|za|uk|us|de|fr|br|ru|dev|app|ai|xyz|site|online|info|link|club|shop|vip|click|top|live|fun|pro|edu|gov|biz|cc|ws|fm|im|vc|gd|gy|gl|sh|at|ch|nl|es|it|pl|se|no|ca|au|nz|jp|kr|cn|tw|hk|sg|my|id|ph|th|vn|tr|ae|sa|eg|ma)(?::\d{2,5})?(?:\/[^\s<>"'`]*|(?=$|[\s.,!?;:)\]"'`>]))/i,
+  },
 ];
+
+function collectLayerContextInfos(layer, out = []) {
+  if (!layer || typeof layer !== 'object') return out;
+  for (const val of Object.values(layer)) {
+    if (val && typeof val === 'object' && val.contextInfo && typeof val.contextInfo === 'object') {
+      out.push(val.contextInfo);
+    }
+  }
+  if (layer.contextInfo && typeof layer.contextInfo === 'object') {
+    out.push(layer.contextInfo);
+  }
+  if (layer.messageContextInfo && typeof layer.messageContextInfo === 'object') {
+    out.push(layer.messageContextInfo);
+  }
+  return out;
+}
+
+export function detectChannelForward(msg) {
+  if (!msg || typeof msg !== 'object') {
+    return { isChannelForward: false, reason: '', match: '' };
+  }
+  const { contextInfo } = extractContextInfo(msg);
+  const unwrapped = unwrapMessageContent(msg?.message);
+  const contexts = [
+    ...(contextInfo ? [contextInfo] : []),
+    ...collectLayerContextInfos(unwrapped),
+    ...collectLayerContextInfos(msg?.message),
+  ];
+
+  for (const ctx of contexts) {
+    if (!ctx || typeof ctx !== 'object') continue;
+    const newsletterInfo = ctx.forwardedNewsletterMessageInfo;
+    if (newsletterInfo && (newsletterInfo.newsletterJid || newsletterInfo.newsletterName)) {
+      return {
+        isChannelForward: true,
+        reason: 'Forwarded Channel / Newsletter Message',
+        match: String(newsletterInfo.newsletterName || newsletterInfo.newsletterJid || 'newsletter'),
+      };
+    }
+    const remoteJid = String(ctx.remoteJid || '').toLowerCase();
+    const forwardingScore = Number(ctx.forwardingScore || 0);
+    if (ctx.isForwarded === true && (forwardingScore >= 1 || remoteJid.endsWith('@newsletter'))) {
+      return {
+        isChannelForward: true,
+        reason: remoteJid.endsWith('@newsletter')
+          ? 'Forwarded Channel / Newsletter Message'
+          : 'Forwarded Channel / Broadcast Message',
+        match: String(ctx.remoteJid || 'forwarded'),
+      };
+    }
+  }
+
+  return { isChannelForward: false, reason: '', match: '' };
+}
+
+function extractAntilinkText(msg, text = '') {
+  const parts = [];
+  const baseText = extractMessageText(msg, text);
+  if (baseText) parts.push(baseText);
+
+  const layers = [unwrapMessageContent(msg?.message), msg?.message].filter(
+    (layer) => layer && typeof layer === 'object',
+  );
+  for (const layer of layers) {
+    const ext = layer.extendedTextMessage;
+    const candidates = [
+      ext?.text,
+      ext?.matchedText,
+      ext?.canonicalUrl,
+      layer.ptvMessage?.caption,
+      layer.editedMessage?.message?.conversation,
+      layer.editedMessage?.message?.extendedTextMessage?.text,
+      layer.editedMessage?.message?.extendedTextMessage?.matchedText,
+      layer.editedMessage?.message?.extendedTextMessage?.canonicalUrl,
+    ];
+    for (const item of candidates) {
+      if (typeof item === 'string' && item.trim()) {
+        parts.push(item.trim());
+      }
+    }
+  }
+
+  return [...new Set(parts)].join(' ').trim();
+}
 
 export function detectLinkMessage(text) {
   const raw = String(text || '').trim();
@@ -172,12 +263,40 @@ export function createAntilinkStore(filePathOrFn = null) {
       save();
       return { ...normalized, warns: { ...normalized.warns } };
     },
-    addWarn(groupJid, targetJid) {
+    addWarn(groupJid, targetJid, senderCandidates = []) {
       ensureLoaded();
       const current = cache.groups[groupJid] || defaultGroupConfig();
-      const key = cleanJid(targetJid);
-      const nextCount = (current.warns[key] || 0) + 1;
-      current.warns[key] = nextCount;
+      const aliasKeys = [
+        targetJid,
+        ...(Array.isArray(senderCandidates) ? senderCandidates : []),
+      ]
+        .filter(Boolean)
+        .map((j) => cleanJid(j))
+        .filter(Boolean);
+      const primaryKey = cleanJid(targetJid) || aliasKeys[0] || '';
+      const aliasSet = new Set(aliasKeys.map((k) => k.toLowerCase()));
+      const phones = new Set(
+        aliasKeys.map((k) => extractPhoneDigits(k)).filter(Boolean),
+      );
+
+      let existingCount = 0;
+      for (const [existingKey, existingVal] of Object.entries(current.warns || {})) {
+        const cleanExisting = cleanJid(existingKey);
+        const existingPhone = extractPhoneDigits(cleanExisting);
+        const matchesAlias =
+          aliasSet.has(existingKey.toLowerCase()) ||
+          aliasSet.has(cleanExisting.toLowerCase()) ||
+          (existingPhone && phones.has(existingPhone));
+        if (matchesAlias) {
+          existingCount += Number(existingVal) || 0;
+          delete current.warns[existingKey];
+        }
+      }
+
+      const nextCount = existingCount + 1;
+      if (primaryKey) {
+        current.warns[primaryKey] = nextCount;
+      }
       cache.groups[groupJid] = current;
       save();
       return { count: nextCount, maxWarns: current.maxWarns };
@@ -266,14 +385,23 @@ export async function handleAntiLinkMessage({
     return { handled: false, reason: 'owner-exempt' };
   }
 
-  const combinedText = extractMessageText(msg, text);
-  if (!combinedText) {
-    return { handled: false, reason: 'empty-text' };
-  }
+  const combinedText = extractAntilinkText(msg, text);
+  const channelForward = detectChannelForward(msg);
+  const textDetection = combinedText
+    ? detectLinkMessage(combinedText)
+    : { hasLink: false, reason: '', match: '' };
+  const detection = textDetection.hasLink
+    ? textDetection
+    : channelForward.isChannelForward
+      ? { hasLink: true, reason: channelForward.reason, match: channelForward.match }
+      : textDetection;
 
-  const detection = detectLinkMessage(combinedText);
   if (!detection.hasLink) {
-    return { handled: false, reason: 'clean', detection };
+    return {
+      handled: false,
+      reason: combinedText ? 'clean' : 'empty-text',
+      detection,
+    };
   }
 
   let metadata = groupMeta;
@@ -357,7 +485,11 @@ export async function handleAntiLinkMessage({
         ? 'DELETED (KICK FAILED)'
         : 'KICK & DELETE FAILED';
   } else if (mode === 'warn') {
-    const warnResult = store.addWarn(from, targetJid || resolvedCandidates[0]);
+    const warnResult = store.addWarn(
+      from,
+      targetJid || resolvedCandidates[0],
+      resolvedCandidates,
+    );
     warned = true;
     warnCount = warnResult.count;
     warnText = `${warnCount}/${warnResult.maxWarns}`;

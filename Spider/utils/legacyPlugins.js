@@ -128,7 +128,37 @@ function normalizeNumber(jid) {
   return extractPhoneDigits(jid);
 }
 
-function makeMessageView({ raw, sock, from, sender, senderNumber, isOwner, groupMeta, isAdmin, isBotAdmin }) {
+function collectGroupAdminSets(groupMeta) {
+  const participants = Array.isArray(groupMeta?.participants) ? groupMeta.participants : [];
+  const groupAdmins = [];
+  const groupSuperAdmins = [];
+  for (const p of participants) {
+    if (!p || typeof p !== 'object') continue;
+    const role = String(p.admin || '').toLowerCase();
+    const id = p.phoneNumber || p.pn || p.id || p.jid || '';
+    if (!id) continue;
+    if (role === 'superadmin' || p.isSuperAdmin === true) {
+      groupSuperAdmins.push(id);
+      groupAdmins.push(id);
+    } else if (role === 'admin' || p.isAdmin === true) {
+      groupAdmins.push(id);
+    }
+  }
+  return { groupAdmins, groupSuperAdmins };
+}
+
+function makeMessageView({
+  raw,
+  sock,
+  from,
+  sender,
+  senderNumber,
+  isOwner,
+  groupMeta,
+  isAdmin,
+  isBotAdmin,
+  isSuperAdmin = false,
+}) {
   const rawMessage = raw?.message || {};
   const unwrappedMessage = unwrapMessageContent(rawMessage) || rawMessage;
   const { contextInfo, quotedMessage: unwrappedQuoted, rawQuotedMessage } = extractContextInfo(raw);
@@ -193,7 +223,7 @@ function makeMessageView({ raw, sock, from, sender, senderNumber, isOwner, group
     fromMe: Boolean(raw?.key?.fromMe),
     isAdmin: Boolean(isAdmin),
     isBotAdmin: Boolean(isBotAdmin),
-    isSuperAdmin: Boolean(isAdmin),
+    isSuperAdmin: Boolean(isSuperAdmin),
     isSudo: Boolean(isOwner),
     isButtonResponse: false,
     reactKey: raw?.key,
@@ -227,9 +257,9 @@ function makeMessageView({ raw, sock, from, sender, senderNumber, isOwner, group
   return view;
 }
 
-async function resolveGroupContext(sock, from, sender, senderNumber, msg = null) {
+async function resolveGroupContext(sock, from, sender, senderNumber, msg = null, isOwner = false) {
   if (!String(from || '').endsWith('@g.us')) {
-    return { groupMeta: null, isAdmin: false, isBotAdmin: false };
+    return { groupMeta: null, isAdmin: false, isBotAdmin: false, isSuperAdmin: Boolean(isOwner) };
   }
   try {
     const groupMeta = await sock.groupMetadata(from);
@@ -238,13 +268,20 @@ async function resolveGroupContext(sock, from, sender, senderNumber, msg = null)
       sock,
       senderJids: collectSenderIdentities(msg, [sender, senderNumber]),
     });
+    const senderParticipantAdmin = String(roles.senderRole?.participant?.admin || '').toLowerCase();
+    const isSuperAdmin =
+      senderParticipantAdmin === 'superadmin' ||
+      roles.senderRole?.participant?.isSuperAdmin === true ||
+      Boolean(roles.senderRole?.isOwner) ||
+      Boolean(isOwner);
     return {
       groupMeta,
       isAdmin: roles.isSenderAdmin,
       isBotAdmin: roles.isBotAdmin,
+      isSuperAdmin,
     };
   } catch {
-    return { groupMeta: null, isAdmin: false, isBotAdmin: false };
+    return { groupMeta: null, isAdmin: false, isBotAdmin: false, isSuperAdmin: false };
   }
 }
 
@@ -277,21 +314,56 @@ export async function loadLegacyCommands() {
       ownerOnly: Boolean(cmd.ownerOnly || ownerOnly),
       groupOnly: Boolean(cmd.groupOnly),
       adminOnly: Boolean(adminOnly),
+      botAdminOnly: Boolean(cmd.botAdminOnly),
       execute: async (ctx) => {
         legacyConfig.MODE = ctx.config.MODE;
         legacyConfig.OWNER_NUMBER = resolveRuntimeOwnerPhone({
           sock: ctx.sock,
           config: ctx.config || _0x21bd49,
         });
-        const groupCtx = ctx.groupMeta
-          ? {
-              groupMeta: ctx.groupMeta,
-              isAdmin: Boolean(ctx.isGroupAdmin),
-              isBotAdmin: Boolean(ctx.isBotGroupAdmin),
-            }
-          : await resolveGroupContext(ctx.sock, ctx.from, ctx.sender, ctx.senderNumber, ctx.msg);
+        let groupCtx;
+        if (ctx.groupMeta) {
+          const roles = await resolveGroupRolesAsync({
+            metadata: ctx.groupMeta,
+            sock: ctx.sock,
+            senderJids: collectSenderIdentities(ctx.msg, [ctx.sender, ctx.senderNumber]),
+          });
+          const senderPartAdmin = String(roles.senderRole?.participant?.admin || '').toLowerCase();
+          groupCtx = {
+            groupMeta: ctx.groupMeta,
+            isAdmin:
+              ctx.isGroupAdmin !== undefined ? Boolean(ctx.isGroupAdmin) : roles.isSenderAdmin,
+            isBotAdmin:
+              ctx.isBotGroupAdmin !== undefined
+                ? Boolean(ctx.isBotGroupAdmin)
+                : roles.isBotAdmin,
+            isSuperAdmin:
+              senderPartAdmin === 'superadmin' ||
+              roles.senderRole?.participant?.isSuperAdmin === true ||
+              Boolean(roles.senderRole?.isOwner) ||
+              Boolean(ctx.isOwner),
+          };
+        } else {
+          groupCtx = await resolveGroupContext(
+            ctx.sock,
+            ctx.from,
+            ctx.sender,
+            ctx.senderNumber,
+            ctx.msg,
+            ctx.isOwner,
+          );
+        }
 
-        const { groupMeta, isAdmin, isBotAdmin } = groupCtx;
+        const { groupMeta, isAdmin, isBotAdmin, isSuperAdmin } = groupCtx;
+        const { groupAdmins, groupSuperAdmins } = collectGroupAdminSets(groupMeta);
+        const runtimeOwnerPhone = resolveRuntimeOwnerPhone({
+          sock: ctx.sock,
+          config: ctx.config || _0x21bd49,
+        });
+        const superUser = [
+          ...(runtimeOwnerPhone ? [`${runtimeOwnerPhone}@s.whatsapp.net`] : []),
+          ...(ctx.isOwner && ctx.sender ? [ctx.sender] : []),
+        ];
         const view = makeMessageView({
           raw: ctx.msg,
           sock: ctx.sock,
@@ -302,17 +374,24 @@ export async function loadLegacyCommands() {
           groupMeta,
           isAdmin,
           isBotAdmin,
+          isSuperAdmin,
         });
 
         if (cmd.groupOnly && !view.isGroup) {
           await view.reply('This command can only be used in a group.');
           return;
         }
-        if (adminOnly && !isAdmin) {
+        if (adminOnly && !isAdmin && !ctx.isOwner) {
           await view.reply('Only a group admin can run this command.');
           return;
         }
+        if (cmd.botAdminOnly && !isBotAdmin) {
+          await view.reply('I need to be a group admin to perform that action.');
+          return;
+        }
 
+        const botName = legacyConfig.BOT_NAME || _0x21bd49.BOT_NAME || 'SPIDER-MAN MD';
+        const botPrefix = ctx.prefix || legacyConfig.BOT_PREFIX || '.';
         const pluginContext = {
           sock: ctx.sock,
           client: ctx.sock,
@@ -322,6 +401,9 @@ export async function loadLegacyCommands() {
           pushName: view.pushName,
           pushname: view.pushName,
           participants: view.participants,
+          groupAdmins,
+          groupSuperAdmins,
+          superUser,
           msg: ctx.msg,
           m: view,
           text: ctx.text,
@@ -329,11 +411,15 @@ export async function loadLegacyCommands() {
           args: ctx.args,
           command: name,
           commandName: ctx.command || name,
-          prefix: ctx.prefix || legacyConfig.BOT_PREFIX || '.',
-          packname: legacyConfig.PACK_NAME || legacyConfig.BOT_NAME || 'SPIDER-MAN-MD',
+          prefix: botPrefix,
+          botPrefix,
+          packname: legacyConfig.PACK_NAME || botName || 'SPIDER-MAN-MD',
           mode: legacyConfig.MODE || 'public',
           pict: legacyConfig.BOT_PIC || _0x21bd49.BOT_PIC,
-          botname: legacyConfig.BOT_NAME || _0x21bd49.BOT_NAME || 'SPIDER-MAN MD',
+          botname: botName,
+          botName,
+          botFooter: legacyConfig.FOOTER || botName,
+          newsletterJid: legacyConfig.CHANNEL_JID || _0x21bd49.CHANNEL_JID || '',
           botspeed: Number(ctx.botspeed || 12),
           sendJson: async (client, jid, payload) => {
             if (!client) return null;
@@ -344,10 +430,13 @@ export async function loadLegacyCommands() {
             return client.sendMessage?.(jid, payload);
           },
           groupMeta,
+          groupMetadata: groupMeta,
           isGroup: view.isGroup,
           isAdmin,
+          isSuperAdmin,
           isBotAdmin,
           isOwner: ctx.isOwner,
+          isSuperUser: Boolean(ctx.isOwner),
           quoted: view.quoted,
           reply: view.reply,
           send: (payload, options) => ctx.sock.sendMessage(ctx.from, payload, options),
