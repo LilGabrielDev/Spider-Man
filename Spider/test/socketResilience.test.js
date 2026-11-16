@@ -13,6 +13,7 @@ import {
   ensureAppStateSynced,
   ensureFallbackMeName,
   ensureHealthyPreKeys,
+  ensureOfflinePresence,
   installSocketResilience,
   requestMissingAppStateSyncKeys,
   syncMessageKeyAliases,
@@ -659,7 +660,7 @@ test('createGuardedSignalKeyStore and wrapSignalAndSenderKeyGuard prevent sender
   });
 });
 
-test('wrapPresenceResilience and ensureActiveOnlinePresence prevent silent no-name drop that keeps sendActiveReceipts false', async () => {
+test('wrapPresenceResilience, ensureOfflinePresence, and ensureActiveOnlinePresence prevent silent no-name drops', async () => {
   const creds = { me: { id: '254700000001:5@s.whatsapp.net', name: '' } };
   assert.equal(ensureFallbackMeName(creds, 'Spider Man'), true);
   assert.equal(creds.me.name, 'Spider Man');
@@ -672,7 +673,7 @@ test('wrapPresenceResilience and ensureActiveOnlinePresence prevent silent no-na
   const sock = {
     authState: { creds: { me: { id: '254700000001:5@s.whatsapp.net' } } },
     sendPresenceUpdate: async (type, toJid) => {
-      // Simulate Baileys chats.js:843 returning early without emitting isOnline if !me.name
+      // Simulate Baileys chats.js:843 returning early if !me.name
       if ((type === 'available' || type === 'unavailable') && !sock.authState.creds.me?.name) {
         return 'ignored-no-name';
       }
@@ -684,11 +685,49 @@ test('wrapPresenceResilience and ensureActiveOnlinePresence prevent silent no-na
   assert.equal(wrapPresenceResilience(sock, { defaultPushName: 'Spider Man' }), true);
   assert.equal(wrapPresenceResilience(sock, { defaultPushName: 'Spider Man' }), true);
 
-  // Even if me.name is cleared later before sendPresenceUpdate('available'), wrapper restores it
+  // Even if me.name is cleared later before sendPresenceUpdate('unavailable' / 'available'), wrapper restores it
   sock.authState.creds.me.name = '';
-  const ok = await ensureActiveOnlinePresence(sock, { defaultPushName: 'Spider Man' });
-  assert.equal(ok, true);
-  assert.deepEqual(presenceCalls, [{ type: 'available', toJid: undefined, meName: 'Spider Man' }]);
+  const offlineOk = await ensureOfflinePresence(sock, { defaultPushName: 'Spider Man' });
+  assert.equal(offlineOk, true);
+  sock.authState.creds.me.name = '';
+  const onlineOk = await ensureActiveOnlinePresence(sock, { defaultPushName: 'Spider Man' });
+  assert.equal(onlineOk, true);
+  assert.deepEqual(presenceCalls, [
+    { type: 'unavailable', toJid: undefined, meName: 'Spider Man' },
+    { type: 'available', toJid: undefined, meName: 'Spider Man' },
+  ]);
+});
+
+test('installSocketResilience stays offline (unavailable) on connection open unless alwaysOnline is enabled', async () => {
+  const defaultEvents = createEmitter();
+  const defaultCalls = [];
+  const defaultSock = {
+    ev: defaultEvents,
+    authState: { creds: { me: { id: '254700000001:5@s.whatsapp.net', name: '' }, nextPreKeyId: 1 }, keys: { get: async () => ({}), set: async () => {} } },
+    sendPresenceUpdate: async (type) => defaultCalls.push(type),
+    signalRepository: { lidMapping: { getLIDsForPNs: async () => [] } },
+    query: async () => ({ tag: 'iq', attrs: { type: 'result' }, content: [] }),
+    sendMessage: async (_j, _c, o) => o,
+  };
+  installSocketResilience(defaultSock, { authDir: '', defaultPushName: 'Spider Man', logInfo: () => {} });
+  defaultEvents.emit('connection.update', { connection: 'open' });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(defaultCalls, ['unavailable']);
+
+  const alwaysEvents = createEmitter();
+  const alwaysCalls = [];
+  const alwaysSock = {
+    ev: alwaysEvents,
+    authState: { creds: { me: { id: '254700000001:5@s.whatsapp.net', name: '' }, nextPreKeyId: 1 }, keys: { get: async () => ({}), set: async () => {} } },
+    sendPresenceUpdate: async (type) => alwaysCalls.push(type),
+    signalRepository: { lidMapping: { getLIDsForPNs: async () => [] } },
+    query: async () => ({ tag: 'iq', attrs: { type: 'result' }, content: [] }),
+    sendMessage: async (_j, _c, o) => o,
+  };
+  installSocketResilience(alwaysSock, { authDir: '', defaultPushName: 'Spider Man', alwaysOnline: true, logInfo: () => {} });
+  alwaysEvents.emit('connection.update', { connection: 'open' });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(alwaysCalls, ['available']);
 });
 
 test('ensureAppStateSynced syncs unsynced collections on receivedPendingNotifications and key arrival', async () => {
@@ -754,13 +793,17 @@ test('ensureAppStateSynced syncs unsynced collections on receivedPendingNotifica
   assert.deepEqual(syncedBatches[1], { collections: ['regular_high'], isInitialSync: true });
 });
 
-test('spider/index.js enables markOnlineOnConnect for active delivery receipts and updated version fallback', () => {
+test('spider/index.js disables markOnlineOnConnect by default via ALWAYS_ONLINE and updates version fallback', async () => {
   const source = fs.readFileSync(path.resolve(process.cwd(), 'spider/index.js'), 'utf8');
-  assert.match(source, /'markOnlineOnConnect':!!\[\]/);
+  const { default: config } = await import('../../spider/config.js');
+  assert.equal(config.ALWAYS_ONLINE, false);
+  assert.match(source, /'markOnlineOnConnect':Boolean\([^)]+\['ALWAYS_ONLINE'\]\)/);
+  assert.match(source, /alwaysOnline:Boolean\([^)]+\['ALWAYS_ONLINE'\]\)/);
+  assert.doesNotMatch(source, /'markOnlineOnConnect':!!\[\]/);
   assert.doesNotMatch(source, /1027934701/);
   assert.match(source, /_0xbaileysDefaultVersion/);
   assert.match(source, /defaultPushName:/);
-  assert.doesNotMatch(source, /sendPresenceUpdate\([^)]*unavailable/);
+  assert.match(source, /updatePresence\([^)]+,'unavailable'\)/);
 });
 
 test('ensureHealthyPreKeys detects Baileys MIN_UPLOAD_INTERVAL silent skip and retries until pre-keys replenish', async () => {

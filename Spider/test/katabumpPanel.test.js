@@ -302,11 +302,12 @@ test('Katabump fresh SESSION container replenishes pre-keys past MIN_UPLOAD_INTE
     ev.emit('connection.update', { connection: 'open' });
     await new Promise((r) => setTimeout(r, 15));
 
-    // Presence resilience ensured creds.me.name + available presence (sendActiveReceipts -> 2nd gray tick)
+    // Presence resilience ensured creds.me.name + unavailable presence by default (bot stays offline unless ALWAYS_ONLINE=on)
     assert.equal(sock.authState.creds.me.name, 'Spider Man');
-    assert.equal(presenceLog.some((p) => p.type === 'available' && p.meName === 'Spider Man'), true);
-    assert.equal(presenceLog.some((p) => p.type === 'unavailable'), false);
+    assert.equal(presenceLog.some((p) => p.type === 'unavailable' && p.meName === 'Spider Man'), true);
+    assert.equal(presenceLog.some((p) => p.type === 'available'), false);
     assert.equal(config.AUTO_READ, false);
+    assert.equal(config.ALWAYS_ONLINE, false);
 
     // Cooldown clears; retry replenishes 50 pre-keys
     withinMinUploadInterval = false;
