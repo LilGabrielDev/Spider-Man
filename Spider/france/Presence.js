@@ -1,1 +1,109 @@
-export async function getOnlineMembers(_0x538b5b,_0x365b3e){try{const _0x399861=await _0x538b5b['groupMetadata'](_0x365b3e);const _0x29ecc9=_0x399861['participants'];const _0x506d0a=[];for(const _0x45034f of _0x29ecc9){try{await _0x538b5b['presenceSubscribe'](_0x45034f['id']);await new Promise(_0x420b6b=>setTimeout(_0x420b6b,0x1f4));const _0x26b1d3=_0x538b5b['userPresence']?.[_0x45034f['id']];if(_0x26b1d3&&_0x26b1d3['lastKnownPresence']==='available'){_0x506d0a['push'](_0x45034f['id']);}}catch(_0x228aa5){continue;}}await new Promise(_0x4c80c6=>setTimeout(_0x4c80c6,0x7d0));return _0x506d0a;}catch(_0x339f89){console['error']('Error\x20getting\x20online\x20members:',_0x339f89);return[];}}
+import { cleanUserJid } from '../../spider/utils/userJid.js';
+
+const ONLINE_STATES = new Set(['available', 'composing', 'recording']);
+const PRESENCE_FRESH_MS = 120_000;
+
+async function collectParticipantCandidates(sock, participant) {
+  const candidates = [];
+  const add = (val) => {
+    const raw = String(val || '').trim();
+    if (!raw) return;
+    if (!candidates.includes(raw)) candidates.push(raw);
+    const cleaned = cleanUserJid(raw);
+    if (cleaned && !candidates.includes(cleaned)) candidates.push(cleaned);
+  };
+
+  add(participant?.phoneNumber);
+  add(participant?.pn);
+  add(participant?.id);
+  add(participant?.jid);
+
+  const primary = participant?.id || participant?.jid || '';
+  if (primary.endsWith('@lid') || primary.endsWith('@hosted.lid')) {
+    const cleanedLid = cleanUserJid(primary);
+    const cachePhone =
+      (typeof globalThis.resolvePhoneFromLid === 'function'
+        ? globalThis.resolvePhoneFromLid(cleanedLid)
+        : '') ||
+      globalThis.lidPhoneCache?.get?.(cleanedLid) ||
+      '';
+    if (cachePhone) {
+      const digits = String(cachePhone).replace(/\D/g, '');
+      if (digits) add(`${digits}@s.whatsapp.net`);
+    }
+    const getPNForLID = sock?.signalRepository?.lidMapping?.getPNForLID;
+    if (typeof getPNForLID === 'function') {
+      try {
+        const pn = await getPNForLID.call(sock.signalRepository.lidMapping, cleanedLid);
+        if (pn) add(pn);
+      } catch {}
+    }
+  }
+
+  return candidates;
+}
+
+function isEntryOnline(entry, now) {
+  if (!entry || typeof entry !== 'object') return false;
+  if (!ONLINE_STATES.has(entry.lastKnownPresence)) return false;
+  if (entry.timestamp && now - entry.timestamp >= PRESENCE_FRESH_MS) return false;
+  return true;
+}
+
+export async function getOnlineMembers(sock, groupJid) {
+  try {
+    if (!sock || typeof sock.groupMetadata !== 'function') return [];
+    const metadata = await sock.groupMetadata(groupJid);
+    const participants = Array.isArray(metadata?.participants) ? metadata.participants : [];
+    if (participants.length === 0) return [];
+
+    const candidateLists = [];
+    for (const p of participants.slice(0, 40)) {
+      const candidates = await collectParticipantCandidates(sock, p);
+      if (candidates.length === 0) continue;
+      const preferred =
+        candidates.find((c) => !c.endsWith('@lid') && !c.endsWith('@hosted.lid')) ||
+        candidates[0];
+      candidateLists.push({ preferred, candidates });
+    }
+
+    if (typeof sock.presenceSubscribe === 'function') {
+      for (const { preferred } of candidateLists) {
+        try {
+          await sock.presenceSubscribe(preferred);
+        } catch {}
+      }
+    }
+
+    const map = globalThis._spiderPresenceMap instanceof Map ? globalThis._spiderPresenceMap : null;
+    const hasImmediateData =
+      Boolean(sock.userPresence && Object.keys(sock.userPresence).length > 0) ||
+      Boolean(map && map.size > 0);
+    await new Promise((resolve) => setTimeout(resolve, hasImmediateData ? 50 : 750));
+
+    const now = Date.now();
+    const online = [];
+    const seen = new Set();
+
+    for (const { preferred, candidates } of candidateLists) {
+      let foundOnline = false;
+      for (const cand of candidates) {
+        const fromSock = sock.userPresence?.[cand];
+        const fromMap = map?.get(cand);
+        if (isEntryOnline(fromSock, now) || isEntryOnline(fromMap, now)) {
+          foundOnline = true;
+          break;
+        }
+      }
+      if (foundOnline && !seen.has(preferred)) {
+        seen.add(preferred);
+        online.push(preferred);
+      }
+    }
+
+    return online;
+  } catch (err) {
+    console.error('Error getting online members:', err);
+    return [];
+  }
+}

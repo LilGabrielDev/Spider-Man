@@ -1,4 +1,4 @@
-import { downloadContentFromMessage } from '@whiskeysockets/baileys';
+import { downloadContentFromMessage, S_WHATSAPP_NET } from '@whiskeysockets/baileys';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
@@ -13,8 +13,6 @@ import {
   resolveTargetFromMessage,
 } from '../../spider/utils/groupActionHelper.js';
 import { getPhoneFromJid, resolveRuntimeOwnerJid } from '../../spider/utils/userJid.js';
-
-const S_WHATSAPP_NET = 's.whatsapp.net';
 
 async function getBuffer(mediaMsg, mediaType) {
   const stream = await downloadContentFromMessage(mediaMsg, mediaType);

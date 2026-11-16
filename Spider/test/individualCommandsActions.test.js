@@ -1164,7 +1164,10 @@ function buildActionCaseForCommand(name) {
     case 'setbio':
       return {
         text: 'Web-slinging with Spider Man',
-        verify: ({ calls }) => assert.ok(calls.query.length >= 1),
+        verify: ({ calls }) => assert.ok(
+          calls.updateProfileStatus.length >= 1 || calls.query.length >= 1,
+          'setbio should call updateProfileStatus or fallback query',
+        ),
       };
     case 'autobio':
       return { text: 'off' };

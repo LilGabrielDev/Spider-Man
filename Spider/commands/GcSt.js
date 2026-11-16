@@ -128,8 +128,7 @@ async function sendGroupStatus(sock, groupJid, payload) {
         message: { ...mediaContent, messageContextInfo: { messageSecret: secret } },
       },
     },
-    {},
-    { userJid: sock?.user?.id, timestamp: new Date() },
+    { userJid: sock?.user?.id || sock?.authState?.creds?.me?.id, timestamp: new Date() },
   );
   await sock.relayMessage(groupJid, waMsg.message, { messageId: waMsg.key.id });
   return waMsg;

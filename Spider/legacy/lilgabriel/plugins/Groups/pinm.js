@@ -37,32 +37,36 @@ async function sendPinButtons(client, m, _fq, prefix) {
     '└──✦ 𝐒𝐏𝐈𝐃𝐄𝐑 𝐌𝐀𝐍 ┃ ᴹᴰ ✦──';
 
   try {
-    const interactive = generateWAMessageFromContent(m.chat, {
-      interactiveMessage: {
-        body: { text: bodyText },
-        footer: { text: '' },
-        nativeFlowMessage: {
-          buttons: [
-            {
-              name: 'single_select',
-              buttonParamsJson: JSON.stringify({
-                title: 'Pin Duration',
-                sections: [
-                  {
-                    title: 'How long?',
-                    rows: [
-                      { header: '⏱️ 24 Hours', title: 'Pin for 1 day', id: `${p}pinm 24h` },
-                      { header: '📅 7 Days', title: 'Pin for 1 week', id: `${p}pinm 7d` },
-                      { header: '🗓️ 30 Days', title: 'Pin for 1 month', id: `${p}pinm 30d` },
-                    ],
-                  },
-                ],
-              }),
-            },
-          ],
+    const interactive = generateWAMessageFromContent(
+      m.chat,
+      {
+        interactiveMessage: {
+          body: { text: bodyText },
+          footer: { text: '' },
+          nativeFlowMessage: {
+            buttons: [
+              {
+                name: 'single_select',
+                buttonParamsJson: JSON.stringify({
+                  title: 'Pin Duration',
+                  sections: [
+                    {
+                      title: 'How long?',
+                      rows: [
+                        { header: '⏱️ 24 Hours', title: 'Pin for 1 day', id: `${p}pinm 24h` },
+                        { header: '📅 7 Days', title: 'Pin for 1 week', id: `${p}pinm 7d` },
+                        { header: '🗓️ 30 Days', title: 'Pin for 1 month', id: `${p}pinm 30d` },
+                      ],
+                    },
+                  ],
+                }),
+              },
+            ],
+          },
         },
       },
-    });
+      { userJid: client?.user?.id || client?.authState?.creds?.me?.id || m?.sender, timestamp: new Date() },
+    );
     await client.relayMessage(m.chat, interactive.message, { messageId: interactive.key.id });
   } catch {
     await sendInteractive(

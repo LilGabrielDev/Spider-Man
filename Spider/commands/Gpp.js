@@ -1,11 +1,9 @@
-import { downloadContentFromMessage } from '@whiskeysockets/baileys';
+import { downloadContentFromMessage, S_WHATSAPP_NET } from '@whiskeysockets/baileys';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
 import { MESSAGES } from '../france/index.js';
 import { extractContextInfo, isSendMessageFailure } from '../../spider/utils/groupActionHelper.js';
-
-const S_WHATSAPP_NET = 's.whatsapp.net';
 
 async function loadJimpClass() {
   try {

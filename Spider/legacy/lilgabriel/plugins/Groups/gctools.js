@@ -25,23 +25,27 @@ async function withAdminCheck(context, fn) {
 
 async function sendSelectButtons(client, chat, _m, bodyText, title, rows) {
   try {
-    const interactive = generateWAMessageFromContent(chat, {
-      interactiveMessage: {
-        body: { text: bodyText },
-        footer: { text: '' },
-        nativeFlowMessage: {
-          buttons: [
-            {
-              name: 'single_select',
-              buttonParamsJson: JSON.stringify({
-                title,
-                sections: [{ title: 'Options', rows }],
-              }),
-            },
-          ],
+    const interactive = generateWAMessageFromContent(
+      chat,
+      {
+        interactiveMessage: {
+          body: { text: bodyText },
+          footer: { text: '' },
+          nativeFlowMessage: {
+            buttons: [
+              {
+                name: 'single_select',
+                buttonParamsJson: JSON.stringify({
+                  title,
+                  sections: [{ title: 'Options', rows }],
+                }),
+              },
+            ],
+          },
         },
       },
-    });
+      { userJid: client?.user?.id || client?.authState?.creds?.me?.id, timestamp: new Date() },
+    );
     await client.relayMessage(chat, interactive.message, { messageId: interactive.key.id });
   } catch {
     await client.sendMessage(chat, { text: bodyText });
