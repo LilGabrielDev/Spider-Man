@@ -250,6 +250,18 @@ function isRedundantOrBenignBaileysMessage(lowerSummary) {
     ) {
         return true;
     }
+    if (
+        lowerSummary.startsWith('stream errored out') &&
+        (lowerSummary.includes('reason=replaced') || lowerSummary.includes('status=440'))
+    ) {
+        return true;
+    }
+    if (
+        lowerSummary.startsWith('uncaught error in retry async block') &&
+        (lowerSummary.includes('connection closed') || lowerSummary.includes('stream errored'))
+    ) {
+        return true;
+    }
     if (lowerSummary.startsWith('received error in ack')) {
         return true;
     }

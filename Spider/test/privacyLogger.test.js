@@ -243,6 +243,8 @@ test('createBaileysSignalLogger filters redundant rollback/newsletter/parking/st
             { key: { participant: '112233445521@hosted.lid' }, trace: 'Boom: not-acceptable\n    at assertNodeErrorFree (generics.js:120:11)' },
             'error in sending message again'
         );
+        logger.error({ reason: 'replaced', statusCode: 440 }, 'stream errored out');
+        logger.error({ err: new Error('Connection Closed') }, 'Uncaught error in retry async block');
         assert.equal(captured.length, 0);
 
         // App-state missing key triggers active recovery hook even when parked warnings across all 5 collections are suppressed
@@ -282,7 +284,7 @@ test('createBaileysSignalLogger filters redundant rollback/newsletter/parking/st
 
         const diag = logger.getDiagnostics();
         assert.equal(diag.warnings, 10);
-        assert.equal(diag.errors, 13);
+        assert.equal(diag.errors, 15);
 
         // Structured attrs/key/trace fields are extracted & redacted when onEvent inspects events
         const events = [];
