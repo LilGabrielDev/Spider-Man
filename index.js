@@ -1,7 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
-import { resolveShortSession } from "./spider/session-resolver.js";
+import { getRawSessionInput, resolveSessionFolder, resolveShortSession } from "./spider/session-resolver.js";
 import { RESTART_EXIT_CODE } from "./spider/utils/runtimeControl.js";
 import {
     clearTemporarySessionsAndCache,
@@ -11,7 +11,34 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKER_SCRIPT = path.join(__dirname, "spider", "index.js");
 
-clearTemporarySessionsAndCache({ cwd: __dirname, maxAgeMs: 60 * 1000, tempMaxAgeMs: 60 * 1000, preserveSignalKeys: true });
+if (!process.env.SPIDER_SESSION_FOLDER_KEY) {
+    const initialRaw = getRawSessionInput(process.env).raw;
+    if (initialRaw) {
+        process.env.SPIDER_SESSION_FOLDER_KEY = initialRaw;
+    }
+}
+
+function getSessionMaintenancePaths() {
+    const authDir = resolveSessionFolder({
+        cwd: __dirname,
+        env: process.env,
+        fallbackDir: path.join(__dirname, "spider", "auth"),
+    });
+    const sessionsRoot = process.env.SESSION_DIR
+        ? path.resolve(process.env.SESSION_DIR)
+        : path.join(__dirname, "sessions");
+    return { authDir, sessionsRoot };
+}
+
+const initialSessionPaths = getSessionMaintenancePaths();
+clearTemporarySessionsAndCache({
+    authDir: initialSessionPaths.authDir,
+    sessionDirs: [initialSessionPaths.sessionsRoot],
+    cwd: __dirname,
+    maxAgeMs: 60 * 1000,
+    tempMaxAgeMs: 60 * 1000,
+    preserveSignalKeys: true,
+});
 
 let activeChild = null;
 let restartTimer = null;
@@ -98,9 +125,23 @@ function startWorker() {
         if (restartRequested || code === RESTART_EXIT_CODE) {
             workerRestartAttempts = 0;
             console.log("🔄 [SUPERVISOR] Reloading Spider Man bot worker without stopping panel process...");
-            clearTemporarySessionsAndCache({ cwd: __dirname, preserveSignalKeys: true });
+            const currentRaw = getRawSessionInput(process.env).raw;
+            if (!process.env.SPIDER_SESSION_FOLDER_KEY && currentRaw) {
+                process.env.SPIDER_SESSION_FOLDER_KEY = currentRaw;
+            }
+            const reloadSessionPaths = getSessionMaintenancePaths();
+            clearTemporarySessionsAndCache({
+                authDir: reloadSessionPaths.authDir,
+                sessionDirs: [reloadSessionPaths.sessionsRoot],
+                cwd: __dirname,
+                preserveSignalKeys: true,
+            });
             try {
-                await resolveShortSession();
+                await resolveShortSession({
+                    cwd: __dirname,
+                    authDir: reloadSessionPaths.authDir,
+                    credsPath: path.join(reloadSessionPaths.authDir, "creds.json"),
+                });
             } catch (error) {
                 console.warn(`⚠️ Short session refresh warning during reload: ${error.message}`);
             }

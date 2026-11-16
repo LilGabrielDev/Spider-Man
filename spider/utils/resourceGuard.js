@@ -4,6 +4,7 @@ import path from 'node:path';
 
 export const DEFAULT_MAX_TEMP_AGE_MS = 15 * 60 * 1000;
 export const DEFAULT_MAINTENANCE_INTERVAL_MS = 10 * 60 * 1000;
+export const DEFAULT_SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 export function createBoundedMap({
   maxEntries = 500,
@@ -462,6 +463,8 @@ const PROTECTED_AUTH_PREFIXES = [
   'sender-key-memory-',
   'retry-message-store.json',
   '.spider-retry-store.json',
+  '.session-fingerprint',
+  '.session-meta.json',
 ];
 
 const TEMP_SESSION_FILE_PATTERN =
@@ -479,19 +482,54 @@ function isTempSessionFile(fileName, { preserveBackups = false } = {}) {
   return TEMP_SESSION_FILE_PATTERN.test(fileName);
 }
 
+function getDirectoryLastActivityMs(fsImpl, dirPath, maxDepth = 4) {
+  const dirStat = safeStat(fsImpl, dirPath);
+  if (!dirStat) return 0;
+  let latestMs = dirStat.mtimeMs || dirStat.ctimeMs || 0;
+  if (!dirStat.isDirectory() || maxDepth <= 0) return latestMs;
+
+  let entries = [];
+  try {
+    entries = fsImpl.readdirSync(dirPath);
+  } catch {
+    return latestMs;
+  }
+
+  for (const name of entries) {
+    const childPath = path.join(dirPath, name);
+    const st = safeStat(fsImpl, childPath);
+    if (!st || st.isSymbolicLink()) continue;
+    const childMtime = st.isDirectory()
+      ? getDirectoryLastActivityMs(fsImpl, childPath, maxDepth - 1)
+      : (st.mtimeMs || st.ctimeMs || 0);
+    if (childMtime > latestMs) {
+      latestMs = childMtime;
+    }
+  }
+  return latestMs;
+}
+
 export function pruneAuthDirectory({
   authDir,
+  activeAuthDir = null,
   maxSenderKeys = 400,
   maxSessionFiles = 500,
   maxPreKeys = 900,
   maxTcTokens = 200,
   tempMaxAgeMs = DEFAULT_SESSION_TEMP_AGE_MS,
+  sessionMaxAgeMs = DEFAULT_SESSION_MAX_AGE_MS,
   preserveSignalKeys = false,
   nowMs = Date.now(),
   fsImpl = fs,
+  _visited = null,
 } = {}) {
-  const result = { removedFiles: 0, freedBytes: 0, remainingFiles: 0 };
+  const result = { removedFiles: 0, removedDirs: 0, freedBytes: 0, remainingFiles: 0 };
   if (!authDir) return result;
+
+  const resolvedAuthDir = path.resolve(authDir);
+  const visited = _visited || new Set();
+  if (visited.has(resolvedAuthDir)) return result;
+  visited.add(resolvedAuthDir);
 
   let entries;
   try {
@@ -500,6 +538,12 @@ export function pruneAuthDirectory({
   } catch {
     return result;
   }
+
+  const resolvedActive = activeAuthDir ? path.resolve(activeAuthDir) : null;
+  const effectiveSessionMaxAgeMs =
+    Number.isFinite(Number(sessionMaxAgeMs)) && Number(sessionMaxAgeMs) > 0
+      ? Number(sessionMaxAgeMs)
+      : 0;
 
   const senderKeys = [];
   const sessions = [];
@@ -511,7 +555,41 @@ export function pruneAuthDirectory({
   for (const name of entries) {
     const fullPath = path.join(authDir, name);
     const st = safeStat(fsImpl, fullPath);
-    if (!st || st.isDirectory()) continue;
+    if (!st || st.isSymbolicLink()) continue;
+
+    if (st.isDirectory()) {
+      const resolvedSub = path.resolve(fullPath);
+      const isProtectedDir = Boolean(
+        resolvedActive &&
+          (resolvedSub === resolvedActive ||
+            resolvedActive.startsWith(resolvedSub + path.sep)),
+      );
+      if (!isProtectedDir && effectiveSessionMaxAgeMs > 0) {
+        const lastActivityMs = getDirectoryLastActivityMs(fsImpl, fullPath);
+        if (nowMs - lastActivityMs >= effectiveSessionMaxAgeMs) {
+          removeEntry(fsImpl, fullPath, st, result);
+          continue;
+        }
+      }
+      const subStats = pruneAuthDirectory({
+        authDir: fullPath,
+        activeAuthDir,
+        maxSenderKeys,
+        maxSessionFiles,
+        maxPreKeys,
+        maxTcTokens,
+        tempMaxAgeMs,
+        sessionMaxAgeMs,
+        preserveSignalKeys,
+        nowMs,
+        fsImpl,
+        _visited: visited,
+      });
+      result.removedFiles += subStats.removedFiles;
+      result.removedDirs += subStats.removedDirs;
+      result.freedBytes += subStats.freedBytes;
+      continue;
+    }
 
     if (isTempSessionFile(name, { preserveBackups: preserveSignalKeys })) {
       const ageMs = nowMs - (st.mtimeMs || st.ctimeMs || 0);
@@ -539,7 +617,23 @@ export function pruneAuthDirectory({
       continue;
     }
 
-    const item = { name, fullPath, mtimeMs: st.mtimeMs || st.ctimeMs || 0, size: st.size || 0 };
+    const mtimeMs = st.mtimeMs || st.ctimeMs || 0;
+    if (
+      name.startsWith('session-') &&
+      effectiveSessionMaxAgeMs > 0 &&
+      nowMs - mtimeMs >= effectiveSessionMaxAgeMs
+    ) {
+      try {
+        fsImpl.unlinkSync(fullPath);
+        result.removedFiles += 1;
+        result.freedBytes += st.size || 0;
+      } catch {
+        otherCount += 1;
+      }
+      continue;
+    }
+
+    const item = { name, fullPath, mtimeMs, size: st.size || 0 };
     if (name.startsWith('sender-key-')) {
       senderKeys.push(item);
     } else if (name.startsWith('session-')) {
@@ -633,6 +727,7 @@ export function clearTemporarySessionsAndCache({
   caches = [],
   maxAgeMs = DEFAULT_MAX_TEMP_AGE_MS,
   tempMaxAgeMs = DEFAULT_SESSION_TEMP_AGE_MS,
+  sessionMaxAgeMs = DEFAULT_SESSION_MAX_AGE_MS,
   maxSenderKeys = 400,
   maxSessionFiles = 500,
   maxPreKeys = 900,
@@ -664,22 +759,25 @@ export function clearTemporarySessionsAndCache({
     fsImpl,
   });
 
-  const auth = { removedFiles: 0, freedBytes: 0, remainingFiles: 0 };
+  const auth = { removedFiles: 0, removedDirs: 0, freedBytes: 0, remainingFiles: 0 };
   const sessionResults = [];
 
   for (const dir of resolvedSessionDirs) {
     const stats = pruneAuthDirectory({
       authDir: dir,
+      activeAuthDir: authDir,
       maxSenderKeys,
       maxSessionFiles,
       maxPreKeys,
       maxTcTokens,
       tempMaxAgeMs,
+      sessionMaxAgeMs,
       preserveSignalKeys,
       nowMs,
       fsImpl,
     });
     auth.removedFiles += stats.removedFiles;
+    auth.removedDirs += stats.removedDirs;
     auth.freedBytes += stats.freedBytes;
     auth.remainingFiles += stats.remainingFiles;
     sessionResults.push({ dir, ...stats });
@@ -690,7 +788,7 @@ export function clearTemporarySessionsAndCache({
     auth,
     sessionResults,
     totalRemovedFiles: disk.removedFiles + auth.removedFiles,
-    totalRemovedDirs: disk.removedDirs,
+    totalRemovedDirs: disk.removedDirs + auth.removedDirs,
     totalFreedBytes: disk.freedBytes + auth.freedBytes,
     ranAt: nowMs,
   };
@@ -713,6 +811,7 @@ export function startResourceMaintenance({
   intervalMs,
   maxAgeMs,
   tempMaxAgeMs,
+  sessionMaxAgeMs,
   maxSenderKeys = 400,
   maxSessionFiles = 500,
   maxPreKeys = 900,
@@ -735,6 +834,10 @@ export function startResourceMaintenance({
     Number.isFinite(Number(tempMaxAgeMs)) && Number(tempMaxAgeMs) >= 0
       ? Number(tempMaxAgeMs)
       : readDurationEnv(env, 'SPIDER_SESSION_TEMP_MAX_AGE_MS', DEFAULT_SESSION_TEMP_AGE_MS);
+  const defaultSessionMaxAgeMs =
+    Number.isFinite(Number(sessionMaxAgeMs)) && Number(sessionMaxAgeMs) >= 0
+      ? Number(sessionMaxAgeMs)
+      : readDurationEnv(env, 'SPIDER_SESSION_MAX_AGE_MS', DEFAULT_SESSION_MAX_AGE_MS);
 
   let isRunning = false;
   const stats = {
@@ -766,6 +869,7 @@ export function startResourceMaintenance({
         caches: [...caches, ...protectedCaches],
         maxAgeMs: passMaxAgeMs,
         tempMaxAgeMs: passTempAgeMs,
+        sessionMaxAgeMs: defaultSessionMaxAgeMs,
         maxSenderKeys,
         maxSessionFiles,
         maxPreKeys,

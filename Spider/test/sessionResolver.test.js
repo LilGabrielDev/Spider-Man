@@ -7,12 +7,22 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
+import { createRequire } from "node:module";
 import {
+    SESSION_FINGERPRINT_FILE,
+    SESSION_META_FILE,
     SESSION_SERVER_URL,
+    deriveSessionFolderName,
+    hasMatchingSessionFingerprint,
+    hydrateSessionToFolder,
     isShortLilSession,
     normalizeSession,
+    parseSessionPayload,
+    resolveSessionFolder,
     resolveShortSession,
 } from "../../spider/session-resolver.js";
+
+const require = createRequire(import.meta.url);
 
 function makeFullLilSession(creds = { registrationId: 12345, noiseKey: { private: "abc", public: "def" } }) {
     const json = JSON.stringify(creds);
@@ -458,4 +468,198 @@ test("top-level await resolveShortSession completes retries without Node exit co
         assert.ok(attempts >= 3, `Expected retries to execute cleanly, saw ${attempts} attempts`);
     });
 });
+
+test("resolveSessionFolder maps distinct sessions to isolated folders under sessions/ and respects overrides", () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "spider-folder-route-"));
+    try {
+        const shortA = resolveSessionFolder({
+            cwd: tmpRoot,
+            env: { SESSION_ID: "LIL~alpha01" },
+        });
+        const shortB = resolveSessionFolder({
+            cwd: tmpRoot,
+            env: { SESSION_ID: "SPIDER~beta02" },
+        });
+        const fullCreds = makeFullLilSession({ registrationId: 9001, me: { id: "254700000001@s.whatsapp.net" } });
+        const fullFolder = resolveSessionFolder({
+            cwd: tmpRoot,
+            env: { SESSION: fullCreds },
+        });
+        const preservedFolder = resolveSessionFolder({
+            cwd: tmpRoot,
+            env: {
+                SESSION_ID: fullCreds,
+                SPIDER_SESSION_FOLDER_KEY: "LIL~alpha01",
+            },
+        });
+        const explicitAuth = resolveSessionFolder({
+            cwd: tmpRoot,
+            env: {
+                AUTH_DIR: path.join(tmpRoot, "custom-auth"),
+                SESSION_ID: "LIL~alpha01",
+            },
+        });
+
+        assert.equal(shortA, path.join(tmpRoot, "sessions", "LIL_alpha01"));
+        assert.equal(shortB, path.join(tmpRoot, "sessions", "SPIDER_beta02"));
+        assert.equal(fullFolder, path.join(tmpRoot, "sessions", deriveSessionFolderName(fullCreds)));
+        assert.notEqual(shortA, fullFolder);
+        assert.equal(preservedFolder, shortA);
+        assert.equal(explicitAuth, path.join(tmpRoot, "custom-auth"));
+    } finally {
+        fs.rmSync(tmpRoot, { recursive: true, force: true });
+    }
+});
+
+test("parseSessionPayload & hydrateSessionToFolder extract multi-file session bundles and sanitize unsafe paths", () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "spider-bundle-hydrate-"));
+    const targetDir = path.join(tmpRoot, "sessions", "LIL_bundle01");
+    try {
+        const creds = {
+            registrationId: 4242,
+            noiseKey: { private: "priv1", public: "pub1" },
+            nextPreKeyId: 35,
+            registered: true,
+            me: { id: "254722222222@s.whatsapp.net" },
+        };
+        const bundlePayload = {
+            files: {
+                "creds.json": creds,
+                "app-state-sync-key-AAAA1.json": { keyData: "sync1" },
+                "session-254733333333.0.json": { currentSession: { indexInfo: { baseKey: "bk" } } },
+                "../outside-escape.json": { malicious: true },
+                "nested/bad.json": { malicious: true },
+            },
+        };
+        const encodedBundle = `LIL~${gzipSync(Buffer.from(JSON.stringify(bundlePayload), "utf8")).toString("base64")}`;
+
+        const parsed = parseSessionPayload(encodedBundle);
+        assert.equal(parsed.kind, "folder");
+        assert.ok(parsed.files["creds.json"]);
+        assert.ok(parsed.files["app-state-sync-key-AAAA1.json"]);
+        assert.ok(parsed.files["session-254733333333.0.json"]);
+        assert.equal(parsed.files["../outside-escape.json"], undefined);
+
+        const ok = hydrateSessionToFolder(encodedBundle, targetDir, {
+            rawSessionInput: "LIL~bundle01",
+        });
+        assert.equal(ok, true);
+        assert.equal(fs.existsSync(path.join(targetDir, "creds.json")), true);
+        assert.equal(fs.existsSync(path.join(targetDir, "app-state-sync-key-AAAA1.json")), true);
+        assert.equal(fs.existsSync(path.join(targetDir, "session-254733333333.0.json")), true);
+        assert.equal(fs.existsSync(path.join(targetDir, SESSION_FINGERPRINT_FILE)), true);
+        assert.equal(fs.existsSync(path.join(targetDir, SESSION_META_FILE)), true);
+        assert.equal(fs.existsSync(path.join(tmpRoot, "sessions", "outside-escape.json")), false);
+
+        const writtenCreds = JSON.parse(fs.readFileSync(path.join(targetDir, "creds.json"), "utf8"));
+        assert.equal(writtenCreds.registrationId, 4242);
+        assert.equal(writtenCreds.firstUnuploadedPreKeyId, 35);
+    } finally {
+        fs.rmSync(tmpRoot, { recursive: true, force: true });
+    }
+});
+
+test("resolveShortSession hydrates nested {creds, keys} server bundle into sessions/<folder> and enforces fingerprint mismatch guard", async () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "spider-short-bundle-"));
+    try {
+        const serverBundle = {
+            creds: {
+                registrationId: 8181,
+                noiseKey: { private: "privB", public: "pubB" },
+                me: { id: "254744444444@s.whatsapp.net" },
+            },
+            keys: {
+                "app-state-sync-key": {
+                    key99: { keyData: "sync99" },
+                },
+                "pre-key": {
+                    1: { private: "p1", public: "u1" },
+                },
+            },
+        };
+
+        await withTempEnvSnapshot(async () => {
+            await withServer((req, res) => {
+                if (req.url === "/session/bundle99") {
+                    res.writeHead(200, { "content-type": "application/json" });
+                    res.end(JSON.stringify(serverBundle));
+                    return;
+                }
+                res.writeHead(404);
+                res.end("Not found");
+            }, async (_baseUrl, fetchImpl) => {
+                delete process.env.SESSION;
+                process.env.SESSION_ID = "LIL~bundle99";
+
+                await resolveShortSession({
+                    cwd: tmpRoot,
+                    loadEnv: false,
+                    fetchImpl,
+                });
+
+                const expectedDir = path.join(tmpRoot, "sessions", "LIL_bundle99");
+                assert.equal(fs.existsSync(path.join(expectedDir, "creds.json")), true);
+                assert.equal(fs.existsSync(path.join(expectedDir, "app-state-sync-key-key99.json")), true);
+                assert.equal(fs.existsSync(path.join(expectedDir, "pre-key-1.json")), true);
+                assert.equal(hasMatchingSessionFingerprint(expectedDir, "LIL~bundle99"), true);
+                assert.equal(hasMatchingSessionFingerprint(expectedDir, "LIL~different00"), false);
+
+                // Switching SESSION_ID inside the same folder must refuse stale creds reuse on 404
+                process.env.SESSION_ID = "LIL~different00";
+                await assert.rejects(
+                    () => resolveShortSession({
+                        authDir: expectedDir,
+                        loadEnv: false,
+                        fetchImpl,
+                    }),
+                    /Short Spider-Man session lookup failed \(404\)/
+                );
+
+                // Switching to another full session replaces old account files cleanly
+                const nextFull = makeFullLilSession({
+                    registrationId: 9292,
+                    noiseKey: { private: "privC", public: "pubC" },
+                    me: { id: "254755555555@s.whatsapp.net" },
+                });
+                const hydratedNew = hydrateSessionToFolder(nextFull, expectedDir, {
+                    rawSessionInput: "LIL~newaccount",
+                    replaceOnMismatch: true,
+                });
+                assert.equal(hydratedNew, true);
+                assert.equal(fs.existsSync(path.join(expectedDir, "app-state-sync-key-key99.json")), false);
+                assert.equal(fs.existsSync(path.join(expectedDir, "pre-key-1.json")), false);
+                const updatedCreds = JSON.parse(fs.readFileSync(path.join(expectedDir, "creds.json"), "utf8"));
+                assert.equal(updatedCreds.registrationId, 9292);
+            });
+        });
+    } finally {
+        fs.rmSync(tmpRoot, { recursive: true, force: true });
+    }
+});
+
+test("legacy Spider/legacy/lil/utils/session.js resolveSession hydrates per-session folder and multi-file bundles", async () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "spider-legacy-session-"));
+    try {
+        const { resolveSession } = require("../legacy/lil/utils/session.js");
+        const creds = { registrationId: 3131, noiseKey: { private: "lp", public: "lu" } };
+        const bundle = `SPIDER~${gzipSync(Buffer.from(JSON.stringify({
+            files: {
+                "creds.json": creds,
+                "session-legacy.0.json": { ok: true },
+            },
+        }), "utf8")).toString("base64")}`;
+
+        const res = await resolveSession({
+            cwd: tmpRoot,
+            env: { SESSION_ID: bundle },
+        });
+        assert.equal(res.hydrated, true);
+        assert.ok(res.sessionDir.startsWith(path.join(tmpRoot, "sessions", "session_")));
+        assert.equal(fs.existsSync(path.join(res.sessionDir, "creds.json")), true);
+        assert.equal(fs.existsSync(path.join(res.sessionDir, "session-legacy.0.json")), true);
+    } finally {
+        fs.rmSync(tmpRoot, { recursive: true, force: true });
+    }
+});
+
 
