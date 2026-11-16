@@ -1,7 +1,9 @@
 import { getOnlineMembers } from '../france/Presence.js';
 import { MESSAGES } from '../france/config.js';
 import { t } from '../france/translator.js';
+import CONFIG from '../../spider/config.js';
 import { defaultAntilinkStore, ANTILINK_ACTIONS } from '../../spider/utils/antilink.js';
+import { executeGroupAdminProtectedAction } from '../../spider/utils/groupAdminProtection.js';
 import {
   cleanJid,
   extractPhoneDigits,
@@ -9,7 +11,6 @@ import {
 } from '../../spider/utils/groupRoleResolver.js';
 import {
   executeGroupSettingUpdate,
-  executeParticipantsAction,
   executeRequestParticipantsAction,
   extractContextInfo,
   isFromBot,
@@ -27,6 +28,13 @@ async function fetchMetaSafe(sock, from) {
     }
   } catch {}
   return null;
+}
+
+async function executeProtectedParticipantsAction({ config, ...options } = {}) {
+  return executeGroupAdminProtectedAction({
+    ...options,
+    enabled: config?.ADMIN_PROTECTION ?? CONFIG.ADMIN_PROTECTION,
+  });
 }
 
 async function invalidateGroupCacheSafe(sock, from) {
@@ -377,7 +385,7 @@ export const commands = [
     groupOnly: true,
     adminOnly: true,
     botAdminOnly: true,
-    execute: async ({ sock, from, text, args = [], msg }) => {
+    execute: async ({ sock, from, text, args = [], msg, config }) => {
       if (!from.endsWith('@g.us')) {
         const groupOnlyMsg = await t(from, 'group', 'groupOnly');
         return sock.sendMessage(from, { text: groupOnlyMsg }, { quoted: msg });
@@ -392,7 +400,8 @@ export const commands = [
         const errMsg = await t(from, 'kick', 'error');
         return sock.sendMessage(from, { text: errMsg }, { quoted: msg });
       }
-      const res = await executeParticipantsAction({
+      const res = await executeProtectedParticipantsAction({
+        config,
         sock,
         from,
         participants: [target.targetJid],
@@ -423,7 +432,7 @@ export const commands = [
     ownerOnly: true,
     groupOnly: true,
     adminOnly: true,
-    execute: async ({ sock, from, text, args = [], msg }) => {
+    execute: async ({ sock, from, text, args = [], msg, config }) => {
       if (!from.endsWith('@g.us')) {
         const groupOnlyMsg = await t(from, 'group', 'groupOnly');
         return sock.sendMessage(from, { text: groupOnlyMsg }, { quoted: msg });
@@ -443,7 +452,8 @@ export const commands = [
         return sock.sendMessage(from, { text: noNumMsg }, { quoted: msg });
       }
       const metadata = await fetchMetaSafe(sock, from);
-      const res = await executeParticipantsAction({
+      const res = await executeProtectedParticipantsAction({
+        config,
         sock,
         from,
         participants: [targetJid],
@@ -472,7 +482,7 @@ export const commands = [
     groupOnly: true,
     adminOnly: true,
     botAdminOnly: true,
-    execute: async ({ sock, from, msg }) => {
+    execute: async ({ sock, from, msg, config }) => {
       if (!from.endsWith('@g.us')) {
         const groupOnlyMsg = await t(from, 'group', 'groupOnly');
         return sock.sendMessage(from, { text: groupOnlyMsg }, { quoted: msg });
@@ -510,7 +520,8 @@ export const commands = [
       let removedCount = 0;
       let failedCount = 0;
       for (const participantJid of nonAdmins) {
-        const res = await executeParticipantsAction({
+        const res = await executeProtectedParticipantsAction({
+          config,
           sock,
           from,
           participants: [participantJid],
@@ -542,7 +553,7 @@ export const commands = [
     groupOnly: true,
     adminOnly: true,
     botAdminOnly: true,
-    execute: async ({ sock, from, text, args = [], msg }) => {
+    execute: async ({ sock, from, text, args = [], msg, config }) => {
       if (!from.endsWith('@g.us')) {
         const groupOnlyMsg = await t(from, 'group', 'groupOnly');
         return sock.sendMessage(from, { text: groupOnlyMsg }, { quoted: msg });
@@ -557,7 +568,8 @@ export const commands = [
         const errMsg = await t(from, 'promote', 'error');
         return sock.sendMessage(from, { text: errMsg }, { quoted: msg });
       }
-      const res = await executeParticipantsAction({
+      const res = await executeProtectedParticipantsAction({
+        config,
         sock,
         from,
         participants: [target.targetJid],
@@ -589,7 +601,7 @@ export const commands = [
     groupOnly: true,
     adminOnly: true,
     botAdminOnly: true,
-    execute: async ({ sock, from, text, args = [], msg }) => {
+    execute: async ({ sock, from, text, args = [], msg, config }) => {
       if (!from.endsWith('@g.us')) {
         const groupOnlyMsg = await t(from, 'group', 'groupOnly');
         return sock.sendMessage(from, { text: groupOnlyMsg }, { quoted: msg });
@@ -604,7 +616,8 @@ export const commands = [
         const errMsg = await t(from, 'demote', 'error');
         return sock.sendMessage(from, { text: errMsg }, { quoted: msg });
       }
-      const res = await executeParticipantsAction({
+      const res = await executeProtectedParticipantsAction({
+        config,
         sock,
         from,
         participants: [target.targetJid],

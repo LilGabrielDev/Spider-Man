@@ -41,8 +41,8 @@ export async function reloadCommandsFromDisk({
   importFn = (specifier) => import(specifier),
   cacheBust = Date.now(),
 } = {}) {
-  const nextCommands = new Map();
-  const nextAliases = new Map();
+  const commandCandidates = [];
+  const collisions = [];
 
   const files = fsImpl
     .readdirSync(commandsDir)
@@ -58,36 +58,92 @@ export async function reloadCommandsFromDisk({
     for (const cmd of mod.commands) {
       const cmdName = String(cmd?.name || '').toLowerCase();
       if (!cmdName) continue;
-      nextCommands.set(cmdName, cmd);
-      if (Array.isArray(cmd.aliases)) {
-        for (const alias of cmd.aliases) {
-          const cleanAlias = String(alias || '').toLowerCase();
-          if (cleanAlias) nextAliases.set(cleanAlias, cmdName);
-        }
-      }
+      commandCandidates.push({
+        name: cmdName,
+        command: cmd,
+        source: file,
+        aliases: Array.isArray(cmd.aliases) ? cmd.aliases : [],
+        isLegacy: false,
+      });
     }
   }
 
-  let legacyRegistered = 0;
   if (typeof loadLegacyFn === 'function') {
     const legacyCommands = await loadLegacyFn();
     for (const legacyCommand of legacyCommands || []) {
       const name = String(legacyCommand?.name || '').toLowerCase();
-      if (!name || nextCommands.has(name)) continue;
-
-      const safeAliases = (legacyCommand.aliases || []).filter((alias) => {
-        const cleanAlias = String(alias || '').toLowerCase();
-        return cleanAlias && !nextCommands.has(cleanAlias) && !nextAliases.has(cleanAlias);
+      if (!name) continue;
+      commandCandidates.push({
+        name,
+        command: legacyCommand,
+        source: 'legacy',
+        aliases: Array.isArray(legacyCommand.aliases) ? legacyCommand.aliases : [],
+        isLegacy: true,
       });
-
-      legacyCommand.aliases = safeAliases;
-      nextCommands.set(name, legacyCommand);
-      for (const alias of safeAliases) {
-        nextAliases.set(String(alias).toLowerCase(), name);
-      }
-      legacyRegistered += 1;
     }
   }
+
+  const nextCommands = new Map();
+  const registeredCommands = [];
+  for (const candidate of commandCandidates) {
+    const { name, source, command } = candidate;
+    if (nextCommands.has(name)) {
+      const kept = registeredCommands.find((entry) => entry.name === name);
+      collisions.push({
+        type: 'duplicate-canonical-name',
+        name,
+        kept: `${kept.source}:${kept.name}`,
+        rejected: `${source}:${name}`,
+      });
+      continue;
+    }
+    nextCommands.set(name, command);
+    registeredCommands.push(candidate);
+  }
+
+  const nextAliases = new Map();
+  const firstAliasSource = new Map();
+  for (const candidate of registeredCommands) {
+    const { name: cmdName, source, aliases } = candidate;
+    const acceptedLegacyAliases = [];
+    for (const alias of aliases) {
+      const cleanAlias = String(alias || '').toLowerCase();
+      if (!cleanAlias) continue;
+
+      const aliasSource = `${source}:${cmdName}`;
+      if (nextCommands.has(cleanAlias)) {
+        const canonical = registeredCommands.find((entry) => entry.name === cleanAlias);
+        collisions.push({
+          type: 'alias-canonical-collision',
+          name: cleanAlias,
+          canonical: `${canonical.source}:${canonical.name}`,
+          alias: aliasSource,
+        });
+        continue;
+      }
+
+      if (firstAliasSource.has(cleanAlias)) {
+        collisions.push({
+          type: 'duplicate-alias',
+          name: cleanAlias,
+          kept: firstAliasSource.get(cleanAlias),
+          rejected: aliasSource,
+        });
+        continue;
+      }
+
+      firstAliasSource.set(cleanAlias, aliasSource);
+      nextAliases.set(cleanAlias, cmdName);
+      if (candidate.isLegacy) acceptedLegacyAliases.push(alias);
+    }
+    if (candidate.isLegacy) candidate.command.aliases = acceptedLegacyAliases;
+  }
+
+  if (collisions.length > 0) {
+    console.warn('[COMMAND LOADER] Command collisions detected:', collisions);
+  }
+
+  const legacyRegistered = registeredCommands.filter((candidate) => candidate.isLegacy).length;
 
   commandsMap.clear();
   for (const [key, value] of nextCommands.entries()) {
@@ -103,6 +159,7 @@ export async function reloadCommandsFromDisk({
     commandCount: commandsMap.size,
     aliasCount: aliasesMap.size,
     legacyRegistered,
+    collisions,
   };
 }
 

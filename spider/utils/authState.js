@@ -1,5 +1,6 @@
 import fs from 'node:fs';
-import { mkdir, readFile, readdir, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
+import { lstat, mkdir, open, readFile, readdir, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Mutex } from 'async-mutex';
 import { BufferJSON, initAuthCreds, proto } from '@whiskeysockets/baileys';
@@ -300,6 +301,43 @@ export async function useHardenedMultiFileAuthState(
     await rename(tmpPath, filePath);
   }
 
+  async function hardenValidCredentialFile(filePath) {
+    let handle;
+    try {
+      const pathInfo = await lstat(filePath).catch((err) => {
+        if (err?.code === 'ENOENT') return null;
+        throw err;
+      });
+      if (!pathInfo) return;
+      if (pathInfo.isSymbolicLink()) {
+        throw new Error(`Refusing symlinked WhatsApp credential file at ${filePath}`);
+      }
+      const flags = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0);
+      handle = await open(filePath, flags);
+      if (!(await handle.stat()).isFile()) {
+        throw new Error(`Refusing non-regular WhatsApp credential file at ${filePath}`);
+      }
+      const raw = await handle.readFile({ encoding: 'utf8' });
+      let valid = false;
+      try {
+        const parsed = JSON.parse(raw, BufferJSON.reviver);
+        normalizeAuthCreds(parsed);
+        valid = isValidAuthCreds(parsed);
+      } catch {
+        // Invalid files are handled by the existing credential recovery logic.
+      }
+      if (valid) await handle.chmod(0o600);
+    } catch (err) {
+      if (err?.code === 'ENOENT') return;
+      if (err?.code === 'ELOOP') {
+        throw new Error(`Refusing symlinked WhatsApp credential file at ${filePath}`);
+      }
+      throw err;
+    } finally {
+      await handle?.close();
+    }
+  }
+
   const writeData = (data, file, { backup = false } = {}) => {
     const filePath = path.join(folder, fixAuthFileName(file));
     const mutex = getFileLock(filePath);
@@ -402,6 +440,9 @@ export async function useHardenedMultiFileAuthState(
     return { creds: freshCreds, recoveredFromBackup: false, repaired: false };
   };
 
+  const credsPath = path.join(folder, 'creds.json');
+  await hardenValidCredentialFile(credsPath);
+  await hardenValidCredentialFile(`${credsPath}.bak`);
   const { creds, repaired: repairedOnLoad } = await loadCredsWithRecovery();
   let repairedPreKeyCursor = false;
   if (

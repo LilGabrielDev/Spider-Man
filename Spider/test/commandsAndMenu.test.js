@@ -200,6 +200,56 @@ test('all 189 commands and aliases load cleanly with valid metadata and handlers
   }
 });
 
+test('real command loading reports collisions and preserves canonical names deterministically', async (t) => {
+  const warnings = [];
+  t.mock.method(console, 'warn', (...args) => warnings.push(args));
+  const loadedCommands = new Map();
+  const loadedAliases = new Map();
+
+  const stats = await reloadCommandsFromDisk({
+    commandsDir: path.join(process.cwd(), 'Spider', 'commands'),
+    commandsMap: loadedCommands,
+    aliasesMap: loadedAliases,
+    pathToFileUrlFn: pathToFileURL,
+    cacheBust: 999002,
+  });
+  const findCollision = (type, name) => stats.collisions.find(
+    (collision) => collision.type === type && collision.name === name,
+  );
+
+  assert.deepEqual(
+    [findCollision('alias-canonical-collision', 'cat')?.canonical,
+      findCollision('alias-canonical-collision', 'cat')?.alias],
+    ['Logo.js:cat', 'Category.js:category'],
+  );
+  assert.deepEqual(
+    [findCollision('duplicate-alias', 'list')?.kept,
+      findCollision('duplicate-alias', 'list')?.rejected],
+    ['Menu.js:menu', 'Playlist.js:playlist'],
+  );
+  assert.deepEqual(
+    [findCollision('duplicate-canonical-name', 'gpt')?.kept,
+      findCollision('duplicate-canonical-name', 'gpt')?.rejected],
+    ['A.I.js:gpt', 'Gpt.js:gpt'],
+  );
+  assert.deepEqual(
+    [findCollision('duplicate-canonical-name', 'npm')?.kept,
+      findCollision('duplicate-canonical-name', 'npm')?.rejected],
+    ['Download.js:npm', 'Npm.js:npm'],
+  );
+
+  const resolveCommandName = (input) => loadedAliases.get(input.toLowerCase()) || input.toLowerCase();
+  assert.equal(resolveCommandName('cat'), 'cat', 'a canonical name must not be redirected by an alias');
+  assert.equal(loadedCommands.get(resolveCommandName('cat')).name.toLowerCase(), 'cat');
+  assert.equal(loadedAliases.has('cat'), false);
+  assert.equal(resolveCommandName('list'), 'menu', 'the first sorted alias definition remains available');
+  assert.equal(loadedCommands.get(resolveCommandName('list')).name.toLowerCase(), 'menu');
+  assert.equal(loadedCommands.get('gpt').name.toLowerCase(), 'gpt');
+  assert.equal(loadedCommands.get('npm').name.toLowerCase(), 'npm');
+  assert.ok(warnings.some(([message]) => String(message).includes('Command collisions detected')));
+  assert.ok(stats.collisions.length > 0);
+});
+
 test('menu command and handleMenuCategoryReply work across ?reload= module boundaries', async () => {
   globalThis.__spiderCategoryMenuSessions?.clear?.();
   const sent = [];
@@ -811,4 +861,3 @@ test('". Menu" and " . Menu" resolve case-insensitively and execute Menu cleanly
     assert.match(body, /SYSTEM MENU/);
   }
 });
-
