@@ -1425,6 +1425,52 @@ test('wrapOnWhatsAppGuard resolves mapped LIDs to PN and skips unmapped LIDs cle
   assert.equal(mappedRes[0].jid, '254700000011@s.whatsapp.net');
 });
 
+test('ensureAppStateSynced schedules bounded retry when initial sync only completes partial collections', async () => {
+  const syncedStore = {};
+  const infoLogs = [];
+  let pass = 0;
+
+  const sock = {
+    authState: {
+      creds: {},
+      keys: {
+        get: async (_type, names) =>
+          Object.fromEntries(names.map((name) => [name, syncedStore[name] || null])),
+      },
+    },
+    resyncAppState: async (collections) => {
+      pass += 1;
+      if (pass === 1) {
+        for (const name of collections) {
+          if (name !== 'regular' && name !== 'critical_unblock_low') {
+            syncedStore[name] = { version: 1 };
+          }
+        }
+      } else {
+        for (const name of collections) {
+          syncedStore[name] = { version: 1 };
+        }
+      }
+    },
+  };
+
+  assert.equal(
+    await ensureAppStateSynced(sock, {
+      logInfo: (m) => infoLogs.push(m),
+      retryDelayMs: 15,
+      maxPartialRetries: 2,
+    }),
+    true,
+  );
+  assert.equal(pass, 1);
+
+  await new Promise((r) => setTimeout(r, 45));
+  assert.equal(pass, 2);
+  assert.equal(infoLogs.length, 2);
+  assert.match(infoLogs[0], /Synced 3 app-state collection/);
+  assert.match(infoLogs[1], /Synced 2 app-state collection\(s\): critical_unblock_low, regular/);
+});
+
 
 
 

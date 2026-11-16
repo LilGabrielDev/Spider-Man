@@ -26,6 +26,8 @@ const preKeyRetryAttempts = new WeakMap();
 const preKeyWriteCounters = new WeakMap();
 const appStateSyncedSockets = new WeakSet();
 const appStateInFlightSockets = new WeakSet();
+const appStateRetryTimers = new WeakMap();
+const appStateRetryAttempts = new WeakMap();
 const appStateKeyRequestCooldowns = new WeakMap();
 const statusReactionTargetsBySock = new WeakMap();
 const VALID_PN_DOMAINS = new Set(['s.whatsapp.net', 'hosted', 'c.us']);
@@ -57,6 +59,15 @@ function clearPreKeyRetryTimer(sock) {
   if (timer) {
     clearTimeout(timer);
     preKeyRetryTimers.delete(sock);
+  }
+}
+
+function clearAppStateRetryTimer(sock) {
+  if (!sock || typeof sock !== 'object') return;
+  const timer = appStateRetryTimers.get(sock);
+  if (timer) {
+    clearTimeout(timer);
+    appStateRetryTimers.delete(sock);
   }
 }
 
@@ -323,7 +334,13 @@ export async function ensureActiveOnlinePresence(
 
 export async function ensureAppStateSynced(
   sock,
-  { logInfo = null, logError = null } = {},
+  {
+    logInfo = null,
+    logError = null,
+    retryDelayMs = 8_000,
+    maxPartialRetries = 2,
+    isSocketActive = null,
+  } = {},
 ) {
   if (
     !sock ||
@@ -335,6 +352,9 @@ export async function ensureAppStateSynced(
   if (appStateSyncedSockets.has(sock) || appStateInFlightSockets.has(sock)) {
     return false;
   }
+  if (typeof isSocketActive === 'function' && !isSocketActive()) {
+    return false;
+  }
 
   appStateInFlightSockets.add(sock);
   try {
@@ -344,6 +364,8 @@ export async function ensureAppStateSynced(
     );
     const unsynced = ALL_APP_STATE_COLLECTIONS.filter((name) => !versions?.[name]);
     if (unsynced.length === 0) {
+      clearAppStateRetryTimer(sock);
+      appStateRetryAttempts.delete(sock);
       appStateSyncedSockets.add(sock);
       return false;
     }
@@ -362,7 +384,28 @@ export async function ensureAppStateSynced(
     const syncedNow = unsynced.filter((name) => Boolean(afterVersions?.[name]));
     const stillUnsynced = unsynced.filter((name) => !afterVersions?.[name]);
     if (stillUnsynced.length === 0) {
+      clearAppStateRetryTimer(sock);
+      appStateRetryAttempts.delete(sock);
       appStateSyncedSockets.add(sock);
+    } else if (syncedNow.length > 0 && maxPartialRetries > 0 && !appStateRetryTimers.has(sock)) {
+      const attempts = appStateRetryAttempts.get(sock) || 0;
+      if (attempts < maxPartialRetries) {
+        appStateRetryAttempts.set(sock, attempts + 1);
+        const delay = Number.isFinite(Number(retryDelayMs)) ? Math.max(0, Number(retryDelayMs)) : 8_000;
+        const timer = setTimeout(() => {
+          appStateRetryTimers.delete(sock);
+          if (typeof isSocketActive === 'function' && !isSocketActive()) return;
+          void ensureAppStateSynced(sock, {
+            logInfo,
+            logError,
+            retryDelayMs,
+            maxPartialRetries,
+            isSocketActive,
+          });
+        }, delay);
+        timer?.unref?.();
+        appStateRetryTimers.set(sock, timer);
+      }
     }
     if (syncedNow.length > 0) {
       logInfo?.(
@@ -1599,6 +1642,7 @@ export function installSocketResilience(
       if (connection === 'close') {
         socketClosed = true;
         clearPreKeyRetryTimer(sock);
+        clearAppStateRetryTimer(sock);
         if (appStateFallbackTimer) {
           clearTimeout(appStateFallbackTimer);
           appStateFallbackTimer = null;
@@ -1619,7 +1663,11 @@ export function installSocketResilience(
         if (!appStateSyncedSockets.has(sock) && !appStateFallbackTimer) {
           appStateFallbackTimer = setTimeout(() => {
             appStateFallbackTimer = null;
-            void ensureAppStateSynced(sock, { logInfo, logError });
+            void ensureAppStateSynced(sock, {
+              isSocketActive: () => !socketClosed,
+              logInfo,
+              logError,
+            });
           }, 6000);
           appStateFallbackTimer?.unref?.();
         }
@@ -1629,13 +1677,21 @@ export function installSocketResilience(
           clearTimeout(appStateFallbackTimer);
           appStateFallbackTimer = null;
         }
-        void ensureAppStateSynced(sock, { logInfo, logError });
+        void ensureAppStateSynced(sock, {
+          isSocketActive: () => !socketClosed,
+          logInfo,
+          logError,
+        });
       }
     });
     sock.ev.on('creds.update', (update) => {
       if (update && typeof update === 'object' && update.myAppStateKeyId) {
         appStateSyncedSockets.delete(sock);
-        void ensureAppStateSynced(sock, { logInfo, logError });
+        void ensureAppStateSynced(sock, {
+          isSocketActive: () => !socketClosed,
+          logInfo,
+          logError,
+        });
       }
     });
   }
