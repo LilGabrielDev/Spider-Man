@@ -239,6 +239,10 @@ test('createBaileysSignalLogger filters redundant rollback/newsletter/parking/st
             { attrs: { from: '120363000000000001@g.us', error: '475', class: 'message' } },
             'received error in ack'
         );
+        logger.error(
+            { key: { participant: '112233445521@hosted.lid' }, trace: 'Boom: not-acceptable\n    at assertNodeErrorFree (generics.js:120:11)' },
+            'error in sending message again'
+        );
         assert.equal(captured.length, 0);
 
         // App-state missing key triggers active recovery hook even when parked warnings across all 5 collections are suppressed
@@ -278,16 +282,23 @@ test('createBaileysSignalLogger filters redundant rollback/newsletter/parking/st
 
         const diag = logger.getDiagnostics();
         assert.equal(diag.warnings, 10);
-        assert.equal(diag.errors, 12);
+        assert.equal(diag.errors, 13);
 
-        // Structured attrs/key fields are extracted & redacted when onEvent inspects events
+        // Structured attrs/key/trace fields are extracted & redacted when onEvent inspects events
         const events = [];
         const eventLogger = createBaileysSignalLogger({ onEvent: (ev) => events.push(ev) });
         eventLogger.warn({ attrs: { from: '254712345678@s.whatsapp.net', class: 'message', error: '475' } }, 'received error in ack');
         eventLogger.error({ key: { remoteJid: '123456789012@lid' }, err: new Error('Invalid PreKey ID') }, 'failed to decrypt message');
+        eventLogger.error(
+            { key: { participant: '112233445521@hosted.lid' }, trace: 'Error: Timed out contacting 254712345678@s.whatsapp.net\n    at query (socket.js:10:2)' },
+            'error in sending message again'
+        );
         assert.ok(events[0].summary.includes('from=••••78@s.whatsapp.net'));
         assert.ok(events[0].summary.includes('ackError=475'));
         assert.ok(events[1].summary.includes('jid=••••12@lid'));
+        assert.ok(events[2].summary.includes('Timed out contacting ••••78@s.whatsapp.net'));
+        assert.ok(!events[2].summary.includes('254712345678'));
+        assert.ok(!events[2].summary.includes('at query'));
     });
 });
 
