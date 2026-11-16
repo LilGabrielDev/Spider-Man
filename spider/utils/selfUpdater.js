@@ -224,8 +224,29 @@ export async function fetchVerifiedLatestCommit(repo, { fetchImpl = fetch } = {}
   };
 }
 
+function getSafeArchiveDestination(rootDir, relPath) {
+  const destPath = path.resolve(rootDir, relPath);
+  if (destPath === rootDir || !destPath.startsWith(`${rootDir}${path.sep}`)) {
+    throw new Error(`Archive path escapes workspace root: ${relPath}`);
+  }
+
+  let currentPath = rootDir;
+  for (const segment of path.relative(rootDir, destPath).split(path.sep)) {
+    currentPath = path.join(currentPath, segment);
+    try {
+      if (fs.lstatSync(currentPath).isSymbolicLink()) {
+        throw new Error(`Archive path traverses a symbolic link: ${relPath}`);
+      }
+    } catch (err) {
+      if (err?.code === 'ENOENT') break;
+      throw err;
+    }
+  }
+  return destPath;
+}
+
 export function applyZipArchiveToWorkspace(zipBuffer, rootDir) {
-  const resolvedRoot = path.resolve(rootDir);
+  const resolvedRoot = fs.realpathSync(path.resolve(rootDir));
   const zip = new AdmZip(Buffer.from(zipBuffer));
   const entries = zip.getEntries();
 
@@ -253,6 +274,13 @@ export function applyZipArchiveToWorkspace(zipBuffer, rootDir) {
     );
   }
 
+  const destinations = new Map();
+  for (const { relPath } of fileEntries) {
+    if (!shouldPreserveRelativePath(relPath)) {
+      destinations.set(relPath, getSafeArchiveDestination(resolvedRoot, relPath));
+    }
+  }
+
   const pkgPath = path.join(resolvedRoot, 'package.json');
   const previousPackageJson = fs.existsSync(pkgPath) ? fs.readFileSync(pkgPath, 'utf8') : null;
 
@@ -265,12 +293,20 @@ export function applyZipArchiveToWorkspace(zipBuffer, rootDir) {
       continue;
     }
 
-    const destPath = path.resolve(resolvedRoot, relPath);
-    if (destPath !== resolvedRoot && !destPath.startsWith(`${resolvedRoot}${path.sep}`)) {
-      throw new Error(`Archive path escapes workspace root: ${relPath}`);
+    const destPath = destinations.get(relPath);
+    let parentPath = resolvedRoot;
+    for (const segment of path.relative(resolvedRoot, path.dirname(destPath)).split(path.sep).filter(Boolean)) {
+      parentPath = path.join(parentPath, segment);
+      try {
+        fs.mkdirSync(parentPath);
+      } catch (err) {
+        if (err?.code !== 'EEXIST') throw err;
+      }
+      if (fs.lstatSync(parentPath).isSymbolicLink()) {
+        throw new Error(`Archive path traverses a symbolic link: ${relPath}`);
+      }
     }
-
-    fs.mkdirSync(path.dirname(destPath), { recursive: true });
+    getSafeArchiveDestination(resolvedRoot, relPath);
     fs.writeFileSync(destPath, entry.getData());
     updatedCount += 1;
   }
@@ -300,7 +336,9 @@ export async function runBotUpdate({
   const host = await detectHostingEnvironmentAsync(env);
   const latest = await fetchVerifiedLatestCommit(repository, { fetchImpl });
   const currentSha = getCurrentCommitSha({ rootDir, env, execImpl });
-  const upToDate = !force && isSameCommit(currentSha, latest.sha);
+  const updateState = readUpdateState(rootDir);
+  const pendingDependencyInstall = updateState?.pendingDependencyCommitSha === latest.sha;
+  const upToDate = !force && !pendingDependencyInstall && isSameCommit(currentSha, latest.sha);
 
   if (checkOnly) {
     return {
@@ -398,7 +436,7 @@ export async function runBotUpdate({
   const applied = applyZipArchiveToWorkspace(zipArrayBuffer, rootDir);
 
   let npmWarning = null;
-  if (applied.packageJsonChanged && !skipNpmInstall) {
+  if ((applied.packageJsonChanged || pendingDependencyInstall) && !skipNpmInstall) {
     try {
       execImpl('npm', ['install', '--legacy-peer-deps'], {
         cwd: rootDir,
@@ -410,12 +448,23 @@ export async function runBotUpdate({
     }
   }
 
-  writeUpdateState(rootDir, {
-    commitSha: latest.sha,
+  const nextState = {
+    ...(updateState || {}),
     repository,
     platform: host.label,
     updatedAt: new Date().toISOString(),
-  });
+  };
+  if (npmWarning) {
+    delete nextState.commitSha;
+    if (updateState?.commitSha && updateState.commitSha !== latest.sha) {
+      nextState.commitSha = updateState.commitSha;
+    }
+    nextState.pendingDependencyCommitSha = latest.sha;
+  } else {
+    nextState.commitSha = latest.sha;
+    delete nextState.pendingDependencyCommitSha;
+  }
+  writeUpdateState(rootDir, nextState);
 
   return {
     status: 'updated_self',

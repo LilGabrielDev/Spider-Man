@@ -4,14 +4,20 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { commands } from '../commands/Ping.js';
 
-test('ping reports local dispatch latency instead of WhatsApp ACK latency', async () => {
+test('ping waits for the WhatsApp send acknowledgment before reporting milliseconds', async () => {
   const ping = commands.find((command) => command.name === 'ping');
   const sent = [];
   const msg = { key: { id: 'ping-test', remoteJid: 'test@s.whatsapp.net' } };
+  let pingAcknowledged = false;
   const sock = {
     sendMessage: async (...args) => {
       sent.push(args);
-      if (sent.length === 1) await new Promise((resolve) => setTimeout(resolve, 6));
+      if (sent.length === 1) {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        pingAcknowledged = true;
+      } else {
+        assert.equal(pingAcknowledged, true, 'Pong was sent before the Pinging message was acknowledged');
+      }
       return { key: { id: `ping-response-${sent.length}`, remoteJid: 'test@s.whatsapp.net', fromMe: true } };
     },
   };
@@ -24,7 +30,8 @@ test('ping reports local dispatch latency instead of WhatsApp ACK latency', asyn
   assert.match(sent[1][1].text, /Pong!/);
   assert.match(sent[1][1].text, /Speed: \d+ ms/);
   const latency = Number(sent[1][1].text.match(/Speed: (\d+) ms/)[1]);
-  assert.ok(latency < 100, `expected local latency under 100 ms, got ${latency} ms`);
+  assert.ok(latency >= 25, `expected the acknowledged send duration to be included, got ${latency} ms`);
+  assert.ok(latency < 1000, `expected a reasonable mocked send latency, got ${latency} ms`);
   assert.equal(sent[0][2].quoted, msg);
   assert.equal(sent[1][2].quoted, msg);
 });

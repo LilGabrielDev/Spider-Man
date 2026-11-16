@@ -151,6 +151,91 @@ export function isLibsignalConsoleNoise(args) {
     return false;
 }
 
+function sanitizeConsoleArgument(value, seen = new WeakMap(), depth = 0) {
+    if (typeof value === 'string') return sanitizeConsoleText(value);
+    if (typeof value === 'number' || typeof value === 'bigint') {
+        const text = sanitizeConsoleText(String(value));
+        return text === String(value) ? value : text;
+    }
+    if (value === null || typeof value !== 'object') return value;
+    if (depth >= 8) return '[Truncated]';
+    if (seen.has(value)) return seen.get(value);
+
+    if (value instanceof Error) {
+        const message = sanitizeConsoleText(value.message || value.name || 'Error');
+        const sanitized = new Error(message);
+        seen.set(value, sanitized);
+        sanitized.name = sanitizeConsoleText(value.name || 'Error');
+        if (typeof value.stack === 'string') sanitized.stack = sanitizeConsoleText(value.stack);
+        for (const key of Object.keys(value)) {
+            const safeKey = sanitizeConsoleText(key);
+            try {
+                Object.defineProperty(sanitized, safeKey, {
+                    value: sanitizeConsoleArgument(value[key], seen, depth + 1),
+                    enumerable: true,
+                    configurable: true,
+                    writable: true
+                });
+            } catch {
+                Object.defineProperty(sanitized, safeKey, {
+                    value: '[Uninspectable]',
+                    enumerable: true,
+                    configurable: true,
+                    writable: true
+                });
+            }
+        }
+        if (Object.hasOwn(value, 'cause')) {
+            try {
+                sanitized.cause = sanitizeConsoleArgument(value.cause, seen, depth + 1);
+            } catch {
+                sanitized.cause = '[Uninspectable]';
+            }
+        }
+        return sanitized;
+    }
+
+    if (Array.isArray(value)) {
+        const sanitized = [];
+        seen.set(value, sanitized);
+        for (const item of value) sanitized.push(sanitizeConsoleArgument(item, seen, depth + 1));
+        return sanitized;
+    }
+
+    const sanitized = {};
+    seen.set(value, sanitized);
+    let keys;
+    try {
+        keys = Object.keys(value);
+    } catch {
+        return '[Uninspectable object]';
+    }
+    for (const key of keys.slice(0, 100)) {
+        const safeKey = sanitizeConsoleText(key);
+        try {
+            const descriptor = Object.getOwnPropertyDescriptor(value, key);
+            const child = descriptor && 'value' in descriptor
+                ? sanitizeConsoleArgument(descriptor.value, seen, depth + 1)
+                : '[Accessor omitted]';
+            Object.defineProperty(sanitized, safeKey, {
+                value: child,
+                enumerable: true,
+                configurable: true,
+                writable: true
+            });
+        } catch {
+            Object.defineProperty(sanitized, safeKey, {
+                value: '[Uninspectable]',
+                enumerable: true,
+                configurable: true,
+                writable: true
+            });
+        }
+    }
+    if (keys.length > 100) sanitized.__truncated__ = true;
+    return sanitized;
+}
+
 export function installConsoleSignalSanitizer() {
     if (console.__spiderSignalSanitizerInstalled) return true;
     const origError = console.error.bind(console);
@@ -161,9 +246,7 @@ export function installConsoleSignalSanitizer() {
         if (isLibsignalConsoleNoise(args)) {
             return;
         }
-        const sanitizedArgs = args.map((arg) =>
-            typeof arg === 'string' ? sanitizeConsoleText(arg) : arg,
-        );
+        const sanitizedArgs = args.map((arg) => sanitizeConsoleArgument(arg));
         return origFn(...sanitizedArgs);
     };
 
@@ -367,5 +450,3 @@ export function createBaileysSignalLogger({
 
     return logger;
 }
-
-
