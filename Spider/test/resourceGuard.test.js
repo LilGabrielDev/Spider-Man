@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  DEFAULT_SESSION_MAX_AGE_MS,
   cleanupDiskArtifacts,
   clearTemporarySessionsAndCache,
   createBaileysCacheStore,
@@ -649,3 +650,81 @@ test('pruneAuthDirectory and clearTemporarySessionsAndCache preserve Signal keys
     }
   });
 });
+
+test('clearTemporarySessionsAndCache deletes inactive session folders and Signal session files >= 7 days old while keeping active and fresh ones', () => {
+  withTempWorkspace((root) => {
+    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+    assert.equal(DEFAULT_SESSION_MAX_AGE_MS, sevenDaysMs);
+
+    const cwd = path.join(root, 'bot');
+    const sessionsDir = path.join(cwd, 'sessions');
+    const activeAuthDir = path.join(sessionsDir, 'LIL_active01');
+    const oldSessionDir = path.join(sessionsDir, 'LIL_expired7d');
+    const freshSessionDir = path.join(sessionsDir, 'LIL_recent2d');
+    const nestedOldAuthDir = path.join(cwd, 'auth', 'legacy_old_session');
+
+    for (const dir of [activeAuthDir, oldSessionDir, freshSessionDir, nestedOldAuthDir]) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+
+    const nowMs = Date.now();
+    const eightDaysAge = 8 * 24 * 60 * 60 * 1000;
+    const twoDaysAge = 2 * 24 * 60 * 60 * 1000;
+
+    // Active session has creds (>= 7d old untouched) + old Signal session (>= 7d) + recent Signal session (< 7d)
+    const activeCreds = path.join(activeAuthDir, 'creds.json');
+    const activeFp = path.join(activeAuthDir, '.session-fingerprint');
+    const activeMeta = path.join(activeAuthDir, '.session-meta.json');
+    const activeExpiredSignal = path.join(activeAuthDir, 'session-254700000001.0.json');
+    const activeFreshSignal = path.join(activeAuthDir, 'session-254700000002.0.json');
+    fs.writeFileSync(activeCreds, '{"me":{"id":"1"}}');
+    fs.writeFileSync(activeFp, 'fp-active');
+    fs.writeFileSync(activeMeta, '{}');
+    fs.writeFileSync(activeExpiredSignal, '{"expired":true}');
+    fs.writeFileSync(activeFreshSignal, '{"fresh":true}');
+    setFileAge(activeCreds, eightDaysAge, nowMs);
+    setFileAge(activeFp, eightDaysAge, nowMs);
+    setFileAge(activeMeta, eightDaysAge, nowMs);
+    setFileAge(activeExpiredSignal, eightDaysAge, nowMs);
+    setFileAge(activeFreshSignal, twoDaysAge, nowMs);
+    setFileAge(activeAuthDir, eightDaysAge, nowMs);
+
+    // Inactive old session folders >= 7 days old must be removed completely
+    const oldCreds = path.join(oldSessionDir, 'creds.json');
+    fs.writeFileSync(oldCreds, '{"me":{"id":"2"}}');
+    setFileAge(oldCreds, eightDaysAge, nowMs);
+    setFileAge(oldSessionDir, eightDaysAge, nowMs);
+
+    const legacyOldCreds = path.join(nestedOldAuthDir, 'creds.json');
+    fs.writeFileSync(legacyOldCreds, '{"me":{"id":"3"}}');
+    setFileAge(legacyOldCreds, eightDaysAge, nowMs);
+    setFileAge(nestedOldAuthDir, eightDaysAge, nowMs);
+
+    // Inactive but recent (< 7 days old) session folder must be preserved
+    const freshCreds = path.join(freshSessionDir, 'creds.json');
+    fs.writeFileSync(freshCreds, '{"me":{"id":"4"}}');
+    setFileAge(freshCreds, twoDaysAge, nowMs);
+    setFileAge(freshSessionDir, twoDaysAge, nowMs);
+
+    const summary = clearTemporarySessionsAndCache({
+      authDir: activeAuthDir,
+      sessionDirs: [sessionsDir],
+      cwd,
+      preserveSignalKeys: true,
+      nowMs,
+    });
+
+    assert.equal(fs.existsSync(oldSessionDir), false, 'expected >= 7 days inactive session folder to be deleted');
+    assert.equal(fs.existsSync(nestedOldAuthDir), false, 'expected >= 7 days nested auth folder to be deleted');
+    assert.equal(fs.existsSync(freshSessionDir), true, 'expected < 7 days session folder to survive');
+    assert.equal(fs.existsSync(activeAuthDir), true, 'expected active authDir to survive');
+    assert.equal(fs.existsSync(activeCreds), true, 'expected active creds.json to survive');
+    assert.equal(fs.existsSync(activeFp), true, 'expected active .session-fingerprint to survive');
+    assert.equal(fs.existsSync(activeMeta), true, 'expected active .session-meta.json to survive');
+    assert.equal(fs.existsSync(activeFreshSignal), true, 'expected < 7 days Signal session to survive');
+    assert.equal(fs.existsSync(activeExpiredSignal), false, 'expected >= 7 days Signal session file to be deleted');
+    assert.ok(summary.auth.removedDirs >= 2);
+    assert.ok(summary.auth.removedFiles >= 1);
+  });
+});
+

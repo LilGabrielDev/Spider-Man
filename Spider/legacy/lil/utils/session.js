@@ -1,1 +1,186 @@
-'use strict';const _0x560c3e=_0x5b7c;const path=require(_0x560c3e(0x0));const fs=require('fs');const os=require('os');const zlib=require('zlib');function _0x5b7c(_0x113229,_0x5b7cb6){_0x113229=_0x113229-0x0;const _0xa14b4d=_0x1132();let _0x3a7b5c=_0xa14b4d[_0x113229];return _0x3a7b5c;}function _0x1132(){const _0x583476=['path','existsSync','\x0a⚡\x20SPIDER\x20MAN\x20MD\x20—\x20Session\x20Setup\x0a','log','SPIDER~','startsWith','LIL~','from','constants','message'];_0x1132=function(){return _0x583476;};return _0x1132();}const SESSION_DIR=(()=>{const _0xpref=process.env.SESSION_DIR?path.resolve(process.env.SESSION_DIR):path['join'](process['cwd'](),'sessions');try{if(!fs['existsSync'](_0xpref))fs['mkdirSync'](_0xpref,{'recursive':!![]});const _0xprobe=path['join'](_0xpref,'.wp-'+process.pid);fs['writeFileSync'](_0xprobe,'');fs['unlinkSync'](_0xprobe);return _0xpref;}catch{const _0xfb=path['join'](os['tmpdir'](),'spider-sessions');try{if(!fs['existsSync'](_0xfb))fs['mkdirSync'](_0xfb,{'recursive':!![]});}catch{}return _0xfb;}})();async function resolveSession(){const _0x5bbfa5=_0x560c3e;try{if(!fs[_0x5bbfa5(0x1)](SESSION_DIR))fs['mkdirSync'](SESSION_DIR,{'recursive':!![]});}catch{}const _0x252e98=(process.env.SESSION_ID||'')['trim']();if(!_0x252e98){console['log'](_0x5bbfa5(0x2));console['log']('No\x20SESSION_ID\x20found\x20in\x20environment.');console[_0x5bbfa5(0x3)]('Configure\x20SESSION_ID\x20from\x20your\x20Spider\x20Man\x20pairing\x20setup.\x0a');return;}const _0x4632e1=_0x252e98['startsWith'](_0x5bbfa5(0x4))?'SPIDER~':_0x252e98[_0x5bbfa5(0x5)](_0x5bbfa5(0x6))?'LIL~':null;if(!_0x4632e1){const _0xerrMsg='[SESSION]\x20SESSION_ID\x20must\x20start\x20with\x20\x22SPIDER~\x22\x20or\x20\x22LIL~\x22.\x20Got:\x20'+JSON['stringify'](_0x252e98['slice'](0x0,0x1e)+'...');console['error'](_0xerrMsg);throw new Error(_0xerrMsg);}const _0x3b4acb=path['join'](SESSION_DIR,'creds.json');if(fs['existsSync'](_0x3b4acb)){console[_0x5bbfa5(0x3)]('[SESSION]\x20Session\x20files\x20found,\x20skipping\x20decode.');return;}try{const _0x18da32=_0x252e98['slice'](_0x4632e1['length']);const _0x3c55d0=Buffer[_0x5bbfa5(0x7)](_0x18da32,'base64');let _0x50dc08;try{_0x50dc08=zlib['gunzipSync'](_0x3c55d0);}catch{const _0x885b04=_0x3c55d0['slice'](0xa);_0x50dc08=zlib['inflateRawSync'](_0x885b04,{'finishFlush':zlib[_0x5bbfa5(0x8)]['Z_SYNC_FLUSH']});}const _0x31e1d7=JSON['parse'](_0x50dc08['toString']('utf8'));fs['writeFileSync'](_0x3b4acb,JSON['stringify'](_0x31e1d7));console['log']('[SESSION]\x20Decoded\x20session\x20and\x20wrote\x20creds.json.');}catch(_0x16594f){console['error']('[SESSION]\x20Failed\x20to\x20decode\x20SESSION_ID:',_0x16594f[_0x5bbfa5(0x9)]);throw _0x16594f;}}module['exports']={'resolveSession':resolveSession,'SESSION_DIR':SESSION_DIR};
+'use strict';
+
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { pathToFileURL } = require('node:url');
+const zlib = require('node:zlib');
+
+const SESSION_PREFIX_RE = /^(?:LIL|SPIDER)~(?:\s*gzip\/base64)?\s*/i;
+
+function stripWrappingQuotes(value) {
+    let trimmed = String(value ?? '').trim();
+    if (
+        (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+        (trimmed.startsWith("'") && trimmed.endsWith("'"))
+    ) {
+        trimmed = trimmed.slice(1, -1).trim();
+    }
+    return trimmed;
+}
+
+function getRawSessionValue(env = process.env) {
+    for (const key of ['SESSION', 'SESSION_ID']) {
+        const val = stripWrappingQuotes(env?.[key] || '');
+        if (val) return val;
+    }
+    return '';
+}
+
+function canDecodeSync(cleaned) {
+    if (!cleaned) return false;
+    if (cleaned.startsWith('{')) {
+        try {
+            const parsed = JSON.parse(cleaned);
+            return Boolean(parsed && typeof parsed === 'object' && !Array.isArray(parsed));
+        } catch {
+            return false;
+        }
+    }
+    const isPrefixed = SESSION_PREFIX_RE.test(cleaned);
+    const payload = (isPrefixed ? cleaned.replace(SESSION_PREFIX_RE, '') : cleaned).replace(/\s+/g, '');
+    if (!payload) return false;
+    try {
+        const normalizedB64 = payload.replace(/-/g, '+').replace(/_/g, '/');
+        const paddedB64 =
+            normalizedB64.length % 4 === 0
+                ? normalizedB64
+                : normalizedB64 + '='.repeat(4 - (normalizedB64.length % 4));
+        const decoded = Buffer.from(paddedB64, 'base64');
+        if (!decoded.length) return false;
+        let text;
+        try {
+            text = zlib.gunzipSync(decoded).toString('utf8');
+        } catch {
+            try {
+                text = zlib.inflateRawSync(decoded.subarray(10)).toString('utf8');
+            } catch {
+                text = decoded.toString('utf8');
+            }
+        }
+        const parsed = JSON.parse(text);
+        return Boolean(parsed && typeof parsed === 'object' && !Array.isArray(parsed));
+    } catch {
+        return false;
+    }
+}
+
+function deriveSyncFolderName(value) {
+    const cleaned = stripWrappingQuotes(value);
+    if (!cleaned) return 'default';
+    if (SESSION_PREFIX_RE.test(cleaned)) {
+        const payload = cleaned.replace(SESSION_PREFIX_RE, '').replace(/\s+/g, '');
+        if (payload && payload.length <= 128 && /^[A-Za-z0-9._-]+$/.test(payload) && !canDecodeSync(cleaned)) {
+            const prefixMatch = cleaned.match(/^(LIL|SPIDER)~/i);
+            const prefix = (prefixMatch?.[1] || 'LIL').toUpperCase();
+            const safePayload = payload.replace(/[^A-Za-z0-9._-]/g, '_');
+            if (safePayload && safePayload.length <= 64) {
+                return `${prefix}_${safePayload}`;
+            }
+            const shortHash = crypto.createHash('sha256').update(cleaned, 'utf8').digest('hex').slice(0, 12);
+            return `${prefix}_${safePayload.slice(0, 32)}_${shortHash}`;
+        }
+    }
+    const hash = crypto.createHash('sha256').update(cleaned, 'utf8').digest('hex').slice(0, 16);
+    return `session_${hash}`;
+}
+
+function resolveSessionDirSync(env = process.env, cwd = process.cwd()) {
+    const explicitAuth = stripWrappingQuotes(env?.AUTH_DIR || '');
+    const explicitSession = stripWrappingQuotes(env?.SESSION_DIR || '');
+    const rawKey = stripWrappingQuotes(env?.SPIDER_SESSION_FOLDER_KEY || '') || getRawSessionValue(env);
+
+    let preferred;
+    if (explicitAuth) {
+        preferred = path.resolve(explicitAuth);
+    } else if (explicitSession) {
+        preferred = path.resolve(explicitSession);
+    } else if (rawKey) {
+        preferred = path.join(cwd, 'sessions', deriveSyncFolderName(rawKey));
+    } else {
+        preferred = path.join(cwd, 'sessions', 'default');
+    }
+
+    try {
+        if (!fs.existsSync(preferred)) fs.mkdirSync(preferred, { recursive: true });
+        const probe = path.join(preferred, `.wp-${process.pid}`);
+        fs.writeFileSync(probe, '');
+        fs.unlinkSync(probe);
+        return preferred;
+    } catch {
+        const fallback = path.join(os.tmpdir(), 'spider-sessions', path.basename(preferred));
+        try {
+            if (!fs.existsSync(fallback)) fs.mkdirSync(fallback, { recursive: true });
+        } catch {}
+        return fallback;
+    }
+}
+
+const SESSION_DIR = resolveSessionDirSync();
+
+let _resolverPromise = null;
+function loadSessionResolver() {
+    if (!_resolverPromise) {
+        const resolverPath = path.resolve(__dirname, '../../../../spider/session-resolver.js');
+        _resolverPromise = import(pathToFileURL(resolverPath).href);
+    }
+    return _resolverPromise;
+}
+
+async function resolveSession(options = {}) {
+    const resolver = await loadSessionResolver();
+    const targetDir = resolver.resolveSessionFolder({
+        cwd: options.cwd || process.cwd(),
+        authDir: options.authDir,
+        sessionDir: options.sessionDir,
+        env: options.env || process.env,
+        fallbackDir: SESSION_DIR,
+    });
+
+    try {
+        if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
+    } catch {}
+
+    const { raw } = resolver.getRawSessionInput(options.env || process.env);
+    if (!raw) {
+        console.log('\n⚡ SPIDER MAN MD — Session Setup\n');
+        console.log('No SESSION or SESSION_ID found in environment.');
+        console.log('Configure SESSION_ID from your Spider Man pairing setup.\n');
+        return { sessionDir: targetDir, hydrated: false };
+    }
+
+    if (resolver.isShortLilSession(raw)) {
+        await resolver.resolveShortSession({
+            authDir: targetDir,
+            credsPath: path.join(targetDir, 'creds.json'),
+            cwd: options.cwd || process.cwd(),
+            loadEnv: false,
+            fetchImpl: options.fetchImpl,
+            retries: options.retries,
+            retryDelayMs: options.retryDelayMs,
+            timeoutMs: options.timeoutMs,
+        });
+        console.log(`[SESSION] Resolved short session into folder ${targetDir}.`);
+        return { sessionDir: targetDir, hydrated: true };
+    }
+
+    const hydrated = resolver.hydrateSessionToFolder(raw, targetDir, {
+        rawSessionInput: raw,
+        onlyIfChanged: true,
+        replaceOnMismatch: true,
+    });
+    if (!hydrated) {
+        const errMsg = `[SESSION] Failed to hydrate session into ${targetDir}.`;
+        console.error(errMsg);
+        throw new Error(errMsg);
+    }
+    console.log(`[SESSION] Session ready in folder ${targetDir}.`);
+    return { sessionDir: targetDir, hydrated: true };
+}
+
+module.exports = {
+    resolveSession,
+    resolveSessionDir: resolveSessionDirSync,
+    SESSION_DIR,
+};
