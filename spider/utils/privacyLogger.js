@@ -82,7 +82,7 @@ function summarizeErrorPayload(arg) {
     if (arg instanceof Error) return sanitizeConsoleText(arg.message || arg.name || 'Error');
     if (typeof arg === 'object') {
         const parts = [];
-        const err = arg.err || arg.error;
+        const err = arg.err || arg.error || arg.trace;
         if (err) {
             const rawErrText = typeof err === 'string'
                 ? err
@@ -236,6 +236,16 @@ function isRedundantOrBenignBaileysMessage(lowerSummary) {
             lowerSummary.includes('socket hang up') ||
             lowerSummary.includes('network') ||
             lowerSummary.includes('timed out')
+        )
+    ) {
+        return true;
+    }
+    if (
+        lowerSummary.startsWith('error in sending message again') &&
+        (
+            lowerSummary.includes('@hosted') ||
+            lowerSummary.includes('not-acceptable') ||
+            lowerSummary.includes('item-not-found')
         )
     ) {
         return true;
