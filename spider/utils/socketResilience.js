@@ -1299,23 +1299,44 @@ export function wrapSignalAndSenderKeyGuard(
 
 export function wrapAckErrorRecovery(
   sock,
-  { groupCache = null, userDevicesCache = null, logError = null } = {},
+  { groupCache = null, userDevicesCache = null, logError = null, logInfo = () => {} } = {},
 ) {
   if (!sock?.ev || typeof sock.ev.on !== 'function') return false;
   const recentRecoveryCooldown = new Map();
+  const recentStatusByKey = new Map();
+  const statusLabels = {
+    0: 'error',
+    1: 'pending',
+    2: 'server_ack',
+    3: 'delivered',
+    4: 'read',
+    5: 'played',
+  };
   const COOLDOWN_MS = 10_000;
 
   sock.ev.on('messages.update', (updates) => {
     if (!Array.isArray(updates)) return;
     for (const entry of updates) {
+      const key = entry?.key;
       const status = entry?.update?.status;
+      const remoteJid = key?.remoteJid || '';
+      const msgId = key?.id || '';
+      if (key?.fromMe && status !== undefined) {
+        const statusKey = `${remoteJid}:${msgId}`;
+        if (recentStatusByKey.get(statusKey) !== status) {
+          recentStatusByKey.set(statusKey, status);
+          if (recentStatusByKey.size > 500) {
+            recentStatusByKey.delete(recentStatusByKey.keys().next().value);
+          }
+          const chatType = remoteJid.endsWith('@g.us') ? 'group' : 'direct';
+          logInfo?.(`[WA-DELIVERY] ${chatType} status=${statusLabels[status] || 'unknown'}`);
+        }
+      }
       const stubParams = entry?.update?.messageStubParameters;
       const errorCode = Array.isArray(stubParams) && stubParams.length > 0 ? String(stubParams[0]) : '';
       const isErrorUpdate = status === 0 || (errorCode && /^(?:421|463|475|479)$/.test(errorCode));
       if (!isErrorUpdate) continue;
 
-      const remoteJid = entry?.key?.remoteJid || '';
-      const msgId = entry?.key?.id || '';
       const cooldownKey = `${remoteJid}:${errorCode}`;
       const now = Date.now();
       const last = recentRecoveryCooldown.get(cooldownKey) || 0;
@@ -1451,12 +1472,45 @@ async function resolveStatusTargetToLid(jid, sock) {
   return cleaned;
 }
 
-export function wrapSendOptionsNormalization(sock) {
+export async function resetGroupSenderKeyMemory(sock, groupJid) {
+  if (typeof groupJid !== 'string' || !groupJid.endsWith('@g.us')) return false;
+  const keyStore = sock?.authState?.keys;
+  if (!keyStore || typeof keyStore.set !== 'function') return false;
+
+  const memoryToClear = { [groupJid]: null };
+  const me = sock.authState?.creds?.me || {};
+  for (const identity of [me.id, me.lid]) {
+    if (typeof identity === 'string' && identity.trim()) {
+      memoryToClear[`${groupJid}:${identity}`] = null;
+    }
+  }
+
+  await keyStore.set({ 'sender-key-memory': memoryToClear });
+  return true;
+}
+
+export function wrapSendOptionsNormalization(sock, { logError = null } = {}) {
   if (!sock || typeof sock.sendMessage !== 'function') return false;
   if (sock.sendMessage.__spiderOptsNormalized) return true;
 
   const origSendMessage = sock.sendMessage.bind(sock);
   const wrappedSend = async (jid, content, options) => {
+    const isEphemeralToggle =
+      content &&
+      typeof content === 'object' &&
+      Object.prototype.hasOwnProperty.call(content, 'disappearingMessagesInChat');
+    if (typeof jid === 'string' && jid.endsWith('@g.us') && !isEphemeralToggle) {
+      try {
+        const reset = await resetGroupSenderKeyMemory(sock, jid);
+        if (!reset) {
+          throw new Error('WhatsApp auth key store is unavailable for group sender-key refresh');
+        }
+      } catch (err) {
+        logError?.('Group Sender-Key Refresh', null, null, err?.message || String(err));
+        throw err;
+      }
+    }
+
     let nextContent = content;
     let nextOptions = options;
 
@@ -1648,8 +1702,8 @@ export function installSocketResilience(
   wrapWebSocketTagSanitizer(sock, { userDevicesCache, logError });
   wrapLidMappingResilience(sock, { logError, userDevicesCache });
   wrapSignalAndSenderKeyGuard(sock, { failedEncryptJids, userDevicesCache, logError, authDir });
-  wrapAckErrorRecovery(sock, { groupCache, userDevicesCache, logError });
-  wrapSendOptionsNormalization(sock);
+  wrapAckErrorRecovery(sock, { groupCache, userDevicesCache, logError, logInfo });
+  wrapSendOptionsNormalization(sock, { logError });
   wrapOnWhatsAppGuard(sock);
   wrapPresenceResilience(sock, { defaultPushName });
 
