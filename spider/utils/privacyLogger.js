@@ -217,7 +217,25 @@ function isRedundantOrBenignBaileysMessage(lowerSummary) {
             lowerSummary.includes('no matching sessions found') ||
             lowerSummary.includes('no sessions available') ||
             lowerSummary.includes('key used already') ||
+            lowerSummary.includes('received message with old counter') ||
+            lowerSummary.includes('messagecountererror') ||
+            lowerSummary.includes('invalidmessageexception') ||
             lowerSummary.includes('bad mac')
+        )
+    ) {
+        return true;
+    }
+    if (
+        (/^failed to sync .+ giving up/.test(lowerSummary) || lowerSummary.startsWith('app state fetch failed')) &&
+        (
+            lowerSummary.includes('fetch failed') ||
+            lowerSummary.includes('etimedout') ||
+            lowerSummary.includes('econnreset') ||
+            lowerSummary.includes('eai_again') ||
+            lowerSummary.includes('enotfound') ||
+            lowerSummary.includes('socket hang up') ||
+            lowerSummary.includes('network') ||
+            lowerSummary.includes('timed out')
         )
     ) {
         return true;

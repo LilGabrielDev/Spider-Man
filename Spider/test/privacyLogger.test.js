@@ -222,9 +222,19 @@ test('createBaileysSignalLogger filters redundant rollback/newsletter/parking/st
             { key: { remoteJid: '445566778838@lid' }, err: new Error('Bad MAC: No matching sessions found for message') },
             'failed to decrypt message'
         );
+        logger.error(
+            { key: { remoteJid: 'status@broadcast', participant: '445566778838@lid' }, err: new Error('Received message with old counter: 7, 0') },
+            'failed to decrypt message'
+        );
+        logger.error(
+            { key: { remoteJid: 'status@broadcast', participant: '445566778895@lid' }, err: Object.assign(new Error('MessageCounterError: stale chain'), { name: 'MessageCounterError' }) },
+            'failed to decrypt message'
+        );
         logger.error('failed to decrypt message | No session found to decrypt message for keyId=1296392376, group=120363399604046395@g.us::1122334414_1::0 jid=120363399604046395@g.us participant=1122334414@lid');
         logger.warn({ msgId: 'TAG_TIMEOUT_1' }, 'timed out waiting for message');
         logger.warn('LIDs are not supported with onWhatsApp');
+        logger.warn({ error: 'TypeError: fetch failed\n    at node:internal/deps/undici/undici:13510:13' }, 'failed to sync critical_unblock_low from v0, giving up');
+        logger.warn({ error: 'TypeError: fetch failed\n    at node:internal/deps/undici/undici:13510:13' }, 'failed to sync regular from v0, giving up');
         logger.warn(
             { attrs: { from: '120363000000000001@g.us', error: '475', class: 'message' } },
             'received error in ack'
@@ -251,17 +261,24 @@ test('createBaileysSignalLogger filters redundant rollback/newsletter/parking/st
         assert.equal(captured.length, 1);
         assert.ok(!captured[0].includes('at onError'));
 
+        // Non-network app-state failure still surfaces warning
+        logger.warn(
+            { error: 'Error: Invalid patch mac' },
+            'failed to sync critical_block from v0, giving up'
+        );
+        assert.equal(captured.length, 2);
+
         // Volatile keyId values are normalized so sibling non-transient decrypt failures throttle cleanly
         logger.error('failed to decrypt message | Unsupported envelope for keyId=101, group=120363399604046397@g.us::254712345678_1::0');
         logger.error('failed to decrypt message | Unsupported envelope for keyId=202, group=120363399604046397@g.us::254712345678_1::0');
-        assert.equal(captured.length, 2);
+        assert.equal(captured.length, 3);
 
         const joined = captured.join('\n');
         assert.ok(!joined.includes('254712345678'), 'Phone digits must stay redacted');
 
         const diag = logger.getDiagnostics();
-        assert.equal(diag.warnings, 7);
-        assert.equal(diag.errors, 10);
+        assert.equal(diag.warnings, 10);
+        assert.equal(diag.errors, 12);
 
         // Structured attrs/key fields are extracted & redacted when onEvent inspects events
         const events = [];
