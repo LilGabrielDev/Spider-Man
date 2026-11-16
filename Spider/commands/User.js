@@ -101,11 +101,14 @@ export const commands = [
         return sock.sendMessage(from, { text: noText }, { quoted: msg });
       }
       try {
-        const res = await sock.query({
-          tag: 'iq',
-          attrs: { to: S_WHATSAPP_NET, type: 'set', xmlns: 'status' },
-          content: [{ tag: 'status', attrs: {}, content: Buffer.from(text, 'utf-8') }],
-        });
+        const res =
+          typeof sock.updateProfileStatus === 'function'
+            ? await sock.updateProfileStatus(text)
+            : await sock.query({
+                tag: 'iq',
+                attrs: { to: S_WHATSAPP_NET, type: 'set', xmlns: 'status' },
+                content: [{ tag: 'status', attrs: {}, content: Buffer.from(text, 'utf-8') }],
+              });
         if (isSendMessageFailure(res)) throw new Error('setbio-failed');
         const successMsg = await t(from, 'user', 'setbioSuccess');
         await sock.sendMessage(from, { text: successMsg }, { quoted: msg });
@@ -137,11 +140,15 @@ export const commands = [
             const resp = await fetch('https://nekos.life/api/v2/fact');
             const data = await resp.json();
             const bioText = `Spider Man: ${data.fact}`;
-            await sock.query({
-              tag: 'iq',
-              attrs: { to: S_WHATSAPP_NET, type: 'set', xmlns: 'status' },
-              content: [{ tag: 'status', attrs: {}, content: Buffer.from(bioText, 'utf-8') }],
-            });
+            if (typeof sock.updateProfileStatus === 'function') {
+              await sock.updateProfileStatus(bioText);
+            } else {
+              await sock.query({
+                tag: 'iq',
+                attrs: { to: S_WHATSAPP_NET, type: 'set', xmlns: 'status' },
+                content: [{ tag: 'status', attrs: {}, content: Buffer.from(bioText, 'utf-8') }],
+              });
+            }
           } catch {}
         }, 60000);
         fetchInterval?.unref?.();

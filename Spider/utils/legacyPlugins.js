@@ -1,7 +1,11 @@
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { createRequire } from 'node:module';
 import { downloadMediaMessage } from '@whiskeysockets/baileys';
 import _0x21bd49 from '../../spider/config.js';
 import { collectSenderIdentities, extractPhoneDigits, resolveGroupRolesAsync } from '../../spider/utils/groupRoleResolver.js';
+import { SILENT_LOGGER } from '../../spider/utils/privacyLogger.js';
 import { resolveRuntimeOwnerPhone } from '../../spider/utils/userJid.js';
 import {
   deleteMessageSafely,
@@ -126,6 +130,98 @@ function typeFromMessage(content = {}) {
 
 function normalizeNumber(jid) {
   return extractPhoneDigits(jid);
+}
+
+const MEDIA_KEYS = [
+  'imageMessage',
+  'videoMessage',
+  'audioMessage',
+  'stickerMessage',
+  'documentMessage',
+  'ptvMessage',
+];
+
+function inferMediaMessageWrapper(input) {
+  if (!input || typeof input !== 'object') {
+    throw new Error('Media message is unavailable.');
+  }
+  if (input.message && typeof input.message === 'object') {
+    const unwrapped = unwrapMessageContent(input.message) || input.message;
+    return { ...input, message: unwrapped };
+  }
+  const hasMediaKey = MEDIA_KEYS.some((key) => Boolean(input[key]));
+  if (hasMediaKey) {
+    return { message: input };
+  }
+  const mime = String(input.mimetype || '').toLowerCase();
+  let mediaKey = 'documentMessage';
+  if (mime.includes('webp') && (input.isAnimated !== undefined || input.stickerSentTs !== undefined)) {
+    mediaKey = 'stickerMessage';
+  } else if (mime.startsWith('image/')) {
+    mediaKey = mime === 'image/webp' ? 'stickerMessage' : 'imageMessage';
+  } else if (mime.startsWith('video/')) {
+    mediaKey = 'videoMessage';
+  } else if (mime.startsWith('audio/')) {
+    mediaKey = 'audioMessage';
+  } else if (input.isAnimated !== undefined) {
+    mediaKey = 'stickerMessage';
+  }
+  return { message: { [mediaKey]: input } };
+}
+
+function extensionFromMimetype(mimetype, fallback = 'bin') {
+  const mime = String(mimetype || '').split(';')[0].trim().toLowerCase();
+  if (!mime.includes('/')) return fallback;
+  const sub = mime.split('/')[1];
+  if (sub === 'jpeg') return 'jpg';
+  if (sub === 'mpeg') return 'mp3';
+  if (sub === 'ogg; codecs=opus' || sub === 'ogg') return 'ogg';
+  if (sub === 'webp') return 'webp';
+  return sub.replace(/[^a-z0-9]/gi, '') || fallback;
+}
+
+export function ensureSocketMediaHelpers(sock) {
+  if (!sock || typeof sock !== 'object') return sock;
+
+  if (typeof sock.downloadMediaMessage !== 'function') {
+    sock.downloadMediaMessage = async (msg) => {
+      const wrapped = inferMediaMessageWrapper(msg);
+      return downloadMediaMessage(
+        wrapped,
+        'buffer',
+        {},
+        {
+          logger: SILENT_LOGGER,
+          ...(typeof sock.updateMediaMessage === 'function'
+            ? { reuploadRequest: sock.updateMediaMessage.bind(sock) }
+            : {}),
+        },
+      );
+    };
+  }
+
+  if (typeof sock.downloadAndSaveMediaMessage !== 'function') {
+    sock.downloadAndSaveMediaMessage = async (msg, filename = '', attachExtension = true) => {
+      const buffer = await sock.downloadMediaMessage(msg);
+      const wrapped = inferMediaMessageWrapper(msg);
+      const inner = wrapped?.message || {};
+      const mediaObj = MEDIA_KEYS.map((k) => inner[k]).find(Boolean) || Object.values(inner)[0] || {};
+      const ext = extensionFromMimetype(mediaObj?.mimetype, 'bin');
+
+      const rawName = String(filename || '').trim() || `spider_${Date.now()}`;
+      const baseTarget =
+        path.isAbsolute(rawName) || rawName.includes('/') || rawName.includes('\\')
+          ? rawName
+          : path.join(os.tmpdir(), rawName);
+      const hasExt = path.extname(baseTarget).length > 0;
+      const finalPath = attachExtension && !hasExt ? `${baseTarget}.${ext}` : baseTarget;
+      await fs.mkdir(path.dirname(finalPath), { recursive: true });
+      await fs.writeFile(finalPath, buffer);
+      return finalPath;
+    };
+  }
+
+  return sock;
 }
 
 function collectGroupAdminSets(groupMeta) {
@@ -443,6 +539,7 @@ export async function loadLegacyCommands() {
           react: view.react,
           config: legacyConfig,
         };
+        ensureSocketMediaHelpers(ctx.sock);
         return cmd.handler(pluginContext);
       },
     };

@@ -31,6 +31,7 @@ const appStateRetryAttempts = new WeakMap();
 const appStateKeyRequestCooldowns = new WeakMap();
 const appStateKeyInFlight = new WeakMap();
 const statusReactionTargetsBySock = new WeakMap();
+const presenceTrackedSockets = new WeakSet();
 const VALID_PN_DOMAINS = new Set(['s.whatsapp.net', 'hosted', 'c.us']);
 export const DEFAULT_PREKEY_RETRY_DELAY_MS = 5_500;
 export const MAX_PREKEY_THROTTLE_RETRIES = 4;
@@ -1681,6 +1682,90 @@ export function wrapOnWhatsAppGuard(sock) {
   return true;
 }
 
+export function installPresenceTracking(sock) {
+  if (!sock?.ev || typeof sock.ev.on !== 'function') return false;
+  if (presenceTrackedSockets.has(sock)) return true;
+  presenceTrackedSockets.add(sock);
+
+  if (!(globalThis._spiderPresenceMap instanceof Map)) {
+    globalThis._spiderPresenceMap = new Map();
+  }
+  if (!sock.userPresence || typeof sock.userPresence !== 'object') {
+    sock.userPresence = {};
+  }
+
+  sock.ev.on('presence.update', (update) => {
+    const presences = update?.presences;
+    if (!presences || typeof presences !== 'object') return;
+    const now = Date.now();
+    const map = globalThis._spiderPresenceMap instanceof Map
+      ? globalThis._spiderPresenceMap
+      : (globalThis._spiderPresenceMap = new Map());
+    if (!sock.userPresence || typeof sock.userPresence !== 'object') {
+      sock.userPresence = {};
+    }
+
+    const recordForKey = (rawKey, entry) => {
+      const k = String(rawKey || '').trim();
+      if (!k) return;
+      map.set(k, entry);
+      sock.userPresence[k] = entry;
+      if (map.size > 2000) {
+        const oldest = map.keys().next().value;
+        if (oldest !== undefined) map.delete(oldest);
+      }
+    };
+
+    for (const [jid, info] of Object.entries(presences)) {
+      if (!jid || !info || typeof info !== 'object') continue;
+      const entry = {
+        ...info,
+        chatId: update?.id || '',
+        timestamp: now,
+      };
+      const cleaned = cleanUserJid(jid);
+      recordForKey(jid, entry);
+      if (cleaned && cleaned !== jid) {
+        recordForKey(cleaned, entry);
+      }
+
+      if (isLidOrHostedLidJid(cleaned || jid)) {
+        const cachePhone =
+          (typeof globalThis.resolvePhoneFromLid === 'function'
+            ? globalThis.resolvePhoneFromLid(cleaned || jid)
+            : '') ||
+          globalThis.lidPhoneCache?.get?.(cleaned || jid) ||
+          '';
+        if (cachePhone) {
+          const digits = String(cachePhone).replace(/\D/g, '');
+          if (digits) recordForKey(`${digits}@s.whatsapp.net`, entry);
+        }
+        const getPNForLID = sock?.signalRepository?.lidMapping?.getPNForLID;
+        if (typeof getPNForLID === 'function') {
+          Promise.resolve(getPNForLID.call(sock.signalRepository.lidMapping, cleaned || jid))
+            .then((pn) => {
+              const cleanPn = normalizePnJid(cleanUserJid(pn));
+              if (cleanPn) recordForKey(cleanPn, entry);
+            })
+            .catch(() => {});
+        }
+      } else if (isPnOrHostedPnJid(cleaned || jid)) {
+        const getLIDForPN = sock?.signalRepository?.lidMapping?.getLIDForPN;
+        if (typeof getLIDForPN === 'function') {
+          Promise.resolve(getLIDForPN.call(sock.signalRepository.lidMapping, cleaned || jid))
+            .then((lid) => {
+              const cleanLid = cleanUserJid(lid);
+              if (cleanLid) recordForKey(cleanLid, entry);
+            })
+            .catch(() => {});
+        }
+      }
+    }
+  });
+
+  return true;
+}
+
 export function installSocketResilience(
   sock,
   {
@@ -1706,6 +1791,7 @@ export function installSocketResilience(
   wrapSendOptionsNormalization(sock, { logError });
   wrapOnWhatsAppGuard(sock);
   wrapPresenceResilience(sock, { defaultPushName });
+  installPresenceTracking(sock);
 
   if (sock?.ev && typeof sock.ev.on === 'function') {
     let appStateFallbackTimer = null;
