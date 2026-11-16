@@ -3,6 +3,8 @@ import { formatJid, protectOwner } from '../france/index.js';
 import { t } from '../france/translator.js';
 import { executeGetPP } from '../utils/profilePicture.js';
 import { cleanJid, extractPhoneDigits } from '../../spider/utils/groupRoleResolver.js';
+import { getPhoneFromJid } from '../../spider/utils/userJid.js';
+import { listRecentChatMessages } from '../../spider/anti.js';
 import {
   deleteMessageSafely,
   isSendMessageFailure,
@@ -291,29 +293,119 @@ export const commands = [
   },
   {
     name: 'del',
-    description: 'Delete a replied message',
+    description: 'Delete a replied message or last N messages on both sides',
     category: 'USER',
     ownerOnly: true,
-    execute: async ({ sock, from, msg }) => {
+    execute: async ({ sock, from, msg, text = '', args = [] }) => {
       const metadata = await fetchMetaSafe(sock, from);
-      const delTarget = await resolveQuotedDeleteTargetAsync({ from, msg, sock, metadata });
-      if (!delTarget) return;
-
-      const res = await deleteMessageSafely({
-        sock,
+      const delTarget = await resolveQuotedDeleteTargetAsync({
         from,
-        msg: delTarget.msg,
-        targetJid: delTarget.participant,
-        senderCandidates: delTarget.candidates,
+        msg,
+        sock,
         metadata,
-        allowFromMeFallback: true,
-        broadcastAlternates: true,
+        getPhoneFn: getPhoneFromJid,
       });
 
-      if (!res.ok) {
+      const tokens = (Array.isArray(args) && args.length > 0
+        ? args.map((item) => String(item || '').trim())
+        : String(text || '').trim().split(/\s+/)
+      ).filter(Boolean);
+      const countToken = tokens.find((tok) => /^\d{1,3}$/.test(tok));
+      const requestedCount = countToken ? Math.min(Math.max(Number.parseInt(countToken, 10), 1), 50) : null;
+
+      // Single quoted message delete (standard .del reply)
+      if (delTarget && !requestedCount) {
+        const res = await deleteMessageSafely({
+          sock,
+          from,
+          msg: delTarget.msg,
+          targetJid: delTarget.participant,
+          senderCandidates: delTarget.candidates,
+          metadata,
+          getPhoneFn: getPhoneFromJid,
+          allowFromMeFallback: true,
+          broadcastAlternates: true,
+        });
+
+        if (!res.ok) {
+          await sock.sendMessage(
+            from,
+            { text: '❌ Failed to delete message.' },
+            { quoted: msg },
+          );
+        }
+        return;
+      }
+
+      if (!requestedCount && !delTarget) {
+        return;
+      }
+
+      // Batch deletion mode: .del <count> [@user] or replying + .del <count>
+      let remaining = requestedCount || 1;
+      const seenIds = new Set();
+      let deletedCount = 0;
+
+      if (delTarget?.msg?.key?.id) {
+        seenIds.add(delTarget.msg.key.id);
+        const firstRes = await deleteMessageSafely({
+          sock,
+          from,
+          msg: delTarget.msg,
+          targetJid: delTarget.participant,
+          senderCandidates: delTarget.candidates,
+          metadata,
+          getPhoneFn: getPhoneFromJid,
+          allowFromMeFallback: true,
+          broadcastAlternates: true,
+        });
+        if (firstRes.ok) deletedCount += 1;
+        remaining = Math.max(0, remaining - 1);
+      }
+
+      if (remaining > 0) {
+        const targetInfo = delTarget
+          ? { targetJid: delTarget.participant, alternateJids: delTarget.candidates || [] }
+          : resolveTargetFromMessage({
+              sock,
+              from,
+              msg,
+              text: tokens.filter((t) => t !== countToken).join(' '),
+              metadata,
+            });
+
+        const recentMsgs = listRecentChatMessages(from, {
+          limit: remaining + 5,
+          targetJid: targetInfo?.targetJid || '',
+          alternateJids: targetInfo?.alternateJids || [],
+          getPhoneFn: getPhoneFromJid,
+        });
+
+        for (const item of recentMsgs) {
+          if (deletedCount >= (requestedCount || 1)) break;
+          const id = item?.key?.id;
+          if (!id || id === msg?.key?.id || seenIds.has(id)) continue;
+          seenIds.add(id);
+
+          const batchRes = await deleteMessageSafely({
+            sock,
+            from,
+            msg: item,
+            targetJid: item?.key?.participant || targetInfo?.targetJid || '',
+            senderCandidates: targetInfo?.alternateJids || [],
+            metadata,
+            getPhoneFn: getPhoneFromJid,
+            allowFromMeFallback: true,
+            broadcastAlternates: true,
+          });
+          if (batchRes.ok) deletedCount += 1;
+        }
+      }
+
+      if (deletedCount === 0) {
         await sock.sendMessage(
           from,
-          { text: '❌ Failed to delete message.' },
+          { text: 'ℹ️ No recent messages found in this chat to delete.' },
           { quoted: msg },
         );
       }

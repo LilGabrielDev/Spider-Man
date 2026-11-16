@@ -189,13 +189,21 @@ export function createAntilinkStore(filePathOrFn = null) {
     return tmpFallbackPath || path.join(process.cwd(), 'data', 'antilink.json');
   };
   let loadedPath = null;
-  let cache = { groups: {} };
+  let cache = { groups: {}, global: { enabled: false, action: 'delete' } };
+
+  function normalizeGlobalConfig(raw) {
+    const enabled = Boolean(raw?.enabled);
+    const action = ANTILINK_ACTIONS.includes(String(raw?.action || '').toLowerCase())
+      ? String(raw.action).toLowerCase()
+      : 'delete';
+    return { enabled, action };
+  }
 
   function ensureLoaded() {
     const filePath = resolvePath();
     if (loadedPath === filePath) return;
     loadedPath = filePath;
-    cache = { groups: {} };
+    cache = { groups: {}, global: { enabled: false, action: 'delete' } };
     const candidates = isDefault && !tmpFallbackPath
       ? [filePath, path.join(os.tmpdir(), 'spider-data', 'antilink.json')]
       : [filePath];
@@ -208,6 +216,9 @@ export function createAntilinkStore(filePathOrFn = null) {
               cache.groups[jid] = normalizeGroupConfig(cfg);
             }
           }
+          if (parsed && typeof parsed === 'object' && parsed.global && typeof parsed.global === 'object') {
+            cache.global = normalizeGlobalConfig(parsed.global);
+          }
           if (candidate !== filePath) {
             tmpFallbackPath = candidate;
             loadedPath = candidate;
@@ -215,7 +226,7 @@ export function createAntilinkStore(filePathOrFn = null) {
           break;
         }
       } catch {
-        cache = { groups: {} };
+        cache = { groups: {}, global: { enabled: false, action: 'delete' } };
       }
     }
   }
@@ -249,7 +260,19 @@ export function createAntilinkStore(filePathOrFn = null) {
   return {
     clearCache() {
       loadedPath = null;
-      cache = { groups: {} };
+      cache = { groups: {}, global: { enabled: false, action: 'delete' } };
+    },
+    getGlobalConfig() {
+      ensureLoaded();
+      return { ...normalizeGlobalConfig(cache.global) };
+    },
+    setGlobalConfig(next) {
+      ensureLoaded();
+      const prev = normalizeGlobalConfig(cache.global);
+      const merged = typeof next === 'function' ? next(prev) : { ...prev, ...next };
+      cache.global = normalizeGlobalConfig(merged);
+      save();
+      return { ...cache.global };
     },
     getGroupConfig(groupJid) {
       ensureLoaded();
@@ -376,7 +399,15 @@ export async function handleAntiLinkMessage({
     return { handled: false, reason: 'not-applicable' };
   }
 
-  const groupConfig = store.getGroupConfig(from);
+  const rawGroupConfig = store.getGroupConfig(from);
+  const globalConfig = typeof store.getGlobalConfig === 'function'
+    ? store.getGlobalConfig()
+    : { enabled: false, action: 'delete' };
+  const usingGlobal = !rawGroupConfig.enabled && Boolean(globalConfig.enabled);
+  const groupConfig = usingGlobal
+    ? { ...rawGroupConfig, enabled: true, action: globalConfig.action || 'delete' }
+    : rawGroupConfig;
+
   if (!groupConfig.enabled) {
     return { handled: false, reason: 'disabled' };
   }
@@ -455,6 +486,7 @@ export async function handleAntiLinkMessage({
     targetJid,
     senderCandidates: resolvedCandidates,
     metadata,
+    getPhoneFn: getPhoneFromJid,
     broadcastAlternates: true,
   });
   const deleted = delRes.ok;

@@ -905,6 +905,7 @@ export async function handleAntiScamMessage({
         targetJid,
         senderCandidates: resolvedCandidates,
         metadata,
+        getPhoneFn: getPhoneFromJid,
         broadcastAlternates: true,
       })
     : { ok: false };

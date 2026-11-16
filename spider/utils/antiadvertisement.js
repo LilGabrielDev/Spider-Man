@@ -792,6 +792,7 @@ export async function handleAntiAdvertisementMessage({
         targetJid,
         senderCandidates: resolvedCandidates,
         metadata,
+        getPhoneFn: getPhoneFromJid,
         broadcastAlternates: true,
       })
     : { ok: false };
