@@ -14,11 +14,7 @@ export const commands = [
     execute: async ({ sock, from, msg }) => {
       const startedAt = performanceNow();
       const botName = config.BOT_NAME || 'Spider Man';
-      // Do not include WhatsApp transport/ACK time in the bot speed value.
-      // On a slow connection that ACK can take seconds even when dispatch is fast.
-      void Promise.resolve(
-        sock.sendMessage(from, { text: 'Pinging...' }, { quoted: msg }),
-      ).catch(() => {});
+      await sock.sendMessage(from, { text: 'Pinging...' }, { quoted: msg });
       const latencyMs = Math.round(performanceNow() - startedAt);
       return sock.sendMessage(
         from,
