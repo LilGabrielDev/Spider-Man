@@ -153,7 +153,6 @@ export const commands = [
     category: 'Group',
     adminOnly: true,
     botAdminOnly: true,
-    ownerOnly: true,
     groupOnly: true,
     execute: async ({ sock, from, text, args = [], msg }) => {
       if (!from.endsWith('@g.us')) {
@@ -332,7 +331,8 @@ export const commands = [
         const mentionIds = [];
         participants.forEach((p, idx) => {
           const jid = p.id || p.jid || '';
-          const num = jid.split('@')[0];
+          const displayRaw = p.phoneNumber || p.pn || jid;
+          const num = extractPhoneDigits(displayRaw) || cleanJid(displayRaw).split('@')[0];
           messageText += `${idx + 1}. @${num}\n`;
           if (jid) mentionIds.push(jid);
         });
@@ -350,7 +350,6 @@ export const commands = [
     category: 'Group',
     groupOnly: true,
     adminOnly: true,
-    ownerOnly: true,
     botAdminOnly: true,
     execute: async ({ sock, from, text, msg }) => {
       if (!from.endsWith('@g.us')) {
@@ -381,7 +380,6 @@ export const commands = [
     aliases: ['remove'],
     description: 'Remove a user from the group.',
     category: 'Group',
-    ownerOnly: true,
     groupOnly: true,
     adminOnly: true,
     botAdminOnly: true,
@@ -429,9 +427,9 @@ export const commands = [
     aliases: [],
     description: 'Add a user to the group.',
     category: 'Group',
-    ownerOnly: true,
     groupOnly: true,
     adminOnly: true,
+    botAdminOnly: true,
     execute: async ({ sock, from, text, args = [], msg, config }) => {
       if (!from.endsWith('@g.us')) {
         const groupOnlyMsg = await t(from, 'group', 'groupOnly');
@@ -478,7 +476,6 @@ export const commands = [
     aliases: [],
     description: 'Remove all non-admin members.',
     category: 'Group',
-    ownerOnly: true,
     groupOnly: true,
     adminOnly: true,
     botAdminOnly: true,
@@ -549,7 +546,6 @@ export const commands = [
     aliases: [],
     description: 'Promote a member to admin.',
     category: 'Group',
-    ownerOnly: true,
     groupOnly: true,
     adminOnly: true,
     botAdminOnly: true,
@@ -597,7 +593,6 @@ export const commands = [
     aliases: [],
     description: 'Demote a group admin.',
     category: 'Group',
-    ownerOnly: true,
     groupOnly: true,
     adminOnly: true,
     botAdminOnly: true,
@@ -647,7 +642,6 @@ export const commands = [
     category: 'Group',
     groupOnly: true,
     adminOnly: true,
-    ownerOnly: true,
     botAdminOnly: true,
     execute: async ({ sock, from, msg }) => {
       if (!from.endsWith('@g.us')) {
@@ -742,7 +736,11 @@ export const commands = [
           return sock.sendMessage(from, { text: noReqMsg }, { quoted: msg });
         }
         const formattedList = requests
-          .map((item) => `+${String(item?.jid || item?.id || item).split('@')[0]}`)
+          .map((item) => {
+            const rawItem = item?.phoneNumber || item?.pn || item?.jid || item?.id || item;
+            const num = extractPhoneDigits(rawItem) || cleanJid(rawItem).split('@')[0];
+            return `+${num}`;
+          })
           .join('\n');
         const listMsg = await t(from, 'req', 'list');
         await sock.sendMessage(from, { text: listMsg.replace('{list}', formattedList) }, { quoted: msg });
@@ -899,7 +897,6 @@ export const commands = [
     aliases: ['close'],
     description: 'Only admins can send messages.',
     category: 'Group',
-    ownerOnly: true,
     groupOnly: true,
     adminOnly: true,
     botAdminOnly: true,
@@ -924,7 +921,6 @@ export const commands = [
     description: 'Allow all members to send messages.',
     category: 'Group',
     groupOnly: true,
-    ownerOnly: true,
     adminOnly: true,
     botAdminOnly: true,
     execute: async ({ sock, from, msg }) => {
@@ -948,7 +944,6 @@ export const commands = [
     description: 'Get the group invite link.',
     category: 'Group',
     groupOnly: true,
-    ownerOnly: true,
     adminOnly: true,
     botAdminOnly: true,
     execute: async ({ sock, from, msg }) => {
@@ -973,7 +968,6 @@ export const commands = [
     description: 'Revoke current invite link and generate new one.',
     category: 'Group',
     groupOnly: true,
-    ownerOnly: true,
     adminOnly: true,
     botAdminOnly: true,
     execute: async ({ sock, from, msg }) => {
