@@ -352,3 +352,74 @@ test('isLibsignalConsoleNoise and installConsoleSignalSanitizer suppress raw lib
     }
 });
 
+test('installed console sanitizer redacts secrets in Error messages, stacks, and nested objects', () => {
+    const prevError = console.error;
+    const prevWarn = console.warn;
+    const prevInfo = console.info;
+    const prevInstalled = console.__spiderSignalSanitizerInstalled;
+    const emitted = [];
+    const secrets = [
+        '254712345678',
+        '254712345678@s.whatsapp.net',
+        '998877665544@lid',
+        'LIL~sessionSecretToken987',
+        'Bearer abcDEF987_secret'
+    ];
+    const collectStrings = (value, result = [], seen = new WeakSet()) => {
+        if (typeof value === 'string') {
+            result.push(value);
+        } else if (value && typeof value === 'object' && !seen.has(value)) {
+            seen.add(value);
+            if (value instanceof Error) {
+                result.push(value.name, value.message, value.stack || '');
+            }
+            for (const key of Object.keys(value)) {
+                result.push(key);
+                collectStrings(value[key], result, seen);
+            }
+            if (Object.hasOwn(value, 'cause')) collectStrings(value.cause, result, seen);
+        }
+        return result;
+    };
+
+    try {
+        delete console.__spiderSignalSanitizerInstalled;
+        console.error = (...args) => emitted.push(['error', ...args]);
+        console.warn = (...args) => emitted.push(['warn', ...args]);
+        console.info = (...args) => emitted.push(['info', ...args]);
+        assert.equal(installConsoleSignalSanitizer(), true);
+
+        const error = new Error(`Request failed for ${secrets[1]} using ${secrets[3]}`);
+        error.stack = `Error: Request failed for ${secrets[1]} using ${secrets[3]}\n    at send (${secrets[0]})`;
+        console.error(error);
+        console.warn({
+            request: {
+                phone: secrets[0],
+                numericPhone: 254712345678,
+                jid: secrets[2],
+                credentials: [secrets[3], secrets[4]],
+                [secrets[0]]: secrets[1],
+                error: new Error(`Could not contact ${secrets[1]} with ${secrets[4]}`)
+            }
+        });
+
+        assert.equal(emitted.length, 2);
+        assert.ok(emitted[0][1] instanceof Error, 'Sanitized Error should remain useful as an Error');
+        const outputStrings = emitted.flatMap((entry) => collectStrings(entry));
+        for (const secret of secrets) {
+            assert.ok(!outputStrings.some((text) => text.includes(secret)), `Raw secret reached original console: ${secret}`);
+        }
+        assert.ok(outputStrings.some((text) => text.includes('••••78@s.whatsapp.net')));
+        assert.ok(outputStrings.some((text) => text.includes('[redacted-token]')));
+        assert.ok(outputStrings.some((text) => text.includes('••••44@lid')));
+    } finally {
+        console.error = prevError;
+        console.warn = prevWarn;
+        console.info = prevInfo;
+        if (prevInstalled === undefined) {
+            delete console.__spiderSignalSanitizerInstalled;
+        } else {
+            console.__spiderSignalSanitizerInstalled = prevInstalled;
+        }
+    }
+});

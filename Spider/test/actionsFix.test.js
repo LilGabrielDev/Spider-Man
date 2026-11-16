@@ -712,6 +712,114 @@ test('Group .kick, .kickall, .approve, and .lock check WA responses, retry 404 L
   assert.match(lockFailEnv.sent.at(-1).payload.text, /failed/i);
 });
 
+test('Group participant mutations enforce ADMIN_PROTECTION and fail closed without required metadata', async () => {
+  const adminJid = '254700000002@s.whatsapp.net';
+  const adminDigits = '254700000002';
+  const mutationCases = [
+    ['kick', 'remove'],
+    ['remove', 'remove'],
+    ['add', 'add'],
+    ['promote', 'promote'],
+    ['demote', 'demote'],
+  ];
+
+  for (const [commandName, expectedAction] of mutationCases) {
+    const command = commandsMap.get(aliasesMap.get(commandName) || commandName);
+    const protectedEnv = createAckAwareSock();
+    await command.execute({
+      sock: protectedEnv.sock,
+      from: protectedEnv.groupMeta.id,
+      text: adminDigits,
+      args: [adminDigits],
+      msg: { key: { remoteJid: protectedEnv.groupMeta.id, id: `protected-${commandName}` } },
+      config: { ...config, ADMIN_PROTECTION: true },
+    });
+    assert.equal(protectedEnv.participantCalls.length, 0, `${commandName} must not mutate an admin target`);
+    assert.match(protectedEnv.sent.at(-1).payload.text, /failed/i);
+
+    const unprotectedEnv = createAckAwareSock();
+    await command.execute({
+      sock: unprotectedEnv.sock,
+      from: unprotectedEnv.groupMeta.id,
+      text: adminDigits,
+      args: [adminDigits],
+      msg: { key: { remoteJid: unprotectedEnv.groupMeta.id, id: `unprotected-${commandName}` } },
+      config: { ...config, ADMIN_PROTECTION: false },
+    });
+    assert.equal(unprotectedEnv.participantCalls.length, 1, `${commandName} remains available when protection is off`);
+    assert.equal(unprotectedEnv.participantCalls[0].action, expectedAction);
+    assert.ok(
+      [adminJid, '2220002@lid'].includes(unprotectedEnv.participantCalls[0].participants[0]),
+      `${commandName} should target the selected admin via one of its known JID aliases`,
+    );
+  }
+
+  // A group owner without an admin flag is still recognized by the protection decision.
+  // kickall's preliminary filter does not identify this owner, so the shared guard must.
+  const kickAllMetadata = {
+    id: '120363000000009001@g.us',
+    owner: '254700000001@s.whatsapp.net',
+    participants: [
+      { id: '254700000001@s.whatsapp.net', admin: null },
+      { id: '254700000004@s.whatsapp.net', admin: null },
+      { id: '254700000099@s.whatsapp.net', lid: '99900099@lid', admin: 'admin' },
+    ],
+  };
+  const protectedKickAll = createAckAwareSock({ metadata: kickAllMetadata });
+  await commandsMap.get('kickall').execute({
+    sock: protectedKickAll.sock,
+    from: kickAllMetadata.id,
+    msg: { key: { remoteJid: kickAllMetadata.id, id: 'protected-kickall' } },
+    config: { ...config, ADMIN_PROTECTION: true },
+  });
+  assert.deepEqual(
+    protectedKickAll.participantCalls.flatMap((call) => call.participants),
+    ['254700000004@s.whatsapp.net'],
+  );
+  assert.match(protectedKickAll.sent.at(-1).payload.text, /Removed: 1\/2[\s\S]*Failed: 1/);
+
+  const unprotectedKickAll = createAckAwareSock({ metadata: kickAllMetadata });
+  await commandsMap.get('kickall').execute({
+    sock: unprotectedKickAll.sock,
+    from: kickAllMetadata.id,
+    msg: { key: { remoteJid: kickAllMetadata.id, id: 'unprotected-kickall' } },
+    config: { ...config, ADMIN_PROTECTION: false },
+  });
+  assert.deepEqual(
+    unprotectedKickAll.participantCalls.flatMap((call) => call.participants),
+    ['254700000001@s.whatsapp.net', '254700000004@s.whatsapp.net'],
+  );
+
+  const noMetadataEnv = createAckAwareSock();
+  noMetadataEnv.sock.groupMetadata = async () => {
+    throw new Error('metadata unavailable');
+  };
+  await commandsMap.get('kick').execute({
+    sock: noMetadataEnv.sock,
+    from: noMetadataEnv.groupMeta.id,
+    text: adminDigits,
+    args: [adminDigits],
+    msg: { key: { remoteJid: noMetadataEnv.groupMeta.id, id: 'protected-no-metadata' } },
+    config: { ...config, ADMIN_PROTECTION: true },
+  });
+  assert.equal(noMetadataEnv.participantCalls.length, 0);
+  assert.match(noMetadataEnv.sent.at(-1).payload.text, /failed/i);
+
+  const noMetadataUnprotectedEnv = createAckAwareSock();
+  noMetadataUnprotectedEnv.sock.groupMetadata = async () => {
+    throw new Error('metadata unavailable');
+  };
+  await commandsMap.get('kick').execute({
+    sock: noMetadataUnprotectedEnv.sock,
+    from: noMetadataUnprotectedEnv.groupMeta.id,
+    text: adminDigits,
+    args: [adminDigits],
+    msg: { key: { remoteJid: noMetadataUnprotectedEnv.groupMeta.id, id: 'unprotected-no-metadata' } },
+    config: { ...config, ADMIN_PROTECTION: false },
+  });
+  assert.equal(noMetadataUnprotectedEnv.participantCalls.length, 1);
+});
+
 test('User .del deletes wrapped viewOnce quote with LID/bot detection and reports failure honestly', async () => {
   const { sock, sent, groupMeta } = createAckAwareSock({
     onSendMessage: async ({ id, payload, ws }) => {

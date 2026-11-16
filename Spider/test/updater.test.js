@@ -159,6 +159,42 @@ test('applyZipArchiveToWorkspace extracts updates while preserving runtime files
   }
 });
 
+test('applyZipArchiveToWorkspace rejects symlinked parents and destinations without writing outside the workspace', () => {
+  const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'spider-update-symlink-'));
+  const rootDir = path.join(baseDir, 'workspace');
+  const outsideDir = path.join(baseDir, 'outside');
+  fs.mkdirSync(rootDir);
+  fs.mkdirSync(outsideDir);
+  try {
+    const parentTarget = path.join(outsideDir, 'parent-target.txt');
+    const destinationTarget = path.join(outsideDir, 'destination-target.txt');
+    fs.writeFileSync(parentTarget, 'parent-original');
+    fs.writeFileSync(destinationTarget, 'destination-original');
+    fs.mkdirSync(path.join(rootDir, 'spider'));
+    fs.symlinkSync(outsideDir, path.join(rootDir, 'spider', 'escape'), 'dir');
+    const parentSymlinkArchive = createArchiveBuffer({
+      ...VALID_ARCHIVE_BASE,
+      'spider/escape/parent-target.txt': 'overwritten-parent',
+    });
+    assert.throws(
+      () => applyZipArchiveToWorkspace(parentSymlinkArchive, rootDir),
+      /symbolic link/,
+    );
+    assert.equal(fs.readFileSync(parentTarget, 'utf8'), 'parent-original');
+
+    fs.mkdirSync(path.join(rootDir, 'Spider', 'commands'), { recursive: true });
+    fs.symlinkSync(destinationTarget, path.join(rootDir, 'Spider', 'commands', 'Admin.js'));
+    const destinationSymlinkArchive = createArchiveBuffer(VALID_ARCHIVE_BASE);
+    assert.throws(
+      () => applyZipArchiveToWorkspace(destinationSymlinkArchive, rootDir),
+      /symbolic link/,
+    );
+    assert.equal(fs.readFileSync(destinationTarget, 'utf8'), 'destination-original');
+  } finally {
+    fs.rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test('runBotUpdate supports Katabump/Panel direct updates, checkOnly, up_to_date, Heroku, and Deploy Hook', async () => {
   const commitSha = 'a'.repeat(40);
   const treePaths = [
@@ -279,6 +315,71 @@ test('runBotUpdate supports Katabump/Panel direct updates, checkOnly, up_to_date
     });
     assert.equal(hookResult.status, 'deploy_hook_triggered');
     assert.equal(hookCalls.length, 1);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('runBotUpdate retries a failed dependency install before marking the target commit installed', async () => {
+  const commitSha = 'b'.repeat(40);
+  const treePaths = [
+    { path: 'package.json' },
+    { path: 'spider/index.js' },
+    { path: 'spider/config.js' },
+    { path: 'Spider/commands/Admin.js' },
+  ];
+  const zipBuffer = createArchiveBuffer({
+    ...VALID_ARCHIVE_BASE,
+    'package.json': JSON.stringify({ name: 'spider-man-md', version: '2.0.0' }),
+  });
+  const fetchMock = async (url) => {
+    if (url.endsWith('/commits/main')) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ sha: commitSha, commit: { message: 'Update dependencies' } }),
+      };
+    }
+    if (url.includes('/git/trees/')) {
+      return { ok: true, status: 200, json: async () => ({ tree: treePaths }) };
+    }
+    if (url.endsWith('.zip')) {
+      return { ok: true, status: 200, arrayBuffer: async () => zipBuffer };
+    }
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  };
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'spider-install-retry-'));
+  try {
+    fs.writeFileSync(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'old' }));
+    let installCalls = 0;
+    const execMock = (cmd) => {
+      assert.equal(cmd, 'npm');
+      installCalls += 1;
+      if (installCalls === 1) throw new Error('simulated npm failure');
+      return '';
+    };
+    const firstResult = await runBotUpdate({
+      rootDir: tmpDir,
+      env: { KATABUMP: '1' },
+      fetchImpl: fetchMock,
+      execImpl: execMock,
+    });
+    assert.equal(firstResult.status, 'updated_self');
+    assert.match(firstResult.npmWarning, /simulated npm failure/);
+    assert.equal(readUpdateState(tmpDir)?.commitSha, undefined);
+    assert.equal(readUpdateState(tmpDir)?.pendingDependencyCommitSha, commitSha);
+
+    const secondResult = await runBotUpdate({
+      rootDir: tmpDir,
+      env: { KATABUMP: '1' },
+      fetchImpl: fetchMock,
+      execImpl: execMock,
+    });
+    assert.equal(secondResult.status, 'updated_self');
+    assert.equal(secondResult.npmWarning, null);
+    assert.equal(installCalls, 2);
+    assert.equal(readUpdateState(tmpDir)?.commitSha, commitSha);
+    assert.equal(readUpdateState(tmpDir)?.pendingDependencyCommitSha, undefined);
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

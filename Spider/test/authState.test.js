@@ -86,6 +86,26 @@ test('applyCredsUpdate merges partial me objects without dropping me.id and fixe
   assert.equal(fixAuthFileName('sender-key-120363@g.us::9988:4.json'), 'sender-key-120363@g.us--9988-4.json');
 });
 
+test('useHardenedMultiFileAuthState hardens permissions on existing valid credentials and backup', async () => {
+  await withTempDir(async (authDir) => {
+    const creds = initAuthCreds();
+    const serialized = JSON.stringify(creds, BufferJSON.replacer);
+    const credsPath = path.join(authDir, 'creds.json');
+    const backupPath = `${credsPath}.bak`;
+    fs.writeFileSync(credsPath, serialized, { mode: 0o644 });
+    fs.writeFileSync(backupPath, serialized, { mode: 0o644 });
+    fs.chmodSync(credsPath, 0o644);
+    fs.chmodSync(backupPath, 0o644);
+
+    const auth = await useHardenedMultiFileAuthState(authDir);
+    assert.equal(fs.statSync(credsPath).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(backupPath).mode & 0o777, 0o600);
+    await auth.flush();
+    assert.equal(fs.statSync(credsPath).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(backupPath).mode & 0o777, 0o600);
+  });
+});
+
 test('useHardenedMultiFileAuthState writes atomically, maintains .bak, recovers corrupt creds.json, and refuses silent wipe', async () => {
   await withTempDir(async (authDir) => {
     // 1. Seed valid credentials with companion device :9 and a leftover crashed .tmp file
