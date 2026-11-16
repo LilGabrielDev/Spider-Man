@@ -1527,6 +1527,45 @@ export function wrapSendOptionsNormalization(sock) {
   return true;
 }
 
+export function wrapOnWhatsAppGuard(sock) {
+  if (!sock || typeof sock.onWhatsApp !== 'function') return false;
+  if (sock.onWhatsApp.__spiderLidGuarded) return true;
+
+  const origOnWhatsApp = sock.onWhatsApp.bind(sock);
+  const guardedOnWhatsApp = async (...jids) => {
+    const validTargets = [];
+    const lidMapping = sock?.signalRepository?.lidMapping;
+
+    for (const raw of jids) {
+      const candidate = String(raw || '').trim();
+      if (!candidate) continue;
+      if (isLidOrHostedLidJid(candidate)) {
+        if (lidMapping && typeof lidMapping.getPNForLID === 'function') {
+          try {
+            const pn = await lidMapping.getPNForLID(candidate);
+            const cleanPn = cleanUserJid(pn);
+            if (cleanPn && !isLidOrHostedLidJid(cleanPn)) {
+              validTargets.push(cleanPn);
+            }
+          } catch {
+            // Skip unmapped LID
+          }
+        }
+        continue;
+      }
+      validTargets.push(candidate);
+    }
+
+    if (validTargets.length === 0) {
+      return [];
+    }
+    return origOnWhatsApp(...validTargets);
+  };
+  guardedOnWhatsApp.__spiderLidGuarded = true;
+  sock.onWhatsApp = guardedOnWhatsApp;
+  return true;
+}
+
 export function installSocketResilience(
   sock,
   {
@@ -1550,6 +1589,7 @@ export function installSocketResilience(
   wrapSignalAndSenderKeyGuard(sock, { failedEncryptJids, userDevicesCache, logError, authDir });
   wrapAckErrorRecovery(sock, { groupCache, userDevicesCache, logError });
   wrapSendOptionsNormalization(sock);
+  wrapOnWhatsAppGuard(sock);
   wrapPresenceResilience(sock, { defaultPushName });
 
   if (sock?.ev && typeof sock.ev.on === 'function') {

@@ -18,6 +18,7 @@ import {
   syncMessageKeyAliases,
   wrapAckErrorRecovery,
   wrapLidMappingResilience,
+  wrapOnWhatsAppGuard,
   wrapPresenceResilience,
   wrapSendOptionsNormalization,
   wrapSignalAndSenderKeyGuard,
@@ -1395,6 +1396,33 @@ test('wrapSendOptionsNormalization disables missing link-preview-js lookup on UR
     { getUrlInfo: customGetUrlInfo },
   );
   assert.equal(calls[1].options.getUrlInfo, customGetUrlInfo);
+});
+
+test('wrapOnWhatsAppGuard resolves mapped LIDs to PN and skips unmapped LIDs cleanly', async () => {
+  const queries = [];
+  const sock = {
+    signalRepository: {
+      lidMapping: {
+        getPNForLID: async (lid) => (lid === '1122334455@lid' ? '254700000011@s.whatsapp.net' : null),
+      },
+    },
+    onWhatsApp: async (...jids) => {
+      queries.push(jids);
+      return jids.map((jid) => ({ exists: true, jid }));
+    },
+  };
+
+  assert.equal(wrapOnWhatsAppGuard(sock), true);
+  assert.equal(wrapOnWhatsAppGuard(sock), true, 'idempotent');
+
+  // Unmapped LID returns [] without touching Baileys onWhatsApp
+  assert.deepEqual(await sock.onWhatsApp('998877665544@lid'), []);
+  assert.equal(queries.length, 0);
+
+  // Mapped LID resolves to PN before hitting Baileys onWhatsApp
+  const mappedRes = await sock.onWhatsApp('1122334455@lid');
+  assert.deepEqual(queries[0], ['254700000011@s.whatsapp.net']);
+  assert.equal(mappedRes[0].jid, '254700000011@s.whatsapp.net');
 });
 
 

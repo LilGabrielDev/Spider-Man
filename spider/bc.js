@@ -287,7 +287,11 @@ export async function processStatusMessage(msg, sock) {
         }
 
         let pushName = msg.pushName || 'Unknown';
-        if (displayJid !== 'Unknown' && typeof sock?.onWhatsApp === 'function') {
+        if (
+            displayJid !== 'Unknown' &&
+            getPhoneFromJidHelper(displayJid) &&
+            typeof sock?.onWhatsApp === 'function'
+        ) {
             try {
                 const res = await sock.onWhatsApp(displayJid);
                 if (res && res[0]) {
