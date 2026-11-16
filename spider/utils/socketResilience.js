@@ -334,6 +334,22 @@ export async function ensureActiveOnlinePresence(
   }
 }
 
+export async function ensureOfflinePresence(
+  sock,
+  { defaultPushName = 'Spider Man', logError = null } = {},
+) {
+  if (!sock || typeof sock !== 'object') return false;
+  ensureFallbackMeName(sock.authState?.creds, defaultPushName);
+  if (typeof sock.sendPresenceUpdate !== 'function') return false;
+  try {
+    await sock.sendPresenceUpdate('unavailable');
+    return true;
+  } catch (err) {
+    logError?.('Presence Update', null, null, err?.message || String(err));
+    return false;
+  }
+}
+
 export async function ensureAppStateSynced(
   sock,
   {
@@ -1775,6 +1791,7 @@ export function installSocketResilience(
     userDevicesCache = null,
     failedEncryptJids = null,
     defaultPushName = 'Spider Man',
+    alwaysOnline = false,
     preKeyRetryDelayMs = DEFAULT_PREKEY_RETRY_DELAY_MS,
     logInfo = console.log,
     logError = null,
@@ -1817,7 +1834,11 @@ export function installSocketResilience(
           logInfo,
           logError,
         });
-        void ensureActiveOnlinePresence(sock, { defaultPushName, logError });
+        if (alwaysOnline) {
+          void ensureActiveOnlinePresence(sock, { defaultPushName, logError });
+        } else {
+          void ensureOfflinePresence(sock, { defaultPushName, logError });
+        }
         if (!appStateSyncedSockets.has(sock) && !appStateFallbackTimer) {
           appStateFallbackTimer = setTimeout(() => {
             appStateFallbackTimer = null;

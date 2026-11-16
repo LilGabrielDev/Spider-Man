@@ -93,3 +93,76 @@ test('alternating PN and mapped LID forms share one command rate-limit budget', 
     'runtime must key by the mapped canonical sender phone and fall back to raw sender identity',
   );
 });
+
+test('setChatPresence and clearChatPresence clear temporary available presence back to unavailable', async () => {
+  const sentPresence = [];
+  const presenceTimers = new Map();
+  const scheduledTimeouts = [];
+  const context = {
+    presenceTimers,
+    availablePresenceChats: new Set(),
+    a0_0x46d183: {
+      ALWAYS_ONLINE: false,
+      DM_PRESENCE: 'online',
+      GRP_PRESENCE: 'typing',
+    },
+    shouldShowPresence: () => true,
+    getPresenceType: (isGroup) => (isGroup ? 'composing' : 'available'),
+    updatePresence: async (jid, type) => {
+      sentPresence.push({ jid, type });
+    },
+    a0_0x377309: (idx) => ({
+      0x20e: 'has',
+      0x231: 'get',
+      0x18d: 'delete',
+      0x1ba: 'paused',
+    })[idx],
+    _0x21a6: (idx) => ({
+      0x2e: 'paused',
+    })[idx],
+    _0x463425: (idx) => ({
+      0xb: 'get',
+    })[idx],
+    setTimeout(fn, delay) {
+      const handle = { fn, delay };
+      scheduledTimeouts.push(handle);
+      return handle;
+    },
+    clearTimeout() {},
+    Set,
+  };
+
+  const setFn = extractFunction(runtimeSource, 'async function setChatPresence(');
+  const clearFn = extractFunction(runtimeSource, 'async function clearChatPresence(');
+  const { setChatPresence, clearChatPresence } = vm.runInNewContext(
+    `${setFn}\n${clearFn}\n({ setChatPresence, clearChatPresence })`,
+    context,
+  );
+
+  // DM_PRESENCE='online' -> sends 'available', then clearing sends 'unavailable' (not 'paused')
+  await setChatPresence('254700000001@s.whatsapp.net', false);
+  await clearChatPresence('254700000001@s.whatsapp.net');
+  assert.deepEqual(sentPresence, [
+    { jid: '254700000001@s.whatsapp.net', type: 'available' },
+    { jid: '254700000001@s.whatsapp.net', type: 'unavailable' },
+  ]);
+
+  // Timeout callback on 'available' also returns presence to 'unavailable'
+  sentPresence.length = 0;
+  scheduledTimeouts.length = 0;
+  await setChatPresence('254700000002@s.whatsapp.net', false);
+  await scheduledTimeouts[0].fn();
+  assert.deepEqual(sentPresence, [
+    { jid: '254700000002@s.whatsapp.net', type: 'available' },
+    { jid: '254700000002@s.whatsapp.net', type: 'unavailable' },
+  ]);
+
+  // Group 'typing' ('composing') clears with 'paused'
+  sentPresence.length = 0;
+  await setChatPresence('120363000000000001@g.us', true);
+  await clearChatPresence('120363000000000001@g.us');
+  assert.deepEqual(sentPresence, [
+    { jid: '120363000000000001@g.us', type: 'composing' },
+    { jid: '120363000000000001@g.us', type: 'paused' },
+  ]);
+});
