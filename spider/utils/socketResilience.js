@@ -29,6 +29,7 @@ const appStateInFlightSockets = new WeakSet();
 const appStateRetryTimers = new WeakMap();
 const appStateRetryAttempts = new WeakMap();
 const appStateKeyRequestCooldowns = new WeakMap();
+const appStateKeyInFlight = new WeakMap();
 const statusReactionTargetsBySock = new WeakMap();
 const VALID_PN_DOMAINS = new Set(['s.whatsapp.net', 'hosted', 'c.us']);
 export const DEFAULT_PREKEY_RETRY_DELAY_MS = 5_500;
@@ -439,10 +440,16 @@ export async function requestMissingAppStateSyncKeys(
     cooldownMap = new Map();
     appStateKeyRequestCooldowns.set(sock, cooldownMap);
   }
+  let inFlightSet = appStateKeyInFlight.get(sock);
+  if (!inFlightSet) {
+    inFlightSet = new Set();
+    appStateKeyInFlight.set(sock, inFlightSet);
+  }
 
   const now = Date.now();
   const candidates = [];
   for (const b64KeyId of uniqueIds) {
+    if (inFlightSet.has(b64KeyId)) continue;
     const lastReq = cooldownMap.get(b64KeyId) || 0;
     if (now - lastReq < cooldownMs) continue;
     let decoded;
@@ -456,45 +463,56 @@ export async function requestMissingAppStateSyncKeys(
   }
   if (candidates.length === 0) return false;
 
-  // Skip keys already present in local store
-  let toRequest = candidates;
-  const keysGet = sock?.authState?.keys?.get;
-  if (typeof keysGet === 'function') {
-    try {
-      const existing = await keysGet(
-        'app-state-sync-key',
-        candidates.map((c) => c.b64KeyId),
-      );
-      toRequest = candidates.filter((c) => !existing?.[c.b64KeyId]);
-    } catch {
-      // Proceed with candidates
-    }
-  }
-  if (toRequest.length === 0) return false;
-
-  for (const item of toRequest) {
-    cooldownMap.set(item.b64KeyId, now);
-    if (cooldownMap.size > 100) {
-      cooldownMap.delete(cooldownMap.keys().next().value);
-    }
+  for (const item of candidates) {
+    inFlightSet.add(item.b64KeyId);
   }
 
-  const requestType = proto?.Message?.ProtocolMessage?.Type?.APP_STATE_SYNC_KEY_REQUEST ?? 7;
   try {
-    await sock.sendPeerMessage({
-      protocolMessage: {
-        type: requestType,
-        appStateSyncKeyRequest: {
-          keyIds: toRequest.map((item) => ({ keyId: item.buf })),
+    // Skip keys already present in local store
+    let toRequest = candidates;
+    const keysGet = sock?.authState?.keys?.get;
+    if (typeof keysGet === 'function') {
+      try {
+        const existing = await keysGet(
+          'app-state-sync-key',
+          candidates.map((c) => c.b64KeyId),
+        );
+        toRequest = candidates.filter((c) => !existing?.[c.b64KeyId]);
+      } catch {
+        // Proceed with candidates
+      }
+    }
+    if (toRequest.length === 0) return false;
+
+    const reqTime = Date.now();
+    for (const item of toRequest) {
+      cooldownMap.set(item.b64KeyId, reqTime);
+      if (cooldownMap.size > 100) {
+        cooldownMap.delete(cooldownMap.keys().next().value);
+      }
+    }
+
+    const requestType = proto?.Message?.ProtocolMessage?.Type?.APP_STATE_SYNC_KEY_REQUEST ?? 7;
+    try {
+      await sock.sendPeerMessage({
+        protocolMessage: {
+          type: requestType,
+          appStateSyncKeyRequest: {
+            keyIds: toRequest.map((item) => ({ keyId: item.buf })),
+          },
         },
-      },
-    });
-    logInfo?.(
-      `[APP-STATE] Requested ${toRequest.length} missing app-state sync key(s) from primary device`,
-    );
-    return true;
-  } catch {
-    return false;
+      });
+      logInfo?.(
+        `[APP-STATE] Requested ${toRequest.length} missing app-state sync key(s) from primary device`,
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  } finally {
+    for (const item of candidates) {
+      inFlightSet.delete(item.b64KeyId);
+    }
   }
 }
 

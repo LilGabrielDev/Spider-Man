@@ -1077,6 +1077,29 @@ test('requestMissingAppStateSyncKeys sends APP_STATE_SYNC_KEY_REQUEST, enforces 
   storedKeys.add('AAAAAHGB');
   assert.equal(await requestMissingAppStateSyncKeys(sock, 'AAAAAHGB', { cooldownMs: 0 }), false);
   assert.equal(peerCalls.length, 1);
+
+  // Concurrent calls for the same uncached keyId before keys.get resolves coalesce to a single peer message
+  let releaseLookup;
+  const slowSock = {
+    authState: {
+      keys: {
+        get: async () => new Promise((resolve) => { releaseLookup = () => resolve({}); }),
+      },
+    },
+    sendPeerMessage: async () => {
+      peerCalls.push('concurrent');
+      return 'msg-id-2';
+    },
+  };
+  const concurrentRuns = Promise.all([
+    requestMissingAppStateSyncKeys(slowSock, 'AAAAAHGC'),
+    requestMissingAppStateSyncKeys(slowSock, 'AAAAAHGC'),
+    requestMissingAppStateSyncKeys(slowSock, 'AAAAAHGC'),
+  ]);
+  releaseLookup?.();
+  const concurrentResults = await concurrentRuns;
+  assert.deepEqual(concurrentResults, [true, false, false]);
+  assert.equal(peerCalls.length, 2);
 });
 
 test('ensureAppStateSynced checks post-resync stored versions and requests missing myAppStateKeyId when collections remain parked', async () => {
