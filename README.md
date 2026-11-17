@@ -1,99 +1,110 @@
-![Spider Man](spider/assets/spider-man.jpg)
+<div align="center">
 
-# SPIDER-MAN MD
+<img src="spider/assets/spider-man.jpg" alt="SPIDER-MAN MD" width="100%" />
+
+# 🕸️ SPIDER-MAN MD
+
+**Fast, modular WhatsApp Multi-Device bot powered by `@whiskeysockets/baileys` & Express.**
 
 [![PAIR CODE](https://img.shields.io/badge/PAIR%20CODE-7C3AED?style=for-the-badge&logo=whatsapp&logoColor=white)](https://lilgabriel-session.onrender.com/pair)
 [![SCAN QR](https://img.shields.io/badge/SCAN%20QR-111827?style=for-the-badge&logo=qrcode&logoColor=white)](https://lilgabriel-session.onrender.com/qr)
-[![DEPLOY SPIDER MAN](https://img.shields.io/badge/DEPLOY%20SPIDER%20MAN-C9A227?style=for-the-badge&logo=rocket&logoColor=black)](https://spider-man-fork-verifier-flax.vercel.app)
-[![KATABUMP PANEL](https://img.shields.io/badge/Deploy%20on-Katabump-D6B7D6?style=for-the-badge&logo=server&logoColor=black)](https://dashboard.katabump.com/auth/login#d6b7d6)
-[![DEPLOY TO KOYEB](https://img.shields.io/badge/Deploy%20on-Koyeb-121212?style=for-the-badge&logo=koyeb&logoColor=white)](https://app.koyeb.com/deploy?type=git&repository=github.com/LilGabrielDev/Spider-Man&branch=main&name=spider-man-md&ports=3000;http;/&env[MODE]=private&env[TZ]=Africa/Nairobi&env[OWNER_NAME]=Spider%20Man&env[BOT_NAME]=Spider%20Man&env[ADMIN_PROTECTION]=on&env[AUTO_READ]=off&env[SESSION_ID]=)
+[![FORK REPO](https://img.shields.io/badge/FORK%20REPO-374151?style=for-the-badge&logo=github&logoColor=white)](https://github.com/LilGabrielDev/Spider-Man/fork)
 [![DOWNLOAD ZIP](https://img.shields.io/badge/DOWNLOAD%20ZIP-5B21B6?style=for-the-badge&logo=github&logoColor=white)](https://github.com/LilGabrielDev/Spider-Man/archive/refs/heads/main.zip)
-[![FORK REPOSITORY](https://img.shields.io/badge/FORK%20REPOSITORY-374151?style=for-the-badge&logo=github&logoColor=white)](https://github.com/LilGabrielDev/Spider-Man/fork)
+[![WHATSAPP CHANNEL](https://img.shields.io/badge/CHANNEL-25D366?style=for-the-badge&logo=whatsapp&logoColor=white)](https://whatsapp.com/channel/0029VbDh88NCMY0Fartkxm1g)
 
-A Node.js WhatsApp Multi-Device bot powered by `@whiskeysockets/baileys` and Express.
+</div>
 
-Pair your device, then add the `SESSION` or `SESSION_ID` sent to your WhatsApp as a private environment variable. Never post or commit your session credentials.
-
----
-
-## Features
-
-- **Multi-Device WhatsApp Client**: Connects using `SESSION` (base64 `creds.json`) or `SESSION_ID` (`LIL~` gzipped base64 or plain base64).
-- **Modular Commands & Legacy Compatibility**: Loads native commands from `Spider/commands/` alongside compatible legacy plugins via `Spider/utils/legacyPlugins.js`.
-- **Group & Security Controls**: Admin protection (`ADMIN_PROTECTION`), owner-only command enforcement, rate limiting, and emergency lockdown state (`spider/utils/securityStore.js`).
-- **Automations**: Anti-delete, anti-edit, anti-call, auto-read, auto-react, status auto-view/like, chat presence, and view-once auto-save.
-- **HTTP Status Server**: Built-in Express server on `PORT` (default `3000`) with `/` and `/health` endpoints.
+> **Quick Note:** Pair your device first, then add the `SESSION_ID` or `SESSION` sent to your WhatsApp as a **private environment variable**. Never commit session credentials.
 
 ---
 
-## Manual Launch
+## 🚀 Deploy on Any Host
 
-```bash
-git clone https://github.com/LilGabrielDev/Spider-Man.git
-cd Spider-Man
-npm install
-cp .env-sample .env
-npm start
-```
+<div align="center">
 
-## Katabump Panel Deployment
+[![DEPLOY SPIDER MAN](https://img.shields.io/badge/Deploy%20Portal-C9A227?style=for-the-badge&logo=rocket&logoColor=black)](https://spider-man-fork-verifier-flax.vercel.app)
+[![HEROKU](https://img.shields.io/badge/Heroku-430098?style=for-the-badge&logo=heroku&logoColor=white)](https://heroku.com/deploy?template=https://github.com/LilGabrielDev/Spider-Man)
+[![KOYEB](https://img.shields.io/badge/Koyeb-121212?style=for-the-badge&logo=koyeb&logoColor=white)](https://app.koyeb.com/deploy?type=git&repository=github.com/LilGabrielDev/Spider-Man&branch=main&name=spider-man-md&ports=3000;http;/&env[MODE]=private&env[TZ]=Africa/Nairobi&env[OWNER_NAME]=Spider%20Man&env[BOT_NAME]=Spider%20Man&env[ADMIN_PROTECTION]=on&env[AUTO_READ]=off&env[SESSION_ID]=)
+[![RENDER](https://img.shields.io/badge/Render-46E3B7?style=for-the-badge&logo=render&logoColor=black)](https://render.com/deploy?repo=https://github.com/LilGabrielDev/Spider-Man)
+[![RAILWAY](https://img.shields.io/badge/Railway-0B0D0E?style=for-the-badge&logo=railway&logoColor=white)](https://railway.com/new/github?repo=https://github.com/LilGabrielDev/Spider-Man)
 
-Open the [Katabump panel](https://dashboard.katabump.com/auth/login#d6b7d6) and configure a Node.js server for this repository. Use a Node.js version supported by the project (20–24), with these commands:
+[![KATABUMP](https://img.shields.io/badge/Katabump-D6B7D6?style=for-the-badge&logo=server&logoColor=black)](https://dashboard.katabump.com/auth/login#d6b7d6)
+[![BOT-HOSTING](https://img.shields.io/badge/Bot--Hosting-2563EB?style=for-the-badge&logo=cloudflare&logoColor=white)](https://cheap.bothosting.lilgabrieltech.top)
+[![REPLIT](https://img.shields.io/badge/Replit-F26207?style=for-the-badge&logo=replit&logoColor=white)](https://replit.com/github/LilGabrielDev/Spider-Man)
+[![GLITCH](https://img.shields.io/badge/Glitch-3333FF?style=for-the-badge&logo=glitch&logoColor=white)](https://glitch.com/edit/#!/import/github/LilGabrielDev/Spider-Man)
+[![FLY.IO](https://img.shields.io/badge/Fly.io-7B3FE4?style=for-the-badge&logo=flydotio&logoColor=white)](https://fly.io)
+[![DOCKER](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)](#local--docker)
 
-- **Install:** `npm run install:panel`
-- **Startup:** `npm start` (runs `index.js`)
+</div>
 
-Add `SESSION_ID` or `SESSION` as a private server variable before starting the bot. Use `.env-sample` as a reference for other optional settings, and keep session and API credentials in the panel rather than committing them to the repository.
+### Supported Hosting Matrix
+
+| Category | Supported Hosts | Config / Setup |
+| --- | --- | --- |
+| **Cloud PaaS** | **Heroku**, **Koyeb**, **Render**, **Railway**, **Fly.io**, **Replit**, **Glitch**, **Vercel** (Deploy Portal) | `app.json` · `koyeb.yaml` · `render.yaml` · `railway.json` · `nixpacks.toml` · `Procfile` |
+| **Bot & Game Panels** | **Katabump**, **Bot-Hosting**, **Optiklink**, **Pella**, **Cybrancee**, **SolarHosting**, **WitherHosting**, **BisectHosting**, **FalixNodes**, **Pterodactyl Panel** | Node.js `20–24` · Install: `npm run install:panel` · Start: `npm start` |
+| **Cloud & Containers** | **Docker**, **Google Cloud Run**, **AWS (ECS / EC2)**, **Azure**, **DigitalOcean**, **Oracle Cloud** | `Dockerfile` · Port `3000` (or injected `PORT`) · Health check `GET /` |
+| **VPS & Self-Hosted** | **Hetzner**, **OVHcloud**, **Contabo**, **Vultr**, **Linode**, **GitHub Codespaces**, **Linux VPS**, **Termux**, **Windows / macOS** | `git clone` → `npm install` → `npm start` |
+
+> **Auto-Detection:** Run `.host` in WhatsApp to view the detected host, uptime, and container memory stats (optional override via `HOSTING_PROVIDER`).
+
+---
 
 ## Koyeb Deployment
 
-Deploy directly from GitHub on [Koyeb](https://app.koyeb.com/) using either the **Buildpack** builder (`Procfile` + `.npmrc` + `package.json`) or **Docker** (`Dockerfile`), or use `koyeb.yaml` as a reference:
+Deploy directly via the **[Koyeb button](https://app.koyeb.com/deploy?type=git&repository=github.com/LilGabrielDev/Spider-Man&branch=main&name=spider-man-md&ports=3000;http;/&env[MODE]=private&env[TZ]=Africa/Nairobi&env[OWNER_NAME]=Spider%20Man&env[BOT_NAME]=Spider%20Man&env[ADMIN_PROTECTION]=on&env[AUTO_READ]=off&env[SESSION_ID]=)** or `koyeb.yaml`:
 
-- **Builder:** Buildpack (`npm start`) or Dockerfile
-- **Port & Health Check:** Expose port `3000` (or leave `PORT` unset to use Koyeb's injected `PORT`) with HTTP health check path `/`
-- **Required Secret:** Set `SESSION_ID` or `SESSION` in Koyeb's environment variables before deploying
+- **Builder:** Buildpack (`npm start`) or `Dockerfile`
+- **Port & Health Check:** Port `3000` (or Koyeb's injected `PORT`) with HTTP check on `/`
+- **Secret:** Set `SESSION_ID` or `SESSION` before deploying
 
 ---
 
-## Configuration
+## ⚡ Features
 
-Copy `.env-sample` to `.env` and set your variables:
+- **Multi-Device Auth** — Supports `SESSION_ID` (`LIL~` gzipped/base64) and `SESSION` (base64 `creds.json`).
+- **Modular Commands** — Native plugins in `Spider/commands/` plus full legacy command compatibility.
+- **Group Protection** — Anti-link, anti-spam, anti-flood, anti-scam, 24h anti-duplicate, anti-bot, anti-badword, admin protection, and lockdown mode.
+- **Automations** — Anti-delete, anti-edit, anti-call, auto-read, auto-react, status auto-view/like, auto-bio, and view-once auto-save.
+- **Health Server** — Built-in Express server exposing `GET /` and `GET /health`.
+
+---
+
+## 🛠️ Local & Docker
+
+```bash
+# Local / VPS / Termux
+git clone https://github.com/LilGabrielDev/Spider-Man.git && cd Spider-Man
+npm install && cp .env-sample .env && npm start
+
+# Docker
+docker build -t spider-man-md .
+docker run -d -p 3000:3000 -e SESSION_ID="your_session" spider-man-md
+```
+
+---
+
+## ⚙️ Core Environment Variables
 
 | Variable | Description | Default |
 | --- | --- | --- |
-| `SESSION_ID` / `SESSION` | WhatsApp multi-device session string | — |
-| `MODE` | Bot mode (`private` or `public`) | `private` |
-| `PREFIXES` | Comma-separated command prefixes | `.` |
-| `PORT` | HTTP server port | `3000` |
-| `OWNER_NAME` | Owner display name | `Spider Man` |
-| `BOT_NAME` | Bot display name | `Spider Man` |
-| `BOT_PIC` | Bot avatar image URL | — |
+| `SESSION_ID` / `SESSION` | WhatsApp multi-device session string | *(required)* |
+| `MODE` | Bot access mode (`private` / `public`) | `private` |
+| `PREFIXES` | Command prefixes (comma-separated) | `.` |
+| `OWNER_NAME` / `BOT_NAME` | Owner & bot display names | `Spider Man` |
 | `TZ` | Timezone | `Africa/Nairobi` |
-| `ADMIN_PROTECTION` | Block destructive actions against group admins (`on`/`off`) | `on` |
+| `ADMIN_PROTECTION` | Protect group admins from destructive actions | `on` |
+| `PORT` | HTTP server port *(leave unset on managed hosts)* | `3000` |
 
-See `.env-sample` and `app.json` for the full list of optional API keys and automation toggles.
-
----
-
-## Scripts
-
-- `npm start` — Start the bot supervisor and Express HTTP server (`node index.js`)
-- `npm run dev` — Start in development mode (`node index.js`)
-- `npm run install:panel` — Install dependencies for panel hosting
-- `npm test` — Run the Node test suite (`node --test Spider/test/*.test.js`)
-- `npm run lint` — Syntax-check core entry files
+See `.env-sample` and `app.json` for optional API keys and automation toggles.
 
 ---
 
-## HTTP Endpoints
+<div align="center">
 
-- `GET /` — Returns `Spider Man is Running`
-- `GET /health` — Returns `{ "bot": "Spider Man", "whatsapp": "connected" | "disconnected" }`
+**Scripts:** `npm start` · `npm run dev` · `npm run install:panel` · `npm test` · `npm run lint`  
+**Endpoints:** `GET /` (`Spider Man is Running`) · `GET /health` (`{ bot, whatsapp }`)
 
----
+[GitHub](https://github.com/LilGabrielDev/Spider-Man) · [WhatsApp Channel](https://whatsapp.com/channel/0029VbDh88NCMY0Fartkxm1g) · [MIT License](LICENSE)
 
-## Links & License
-
-- [GitHub Repository](https://github.com/LilGabrielDev/Spider-Man)
-- [WhatsApp Channel](https://whatsapp.com/channel/0029VbDh88NCMY0Fartkxm1g)
-- Licensed under the [MIT License](LICENSE).
+</div>
