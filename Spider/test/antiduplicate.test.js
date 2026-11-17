@@ -276,6 +276,10 @@ test('antiduplicate command manages on/off, sensitivity, scope, window, media, a
     assert.equal(antiduplicateUtils.defaultAntiduplicateStore.getGroupConfig(groupJid).windowSec, 43200);
     await cmd.execute(makeCmdCtx('window 24h'));
     assert.equal(antiduplicateUtils.defaultAntiduplicateStore.getGroupConfig(groupJid).windowSec, 86400);
+    await cmd.execute(makeCmdCtx('window 1d'));
+    assert.equal(antiduplicateUtils.defaultAntiduplicateStore.getGroupConfig(groupJid).windowSec, 86400);
+    await cmd.execute(makeCmdCtx('window 2d'));
+    assert.match(sent.at(-1).payload.text, /between 10 and 86400/i);
     await cmd.execute(makeCmdCtx('window 25h'));
     assert.match(sent.at(-1).payload.text, /between 10 and 86400/i);
     await cmd.execute(makeCmdCtx('window 900'));
@@ -492,6 +496,170 @@ test('handleAntiDuplicateMessage enforces delete, warnkick, mute, and respects a
     assert.equal(nba2.handled, false);
     assert.equal(nba2.reason, 'bot-not-admin');
     assert.equal(nonAdminEnv.sent.length, 0);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('antiduplicate strictly applies only to messages sent within 24 hours (send timestamp, out-of-order expiry, bigint/Long timestamps, and handler short-circuit)', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'spider-antidup-24h-'));
+  const store = antiduplicateUtils.createAntiduplicateStore(path.join(tmpDir, 'antiduplicate.json'));
+  const baseNowMs = 1_700_000_000_000;
+  let nowMs = baseNowMs;
+  const tracker = antiduplicateUtils.createDuplicateTracker({ now: () => nowMs });
+
+  try {
+    const groupJid = '120363000000007777@g.us';
+    const member = '254700000003@s.whatsapp.net';
+
+    store.setGroupConfig(groupJid, {
+      enabled: true,
+      action: 'delete',
+      sensitivity: 'sensitive',
+      windowSec: 86400,
+      notify: true,
+    });
+
+    // 1. A delayed message sent 20h ago is recorded using its send timestamp (not receipt time)
+    const sent20hAgoSec = Math.floor((nowMs - 20 * 3600 * 1000) / 1000);
+    const firstDelayed = tracker.checkAndRecord(groupJid, member, {
+      msg: {
+        key: { id: 'delay-1', remoteJid: groupJid, participant: member },
+        messageTimestamp: sent20hAgoSec,
+        message: { conversation: 'Delayed promo message one' },
+      },
+      text: 'Delayed promo message one',
+    });
+    assert.equal(firstDelayed.isDuplicate, false);
+
+    // 3 hours later (23h after original send) -> still within 24h -> duplicate!
+    nowMs = baseNowMs + 3 * 3600 * 1000;
+    const within24h = tracker.checkAndRecord(groupJid, member, {
+      msg: {
+        key: { id: 'delay-2', remoteJid: groupJid, participant: member },
+        messageTimestamp: Math.floor(nowMs / 1000),
+        message: { conversation: 'Delayed promo message one' },
+      },
+      text: 'Delayed promo message one',
+    });
+    assert.equal(within24h.isDuplicate, true);
+
+    // 5 hours after base (25h after original send, even though only 5h after receipt) -> expired!
+    nowMs = baseNowMs + 5 * 3600 * 1000;
+    const past24h = tracker.checkAndRecord(groupJid, member, {
+      msg: {
+        key: { id: 'delay-3', remoteJid: groupJid, participant: member },
+        messageTimestamp: Math.floor(nowMs / 1000),
+        message: { conversation: 'Delayed promo message one' },
+      },
+      text: 'Delayed promo message one',
+    });
+    assert.equal(past24h.isDuplicate, false);
+
+    // 2. Out-of-order arrival: newer message arrives first, older (20h ago) arrives second;
+    //    5h later the older message must expire while the newer message remains active.
+    tracker.clear();
+    nowMs = baseNowMs;
+    assert.equal(
+      tracker.checkAndRecord(groupJid, member, {
+        msg: {
+          key: { id: 'ooo-new', remoteJid: groupJid, participant: member },
+          messageTimestamp: Math.floor(nowMs / 1000),
+          message: { conversation: 'Recent message stays tracked' },
+        },
+        text: 'Recent message stays tracked',
+      }).isDuplicate,
+      false,
+    );
+    assert.equal(
+      tracker.checkAndRecord(groupJid, member, {
+        msg: {
+          key: { id: 'ooo-old', remoteJid: groupJid, participant: member },
+          messageTimestamp: Math.floor((nowMs - 20 * 3600 * 1000) / 1000),
+          message: { conversation: 'Older out of order message' },
+        },
+        text: 'Older out of order message',
+      }).isDuplicate,
+      false,
+    );
+
+    nowMs = baseNowMs + 5 * 3600 * 1000;
+    assert.equal(
+      tracker.checkAndRecord(groupJid, member, {
+        msg: {
+          key: { id: 'ooo-old-repeat', remoteJid: groupJid, participant: member },
+          messageTimestamp: Math.floor(nowMs / 1000),
+          message: { conversation: 'Older out of order message' },
+        },
+        text: 'Older out of order message',
+      }).isDuplicate,
+      false,
+    );
+    assert.equal(
+      tracker.checkAndRecord(groupJid, member, {
+        msg: {
+          key: { id: 'ooo-new-repeat', remoteJid: groupJid, participant: member },
+          messageTimestamp: Math.floor(nowMs / 1000),
+          message: { conversation: 'Recent message stays tracked' },
+        },
+        text: 'Recent message stays tracked',
+      }).isDuplicate,
+      true,
+    );
+
+    // 3. handleAntiDuplicateMessage ignores messages older than 24h (number, bigint, Long)
+    //    before fetching groupMetadata and never deletes/alerts/records them
+    tracker.clear();
+    nowMs = baseNowMs;
+    const env = createGroupMockSock();
+    let metadataFetchCount = 0;
+    const fetchGroupMetadata = async () => {
+      metadataFetchCount += 1;
+      return env.metadata;
+    };
+
+    // Seed a current message first
+    await antiduplicateUtils.handleAntiDuplicateMessage({
+      sock: env.sock,
+      from: groupJid,
+      sender: member,
+      msg: {
+        key: { id: 'cur-1', remoteJid: groupJid, fromMe: false, participant: member },
+        messageTimestamp: Math.floor(nowMs / 1000),
+        message: { conversation: 'Fresh duplicate candidate' },
+      },
+      text: 'Fresh duplicate candidate',
+      fetchGroupMetadata,
+      store,
+      tracker,
+    });
+    assert.equal(metadataFetchCount, 1);
+
+    const olderThan24hSec = Math.floor((nowMs - 86_401 * 1000) / 1000);
+    for (const [label, tsVal] of [
+      ['number', olderThan24hSec],
+      ['bigint', BigInt(olderThan24hSec)],
+      ['long', { low: olderThan24hSec, high: 0 }],
+    ]) {
+      const res = await antiduplicateUtils.handleAntiDuplicateMessage({
+        sock: env.sock,
+        from: groupJid,
+        sender: member,
+        msg: {
+          key: { id: `old-${label}`, remoteJid: groupJid, fromMe: false, participant: member },
+          messageTimestamp: tsVal,
+          message: { conversation: 'Fresh duplicate candidate' },
+        },
+        text: 'Fresh duplicate candidate',
+        fetchGroupMetadata,
+        store,
+        tracker,
+      });
+      assert.equal(res.handled, false);
+      assert.equal(res.reason, 'message-older-than-24h');
+    }
+    assert.equal(metadataFetchCount, 1, 'old messages must short-circuit before fetching groupMetadata');
+    assert.equal(env.sent.length, 0, 'old messages must not be deleted or trigger alerts');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

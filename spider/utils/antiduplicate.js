@@ -828,11 +828,13 @@ export function compareFingerprints(currentFp, previousFp, { sensitivity = ANTID
 }
 
 export function extractMessageTimestampMs(msg) {
-  const raw = msg?.messageTimestamp;
+  const raw = msg?.messageTimestamp ?? msg?.timestamp;
   if (raw === null || raw === undefined) return null;
   let num = null;
   if (typeof raw === 'number') {
     num = raw;
+  } else if (typeof raw === 'bigint') {
+    num = Number(raw);
   } else if (typeof raw === 'string' && raw.trim()) {
     num = Number(raw.trim());
   } else if (typeof raw === 'object') {
@@ -845,6 +847,13 @@ export function extractMessageTimestampMs(msg) {
   }
   if (!Number.isFinite(num) || num <= 0) return null;
   return num < 1e12 ? num * 1000 : num;
+}
+
+export function isMessageSentWithin24Hours(msg, nowMs = Date.now()) {
+  const msgTsMs = extractMessageTimestampMs(msg);
+  if (msgTsMs === null) return true;
+  if (!Number.isFinite(nowMs)) return true;
+  return nowMs - msgTsMs <= ANTIDUPLICATE_MAX_MESSAGE_AGE_MS;
 }
 
 export function createDuplicateTracker({ now = Date.now, maxGroups = MAX_GROUPS_TRACKED } = {}) {
@@ -875,18 +884,34 @@ export function createDuplicateTracker({ now = Date.now, maxGroups = MAX_GROUPS_
     return lastObservedTime;
   }
 
-  function pruneExpired(entries, windowStart) {
-    let expired = 0;
-    while (expired < entries.length && entries[expired].ts <= windowStart) {
-      expired += 1;
+  function isMessageWithin24h(msg) {
+    return isMessageSentWithin24Hours(msg, currentTimeMs());
+  }
+
+  function pruneExpired(entries, cutoffMs) {
+    let writeIdx = 0;
+    for (let i = 0; i < entries.length; i += 1) {
+      if (entries[i].ts >= cutoffMs) {
+        if (writeIdx !== i) {
+          entries[writeIdx] = entries[i];
+        }
+        writeIdx += 1;
+      }
     }
-    if (expired > 0) entries.splice(0, expired);
+    if (writeIdx < entries.length) {
+      entries.length = writeIdx;
+    }
   }
 
   function pruneStale(nowMs) {
+    const maxAgeCutoff = nowMs - ANTIDUPLICATE_MAX_MESSAGE_AGE_MS;
     for (const [key, bucket] of buckets.entries()) {
-      const windowStart = nowMs - (bucket.windowMs || ANTIDUPLICATE_DEFAULT_WINDOW_SEC * 1000);
-      pruneExpired(bucket.entries, windowStart);
+      const effectiveWindowMs = Math.min(
+        bucket.windowMs || ANTIDUPLICATE_DEFAULT_WINDOW_SEC * 1000,
+        ANTIDUPLICATE_MAX_MESSAGE_AGE_MS,
+      );
+      const cutoffMs = Math.max(nowMs - effectiveWindowMs, maxAgeCutoff);
+      pruneExpired(bucket.entries, cutoffMs);
       if (bucket.entries.length === 0) {
         buckets.delete(key);
       }
@@ -925,11 +950,16 @@ export function createDuplicateTracker({ now = Date.now, maxGroups = MAX_GROUPS_
       return { isDuplicate: false, skipped: 'message-older-than-24h' };
     }
 
+    const effectiveTs = msgTsMs !== null ? Math.min(msgTsMs, nowMs) : nowMs;
     const windowMs = Math.max(
       ANTIDUPLICATE_MIN_WINDOW_SEC * 1000,
-      Math.min(ANTIDUPLICATE_MAX_WINDOW_SEC * 1000, Number(windowSec || ANTIDUPLICATE_DEFAULT_WINDOW_SEC) * 1000),
+      Math.min(
+        ANTIDUPLICATE_MAX_WINDOW_SEC * 1000,
+        ANTIDUPLICATE_MAX_MESSAGE_AGE_MS,
+        Number(windowSec || ANTIDUPLICATE_DEFAULT_WINDOW_SEC) * 1000,
+      ),
     );
-    const windowStart = nowMs - windowMs;
+    const cutoffMs = Math.max(nowMs - windowMs, nowMs - ANTIDUPLICATE_MAX_MESSAGE_AGE_MS);
 
     callsSinceCleanup += 1;
     if (callsSinceCleanup >= CLEANUP_INTERVAL) {
@@ -947,12 +977,18 @@ export function createDuplicateTracker({ now = Date.now, maxGroups = MAX_GROUPS_
       bucket.windowMs = windowMs;
     }
 
-    pruneExpired(bucket.entries, windowStart);
+    pruneExpired(bucket.entries, cutoffMs);
 
     const effectiveFp = includeMedia ? fp : { ...fp, media: null };
     let match = null;
     for (let i = bucket.entries.length - 1; i >= 0; i -= 1) {
       const candidate = bucket.entries[i];
+      if (
+        nowMs - candidate.ts > ANTIDUPLICATE_MAX_MESSAGE_AGE_MS ||
+        Math.abs(effectiveTs - candidate.ts) > windowMs
+      ) {
+        continue;
+      }
       const res = compareFingerprints(effectiveFp, candidate.fp, { sensitivity });
       if (res.isDuplicate) {
         match = { ...res, repeatCount: candidate.repeatCount + 1, matchedTs: candidate.ts };
@@ -963,7 +999,7 @@ export function createDuplicateTracker({ now = Date.now, maxGroups = MAX_GROUPS_
 
     if (!match) {
       const historyCap = resolvedScope === 'group' ? MAX_GROUP_HISTORY_PER_BUCKET : MAX_HISTORY_PER_BUCKET;
-      bucket.entries.push({ fp: effectiveFp, ts: nowMs, repeatCount: 1 });
+      bucket.entries.push({ fp: effectiveFp, ts: effectiveTs, repeatCount: 1 });
       if (bucket.entries.length > historyCap) {
         bucket.entries.splice(0, bucket.entries.length - historyCap);
       }
@@ -1018,6 +1054,7 @@ export function createDuplicateTracker({ now = Date.now, maxGroups = MAX_GROUPS_
 
   return {
     checkAndRecord,
+    isMessageWithin24h,
     markAlertSent,
     resetGroup,
     clear,
@@ -1071,6 +1108,10 @@ export async function handleAntiDuplicateMessage({
   const groupConfig = store.getGroupConfig(from);
   if (!groupConfig.enabled) {
     return { handled: false, reason: 'disabled' };
+  }
+
+  if (typeof tracker?.isMessageWithin24h === 'function' && !tracker.isMessageWithin24h(msg)) {
+    return { handled: false, reason: 'message-older-than-24h' };
   }
 
   if (isOwner) {

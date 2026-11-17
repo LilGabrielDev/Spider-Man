@@ -70,11 +70,12 @@ function formatWindowLabel(seconds) {
 function parseWindowSeconds(raw) {
   const str = String(raw || '').trim().toLowerCase();
   if (!str) return null;
-  const match = str.match(/^(\d+)\s*(s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours)?$/i);
+  const match = str.match(/^(\d+)\s*(s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)?$/i);
   if (!match) return null;
   const num = Number.parseInt(match[1], 10);
   if (!Number.isInteger(num)) return null;
   const unit = (match[2] || 's').toLowerCase();
+  if (unit.startsWith('d')) return num * 86400;
   if (unit.startsWith('h')) return num * 3600;
   if (unit.startsWith('m')) return num * 60;
   return num;
@@ -126,7 +127,7 @@ export const commands = [
     name: 'antiduplicate',
     aliases: ['antidup', 'nodup', 'noduplicate', 'dupguard'],
     description:
-      'Prevent users from sending duplicate or near-duplicate messages (including obfuscated text, emojis, stickers, and media) in the same group.',
+      'Prevent users from sending duplicate or near-duplicate messages sent within 24 hours (including obfuscated text, emojis, stickers, and media) in the same group.',
     category: 'Group',
     groupOnly: true,
     adminOnly: true,
