@@ -168,7 +168,7 @@ export const commands = [
   {
     name: 'antibadword',
     aliases: ['badword', 'badwords', 'antibad'],
-    description: 'Block profanity and custom forbidden words in the group (delete, warn, kick, warnkick).',
+    description: 'Strict profanity & custom bad-word filter (delete, warn, kick, warnkick, mute).',
     category: 'Group',
     groupOnly: true,
     adminOnly: true,
@@ -187,15 +187,26 @@ export const commands = [
         const out = [
           spiderHeader(botName, 'ANTIBADWORD SHIELD'),
           spiderRow('STATUS', cur.enabled ? 'ON ✅' : 'OFF ❌', '⛨'),
+          spiderRow('STRICT MODE', cur.strict !== false ? 'VERY STRICT 🔥' : 'STANDARD', '☢'),
           spiderRow('ACTION', cur.action.toUpperCase(), '⚡'),
           spiderRow('WARN LIMIT', `${cur.maxWarns} warn(s)`, '▣'),
+          spiderRow('ALERTS', cur.notify ? 'ON' : 'OFF', '◈'),
           spiderRow('CUSTOM WORDS', String(cur.customWords.length), '❖'),
-          spiderRow('STATS', `${cur.stats.detected} caught · ${cur.stats.deleted} del · ${cur.stats.kicked} kicked`, '▤'),
+          spiderRow('WHITELIST', String((cur.whitelist || []).length), '✦'),
+          spiderRow(
+            'STATS',
+            `${cur.stats.detected} caught · ${cur.stats.deleted} del · ${cur.stats.kicked} kicked · ${cur.stats.muted || 0} muted`,
+            '▤',
+          ),
           spiderDivider('CONTROLS'),
-          `> ┃ ▸ *${prefix}antibadword on [delete|warn|kick|warnkick]*`,
+          `> ┃ ▸ *${prefix}antibadword on [delete|warn|kick|warnkick|mute]*`,
           `> ┃ ▸ *${prefix}antibadword off*`,
-          `> ┃ ▸ *${prefix}antibadword set <delete|warn|kick|warnkick>*`,
+          `> ┃ ▸ *${prefix}antibadword strict [on|off]*`,
+          `> ┃ ▸ *${prefix}antibadword set <delete|warn|kick|warnkick|mute>*`,
+          `> ┃ ▸ *${prefix}antibadword warnlimit <1-10>*`,
+          `> ┃ ▸ *${prefix}antibadword notify on|off*`,
           `> ┃ ▸ *${prefix}antibadword addword / delword <word>*`,
+          `> ┃ ▸ *${prefix}antibadword whitelist add|remove|list <word>*`,
           `> ┃ ▸ *${prefix}antibadword check <text>*`,
           spiderFooter('ANTIBADWORD // SPIDER-MAN'),
         ].join('\n');
@@ -207,10 +218,15 @@ export const commands = [
         if (tokens[1] && !chosen) {
           return sock.sendMessage(from, { text: `❌ Valid actions: *${ANTIBADWORD_ACTIONS.join(', ')}*` }, { quoted: msg });
         }
-        const updated = defaultAntibadwordStore.setGroupConfig(from, { enabled: true, action: chosen || 'warn' });
+        const updated = defaultAntibadwordStore.setGroupConfig(from, {
+          enabled: true,
+          action: chosen || 'warnkick',
+        });
         return sock.sendMessage(
           from,
-          { text: `✅ Anti-Badword turned *ON* (Action: *${updated.action.toUpperCase()}*).` },
+          {
+            text: `✅ Anti-Badword turned *ON* (Mode: *${updated.strict ? 'VERY STRICT' : 'STANDARD'}* · Action: *${updated.action.toUpperCase()}* · Limit: *${updated.maxWarns}*).`,
+          },
           { quoted: msg },
         );
       }
@@ -220,13 +236,67 @@ export const commands = [
         return sock.sendMessage(from, { text: '🛑 Anti-Badword turned *OFF*.' }, { quoted: msg });
       }
 
+      if (sub === 'strict' || sub === 'strictmode') {
+        const toggle = String(tokens[1] || '').toLowerCase();
+        if (!toggle) {
+          const updated = defaultAntibadwordStore.setGroupConfig(from, {
+            enabled: true,
+            strict: true,
+            action: 'kick',
+            maxWarns: 1,
+          });
+          return sock.sendMessage(
+            from,
+            {
+              text: [
+                spiderHeader(botName, 'ANTIBADWORD STRICT PRESET'),
+                spiderRow('STATUS', 'ON ✅', '⛨'),
+                spiderRow('STRICT MODE', 'VERY STRICT 🔥', '☢'),
+                spiderRow('ACTION', updated.action.toUpperCase(), '⚡'),
+                spiderRow('WARN LIMIT', `${updated.maxWarns} warn(s)`, '▣'),
+                spiderFooter('ZERO-TOLERANCE PROFANITY SHIELD'),
+              ].join('\n'),
+            },
+            { quoted: msg },
+          );
+        }
+        if (toggle !== 'on' && toggle !== 'off') {
+          return sock.sendMessage(
+            from,
+            { text: `❌ Usage: *${prefix}antibadword strict [on|off]*` },
+            { quoted: msg },
+          );
+        }
+        const updated = defaultAntibadwordStore.setGroupConfig(from, { strict: toggle === 'on' });
+        return sock.sendMessage(
+          from,
+          {
+            text: `✅ Anti-Badword strict detection turned *${updated.strict ? 'ON (VERY STRICT)' : 'OFF (STANDARD)'}*.`,
+          },
+          { quoted: msg },
+        );
+      }
+
+      if (sub === 'notify' || sub === 'alert' || sub === 'alerts') {
+        const toggle = String(tokens[1] || '').toLowerCase();
+        if (toggle !== 'on' && toggle !== 'off') {
+          return sock.sendMessage(from, { text: `❌ Usage: *${prefix}antibadword notify on|off*` }, { quoted: msg });
+        }
+        const updated = defaultAntibadwordStore.setGroupConfig(from, { notify: toggle === 'on' });
+        return sock.sendMessage(
+          from,
+          { text: `✅ Anti-Badword group alerts turned *${updated.notify ? 'ON' : 'OFF'}*.` },
+          { quoted: msg },
+        );
+      }
+
       const direct = normalizeCompositeAction(sub, ANTIBADWORD_ACTIONS);
       if (direct || sub === 'action' || sub === 'mode' || sub === 'set') {
         const chosen = direct || normalizeCompositeAction(tokens[1], ANTIBADWORD_ACTIONS);
         if (!chosen) {
           return sock.sendMessage(
             from,
-            { text: `❌ Usage: *${prefix}antibadword set <delete|warn|kick|warnkick>*` },
+            { text: `❌ Usage: *${prefix}antibadword set <delete|warn|kick|warnkick|mute>*` },
             { quoted: msg },
           );
         }
@@ -262,13 +332,51 @@ export const commands = [
         );
       }
 
+      if (sub === 'whitelist' || sub === 'wl' || sub === 'allow') {
+        const wlAction = sub === 'allow' ? 'add' : String(tokens[1] || 'list').toLowerCase();
+        const wlWord = sub === 'allow' ? rest : tokens.slice(2).join(' ').trim();
+        if (wlAction === 'list' || wlAction === 'show') {
+          const list = cur.whitelist || [];
+          return sock.sendMessage(
+            from,
+            {
+              text: list.length
+                ? `✦ *Whitelisted Words (${list.length}):*\n${list.map((w, i) => `${i + 1}. ${w}`).join('\n')}`
+                : 'ℹ️ No whitelisted words configured.',
+            },
+            { quoted: msg },
+          );
+        }
+        if ((wlAction === 'add' || wlAction === 'allow') && wlWord) {
+          const { added, config: updated } = defaultAntibadwordStore.addWhitelistWord(from, wlWord);
+          return sock.sendMessage(
+            from,
+            { text: added ? `✅ Whitelisted *"${wlWord.toLowerCase()}"* (${updated.whitelist.length} entries).` : 'ℹ️ Already whitelisted.' },
+            { quoted: msg },
+          );
+        }
+        if ((wlAction === 'remove' || wlAction === 'del' || wlAction === 'rm') && wlWord) {
+          const { removed } = defaultAntibadwordStore.removeWhitelistWord(from, wlWord);
+          return sock.sendMessage(
+            from,
+            { text: removed ? `✅ Removed *"${wlWord.toLowerCase()}"* from whitelist.` : '❌ Word not found in whitelist.' },
+            { quoted: msg },
+          );
+        }
+        return sock.sendMessage(
+          from,
+          { text: `❌ Usage: *${prefix}antibadword whitelist add|remove|list <word>*` },
+          { quoted: msg },
+        );
+      }
+
       if (sub === 'words' || sub === 'list') {
         return sock.sendMessage(
           from,
           {
             text: cur.customWords.length
               ? `📋 *Custom Badwords (${cur.customWords.length}):*\n${cur.customWords.map((w, i) => `${i + 1}. ${w}`).join('\n')}`
-              : 'ℹ️ No custom badwords configured (default profanity filter active).',
+              : 'ℹ️ No custom badwords configured (strict default profanity filter active).',
           },
           { quoted: msg },
         );
@@ -305,7 +413,11 @@ export const commands = [
         const res = detectBadword(rest, cur);
         return sock.sendMessage(
           from,
-          { text: res.matched ? `🚨 Badword detected: *"${res.word}"*` : '✅ No blocked badwords detected.' },
+          {
+            text: res.matched
+              ? `🚨 Badword detected: *"${res.word}"*${res.reason ? ` (${res.reason})` : ''}`
+              : '✅ No blocked badwords detected.',
+          },
           { quoted: msg },
         );
       }
