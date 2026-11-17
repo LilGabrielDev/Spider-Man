@@ -10,16 +10,57 @@ import {
   isParticipantAdminEntry,
 } from '../../spider/utils/groupRoleResolver.js';
 import {
+  spiderHeader,
+  spiderRow,
+  spiderFooter,
+} from '../utils/tableStyle.js';
+import {
   executeGroupSettingUpdate,
   executeRequestParticipantsAction,
   extractContextInfo,
   isFromBot,
   isSendMessageFailure,
   normalizeTargetJidInput,
+  pinMessageSafely,
+  resolveQuotedDeleteTargetAsync,
   resolveTargetFromMessage,
   safeDeleteTempMessage,
   sendWithAckCheck,
 } from '../../spider/utils/groupActionHelper.js';
+
+const lastPinnedMessageByGroup = new Map();
+
+function parsePinDurationArg(rawToken) {
+  const token = String(rawToken || '').trim().toLowerCase();
+  if (!token) return null;
+  if (token === '24h' || token === '1d' || token === 'day' || token === '86400') {
+    return { seconds: 86400, label: '24 Hours' };
+  }
+  if (token === '7d' || token === '1w' || token === 'week' || token === '604800') {
+    return { seconds: 604800, label: '7 Days' };
+  }
+  if (token === '30d' || token === '1mo' || token === 'month' || token === '2592000') {
+    return { seconds: 2592000, label: '30 Days' };
+  }
+  return null;
+}
+
+function resolvePinReplyKey({ from, msg, sock, metadata, quotedTarget }) {
+  if (quotedTarget?.msg?.key?.id) {
+    return quotedTarget.msg.key;
+  }
+  const { contextInfo } = extractContextInfo(msg);
+  const stanzaId = contextInfo?.stanzaId || '';
+  if (!stanzaId) return null;
+  const participant = cleanJid(contextInfo?.participant || '');
+  const fromMe = participant ? isFromBot(participant, sock) : true;
+  return {
+    remoteJid: from,
+    fromMe,
+    id: stanzaId,
+    ...(participant ? { participant } : {}),
+  };
+}
 
 async function fetchMetaSafe(sock, from) {
   try {
@@ -1109,6 +1150,161 @@ export const commands = [
         const errMsg = await t(from, 'create', 'error');
         await sock.sendMessage(from, { text: errMsg }, { quoted: msg });
       }
+    },
+  },
+  {
+    name: 'pinmsg',
+    aliases: ['pininchat', 'pinannounce'],
+    description: 'Pin a replied message or send & pin an announcement inside the group.',
+    category: 'Group',
+    groupOnly: true,
+    adminOnly: true,
+    botAdminOnly: true,
+    execute: async ({ sock, from, text, args = [], msg, config }) => {
+      if (!String(from || '').endsWith('@g.us')) {
+        const groupOnlyMsg = await t(from, 'group', 'groupOnly');
+        return sock.sendMessage(from, { text: groupOnlyMsg }, { quoted: msg });
+      }
+
+      const botName = config?.BOT_NAME || CONFIG.BOT_NAME || 'Spider Man';
+      const metadata = await fetchMetaSafe(sock, from);
+      const quotedTarget = await resolveQuotedDeleteTargetAsync({ from, msg, sock, metadata });
+      const repliedKey = resolvePinReplyKey({ from, msg, sock, metadata, quotedTarget });
+
+      const rawText = String(text || '').trim();
+      const tokens = (Array.isArray(args) && args.length > 0
+        ? args.map((item) => String(item || '').trim())
+        : rawText.split(/\s+/)
+      ).filter(Boolean);
+
+      const firstDuration = parsePinDurationArg(tokens[0]);
+      const duration = firstDuration || { seconds: 86400, label: '24 Hours' };
+      const announcementText = firstDuration
+        ? rawText.slice(tokens[0].length).trim()
+        : rawText;
+
+      if (repliedKey && tokens.length > 0 && !firstDuration && /^\d+[a-z]*$/i.test(tokens[0])) {
+        return sock.sendMessage(
+          from,
+          { text: '❌ Supported pin durations are *24h*, *7d*, or *30d*.\nExample: *.pinmsg 7d*' },
+          { quoted: msg },
+        );
+      }
+
+      let targetKey = repliedKey;
+      let postedAnnouncement = false;
+
+      if (!targetKey) {
+        if (!announcementText) {
+          const usage = [
+            spiderHeader(botName, 'PIN MESSAGE'),
+            spiderRow('REPLY MODE', 'Reply to any message: .pinmsg [24h|7d|30d]', '📌'),
+            spiderRow('ANNOUNCE', '.pinmsg [24h|7d|30d] <text>', '📢'),
+            spiderRow('UNPIN', 'Reply or run: .unpinmsg', '📍'),
+            spiderFooter('DURATIONS: 24h • 7d • 30d'),
+          ].join('\n');
+          return sock.sendMessage(from, { text: usage }, { quoted: msg });
+        }
+
+        const sendRes = await sendWithAckCheck({
+          sock,
+          from,
+          payload: { text: `📌 *ANNOUNCEMENT*\n\n${announcementText}` },
+        });
+        if (!sendRes.ok || !sendRes.result?.key?.id) {
+          return sock.sendMessage(
+            from,
+            { text: `❌ Failed to send announcement: ${sendRes.error || 'send failed'}` },
+            { quoted: msg },
+          );
+        }
+        targetKey = {
+          remoteJid: sendRes.result.key.remoteJid || from,
+          fromMe: sendRes.result.key.fromMe ?? true,
+          id: sendRes.result.key.id,
+          ...(sendRes.result.key.participant ? { participant: sendRes.result.key.participant } : {}),
+        };
+        postedAnnouncement = true;
+      }
+
+      const pinRes = await pinMessageSafely({
+        sock,
+        from,
+        key: targetKey,
+        type: 1,
+        time: duration.seconds,
+      });
+
+      if (!pinRes.ok) {
+        return sock.sendMessage(
+          from,
+          { text: `❌ Failed to pin message: ${pinRes.error || 'WhatsApp rejected pin'}` },
+          { quoted: msg },
+        );
+      }
+
+      lastPinnedMessageByGroup.set(from, { key: targetKey, pinnedAt: Date.now() });
+      const confirm = [
+        spiderHeader(botName, 'MESSAGE PINNED'),
+        spiderRow('DURATION', duration.label, '⏱️'),
+        spiderRow('SOURCE', postedAnnouncement ? 'New announcement' : 'Replied message', '📌'),
+        spiderFooter('USE .unpinmsg TO UNPIN'),
+      ].join('\n');
+      return sock.sendMessage(from, { text: confirm }, { quoted: msg });
+    },
+  },
+  {
+    name: 'unpinmsg',
+    aliases: ['unpinmessage', 'unpinm', 'unpininchat'],
+    description: 'Unpin a pinned message inside the group chat.',
+    category: 'Group',
+    groupOnly: true,
+    adminOnly: true,
+    botAdminOnly: true,
+    execute: async ({ sock, from, msg, config }) => {
+      if (!String(from || '').endsWith('@g.us')) {
+        const groupOnlyMsg = await t(from, 'group', 'groupOnly');
+        return sock.sendMessage(from, { text: groupOnlyMsg }, { quoted: msg });
+      }
+
+      const botName = config?.BOT_NAME || CONFIG.BOT_NAME || 'Spider Man';
+      const metadata = await fetchMetaSafe(sock, from);
+      const quotedTarget = await resolveQuotedDeleteTargetAsync({ from, msg, sock, metadata });
+      const repliedKey = resolvePinReplyKey({ from, msg, sock, metadata, quotedTarget });
+      const tracked = lastPinnedMessageByGroup.get(from);
+      const targetKey = repliedKey || tracked?.key || null;
+
+      if (!targetKey) {
+        return sock.sendMessage(
+          from,
+          { text: '❌ Reply to the pinned message inside this group and run *.unpinmsg*.' },
+          { quoted: msg },
+        );
+      }
+
+      const unpinRes = await pinMessageSafely({
+        sock,
+        from,
+        key: targetKey,
+        type: 2,
+        time: 0,
+      });
+
+      if (!unpinRes.ok) {
+        return sock.sendMessage(
+          from,
+          { text: `❌ Failed to unpin message: ${unpinRes.error || 'WhatsApp rejected unpin'}` },
+          { quoted: msg },
+        );
+      }
+
+      lastPinnedMessageByGroup.delete(from);
+      const confirm = [
+        spiderHeader(botName, 'MESSAGE UNPINNED'),
+        spiderRow('STATUS', 'Removed pinned banner from chat', '📍'),
+        spiderFooter(`${botName} // GROUP`),
+      ].join('\n');
+      return sock.sendMessage(from, { text: confirm }, { quoted: msg });
     },
   },
 ];
