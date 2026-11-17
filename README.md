@@ -6,6 +6,7 @@
 [![SCAN QR](https://img.shields.io/badge/SCAN%20QR-111827?style=for-the-badge&logo=qrcode&logoColor=white)](https://lilgabriel-session.onrender.com/qr)
 [![DEPLOY SPIDER MAN](https://img.shields.io/badge/DEPLOY%20SPIDER%20MAN-C9A227?style=for-the-badge&logo=rocket&logoColor=black)](https://spider-man-fork-verifier-flax.vercel.app)
 [![KATABUMP PANEL](https://img.shields.io/badge/Deploy%20on-Katabump-D6B7D6?style=for-the-badge&logo=server&logoColor=black)](https://dashboard.katabump.com/auth/login#d6b7d6)
+[![DEPLOY TO KOYEB](https://img.shields.io/badge/Deploy%20on-Koyeb-121212?style=for-the-badge&logo=koyeb&logoColor=white)](https://app.koyeb.com/deploy?type=git&repository=github.com/LilGabrielDev/Spider-Man&branch=main&name=spider-man-md&ports=3000;http;/&env[MODE]=private&env[TZ]=Africa/Nairobi&env[OWNER_NAME]=Spider%20Man&env[BOT_NAME]=Spider%20Man&env[ADMIN_PROTECTION]=on&env[AUTO_READ]=off&env[SESSION_ID]=)
 [![DOWNLOAD ZIP](https://img.shields.io/badge/DOWNLOAD%20ZIP-5B21B6?style=for-the-badge&logo=github&logoColor=white)](https://github.com/LilGabrielDev/Spider-Man/archive/refs/heads/main.zip)
 [![FORK REPOSITORY](https://img.shields.io/badge/FORK%20REPOSITORY-374151?style=for-the-badge&logo=github&logoColor=white)](https://github.com/LilGabrielDev/Spider-Man/fork)
 
@@ -43,6 +44,14 @@ Open the [Katabump panel](https://dashboard.katabump.com/auth/login#d6b7d6) and 
 - **Startup:** `npm start` (runs `index.js`)
 
 Add `SESSION_ID` or `SESSION` as a private server variable before starting the bot. Use `.env-sample` as a reference for other optional settings, and keep session and API credentials in the panel rather than committing them to the repository.
+
+## Koyeb Deployment
+
+Deploy directly from GitHub on [Koyeb](https://app.koyeb.com/) using either the **Buildpack** builder (`Procfile` + `.npmrc` + `package.json`) or **Docker** (`Dockerfile`), or use `koyeb.yaml` as a reference:
+
+- **Builder:** Buildpack (`npm start`) or Dockerfile
+- **Port & Health Check:** Expose port `3000` (or leave `PORT` unset to use Koyeb's injected `PORT`) with HTTP health check path `/`
+- **Required Secret:** Set `SESSION_ID` or `SESSION` in Koyeb's environment variables before deploying
 
 ---
 

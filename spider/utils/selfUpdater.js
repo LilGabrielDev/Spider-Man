@@ -47,21 +47,38 @@ export function normalizeRepository(rawRepo, config) {
   return candidate;
 }
 
-export function detectHostingEnvironment(env = process.env) {
-  if (env.HEROKU_API_KEY && env.HEROKU_APP_NAME) {
-    return { mode: 'heroku', label: 'Heroku' };
-  }
-
+function resolveDeployHookInfo(env = process.env) {
   const explicit = String(env.HOST_PROVIDER || env.HOSTING_PROVIDER || '')
     .trim()
     .toLowerCase();
 
   const deployHookUrl = String(
-    env.DEPLOY_HOOK_URL || env.RENDER_DEPLOY_HOOK_URL || '',
+    env.DEPLOY_HOOK_URL || env.RENDER_DEPLOY_HOOK_URL || env.KOYEB_DEPLOY_HOOK_URL || '',
   ).trim();
-  if (deployHookUrl) {
-    const label = env.RENDER || explicit === 'render' ? 'Render' : 'Deploy Hook';
-    return { mode: 'deploy_hook', label, deployHookUrl };
+  if (!deployHookUrl) return null;
+
+  const isRender = Boolean(env.RENDER || env.RENDER_DEPLOY_HOOK_URL || explicit === 'render');
+  const isKoyeb = Boolean(
+    env.KOYEB ||
+      env.KOYEB_ENV ||
+      env.KOYEB_SERVICE_ID ||
+      env.KOYEB_SERVICE_NAME ||
+      env.KOYEB_APP_NAME ||
+      env.KOYEB_DEPLOY_HOOK_URL ||
+      explicit === 'koyeb',
+  );
+  const label = isRender ? 'Render' : isKoyeb ? 'Koyeb' : 'Deploy Hook';
+  return { mode: 'deploy_hook', label, deployHookUrl };
+}
+
+export function detectHostingEnvironment(env = process.env) {
+  if (env.HEROKU_API_KEY && env.HEROKU_APP_NAME) {
+    return { mode: 'heroku', label: 'Heroku' };
+  }
+
+  const hookInfo = resolveDeployHookInfo(env);
+  if (hookInfo) {
+    return hookInfo;
   }
 
   const label = detectHostingProvider({
@@ -77,16 +94,9 @@ export async function detectHostingEnvironmentAsync(env = process.env) {
     return { mode: 'heroku', label: 'Heroku' };
   }
 
-  const explicit = String(env.HOST_PROVIDER || env.HOSTING_PROVIDER || '')
-    .trim()
-    .toLowerCase();
-
-  const deployHookUrl = String(
-    env.DEPLOY_HOOK_URL || env.RENDER_DEPLOY_HOOK_URL || '',
-  ).trim();
-  if (deployHookUrl) {
-    const label = env.RENDER || explicit === 'render' ? 'Render' : 'Deploy Hook';
-    return { mode: 'deploy_hook', label, deployHookUrl };
+  const hookInfo = resolveDeployHookInfo(env);
+  if (hookInfo) {
+    return hookInfo;
   }
 
   const label = await detectHostingProviderAsync({
