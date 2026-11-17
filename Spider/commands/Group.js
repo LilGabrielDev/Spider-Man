@@ -46,7 +46,7 @@ async function invalidateGroupCacheSafe(sock, from) {
 export const commands = [
   {
     name: 'online',
-    aliases: ['listonline', 'active', 'activeusers'],
+    aliases: ['listonline', 'activeusers'],
     description: 'List currently online group members.',
     category: 'Group',
     groupOnly: true,
