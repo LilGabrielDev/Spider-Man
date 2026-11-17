@@ -403,6 +403,7 @@ export function extractViewOnceMedia(rawMessage) {
     ['video', 'video', layer.ptvMessage, true],
     ['audio', 'audio', layer.audioMessage, false],
     ['document', 'document', layer.documentMessage, false],
+    ['sticker', 'sticker', layer.stickerMessage, false],
   ];
 
   for (const [type, dlType, media, isPtv] of candidates) {
@@ -451,23 +452,43 @@ function toMediaKeyBuffer(mediaKey) {
 }
 
 async function streamMediaToBuffer(targetMedia, dlType) {
-  const hasUrl =
-    typeof targetMedia?.url === 'string' && targetMedia.url.trim().startsWith('https://');
+  const trimmedUrl = typeof targetMedia?.url === 'string' ? targetMedia.url.trim() : '';
+  const hasUrl = trimmedUrl.startsWith('https://');
+  const isMmgUrl = trimmedUrl.startsWith('https://mmg.whatsapp.net/');
   const hasDirectPath =
     typeof targetMedia?.directPath === 'string' && targetMedia.directPath.trim().length > 0;
-  let stream;
-  if (hasUrl && !targetMedia.url.trim().startsWith('https://mmg.whatsapp.net/') && !hasDirectPath) {
+
+  const readStream = async (s) => {
+    const chunks = [];
+    for await (const chunk of s) {
+      chunks.push(chunk);
+    }
+    const buf = chunks.length > 0 ? Buffer.concat(chunks) : null;
+    return buf && buf.length > 0 ? buf : null;
+  };
+
+  if (hasUrl && !isMmgUrl && !hasDirectPath) {
     const keys = await getMediaKeys(toMediaKeyBuffer(targetMedia.mediaKey) || targetMedia.mediaKey, dlType);
-    stream = await downloadEncryptedContent(targetMedia.url.trim(), keys);
-  } else {
-    stream = await downloadContentFromMessage(targetMedia, dlType);
+    return readStream(await downloadEncryptedContent(trimmedUrl, keys));
   }
-  const chunks = [];
-  for await (const chunk of stream) {
-    chunks.push(chunk);
+
+  try {
+    const stream = await downloadContentFromMessage(targetMedia, dlType);
+    const buf = await readStream(stream);
+    if (buf) return buf;
+  } catch (err) {
+    if (hasUrl && !isMmgUrl) {
+      const keys = await getMediaKeys(toMediaKeyBuffer(targetMedia.mediaKey) || targetMedia.mediaKey, dlType);
+      return readStream(await downloadEncryptedContent(trimmedUrl, keys));
+    }
+    throw err;
   }
-  const buf = chunks.length > 0 ? Buffer.concat(chunks) : null;
-  return buf && buf.length > 0 ? buf : null;
+
+  if (hasUrl && !isMmgUrl) {
+    const keys = await getMediaKeys(toMediaKeyBuffer(targetMedia.mediaKey) || targetMedia.mediaKey, dlType);
+    return readStream(await downloadEncryptedContent(trimmedUrl, keys));
+  }
+  return null;
 }
 
 function unwrapMediaNodeFromMessage(rawMsg, preferredKeys = []) {
@@ -491,6 +512,51 @@ function unwrapMediaNodeFromMessage(rawMsg, preferredKeys = []) {
     if (layer[key] && typeof layer[key] === 'object') return layer[key];
   }
   return null;
+}
+
+async function buildGroupReuploadKeys(baseKey, sock) {
+  if (!baseKey || typeof baseKey !== 'object') return [];
+  const keys = [baseKey];
+  const remoteJid = String(baseKey.remoteJid || '');
+  if (!remoteJid.endsWith('@g.us')) {
+    return keys;
+  }
+
+  const seenParticipants = new Set(
+    [baseKey.participant].filter(Boolean).map((p) => String(p).trim().toLowerCase()),
+  );
+  const addParticipantVariant = (candidate) => {
+    const val = String(candidate || '').trim();
+    if (!val) return;
+    const lower = val.toLowerCase();
+    if (seenParticipants.has(lower)) return;
+    seenParticipants.add(lower);
+    keys.push({ ...baseKey, participant: val });
+  };
+
+  for (const rawAlt of [baseKey.participantAlt, baseKey.participantPn]) {
+    addParticipantVariant(rawAlt);
+    addParticipantVariant(cleanJid(rawAlt));
+  }
+  if (baseKey.participant) {
+    addParticipantVariant(cleanJid(baseKey.participant));
+  }
+
+  const lidMapping = sock?.signalRepository?.lidMapping;
+  if (lidMapping && baseKey.participant) {
+    const cleaned = cleanJid(baseKey.participant);
+    try {
+      if (cleaned.endsWith('@lid') && typeof lidMapping.getPNForLID === 'function') {
+        const pn = await lidMapping.getPNForLID(cleaned);
+        if (pn) addParticipantVariant(cleanJid(pn));
+      } else if (cleaned.endsWith('@s.whatsapp.net') && typeof lidMapping.getLIDForPN === 'function') {
+        const lid = await lidMapping.getLIDForPN(cleaned);
+        if (lid) addParticipantVariant(cleanJid(lid));
+      }
+    } catch {}
+  }
+
+  return keys;
 }
 
 export async function downloadMediaWithRecovery({
@@ -561,63 +627,82 @@ export async function downloadMediaWithRecovery({
           ? 'audioMessage'
           : dlType === 'document'
             ? 'documentMessage'
-            : 'videoMessage');
+            : dlType === 'sticker'
+              ? 'stickerMessage'
+              : 'videoMessage');
 
-  // 3) Direct re-upload request + retry (handles 401/403 too, since Baileys downloadMediaMessage skips 401/403)
+  // 3) Direct re-upload request + retry (handles 401/403 too, and retries alternate group participant PN/LID keys)
   if (msg?.key && sock) {
     // Baileys assertMediaContent doesn't recognize ptvMessage directly; map to videoMessage for updateMediaMessage
     const reuploadMediaField = resolvedMediaKey === 'ptvMessage' ? 'videoMessage' : resolvedMediaKey;
-    const reuploadMsg = {
-      key: msg.key,
-      message: { [reuploadMediaField]: normalizedMedia },
-    };
+    const candidateKeys = await buildGroupReuploadKeys(msg.key, sock);
 
     if (typeof sock.updateMediaMessage === 'function') {
-      try {
-        const updatedMsg = await sock.updateMediaMessage(reuploadMsg);
-        const updatedNode = unwrapMediaNodeFromMessage(updatedMsg?.message, [
-          reuploadMediaField,
-          resolvedMediaKey,
-          'videoMessage',
-          'imageMessage',
-          'audioMessage',
-          'documentMessage',
-        ]);
-        const refreshedMedia = updatedNode
-          ? {
-              ...normalizedMedia,
-              ...updatedNode,
-              mediaKey: toMediaKeyBuffer(updatedNode.mediaKey) || keyBuffer,
-            }
-          : normalizedMedia;
-        const refreshedBuf = await streamMediaToBuffer(refreshedMedia, dlType).catch(() => null);
-        if (refreshedBuf) return refreshedBuf;
-      } catch {
-        // continue to downloadMediaMessage fallback
-      }
+      for (const candidateKey of candidateKeys) {
+        const reuploadMsg = {
+          key: candidateKey,
+          message: { [reuploadMediaField]: normalizedMedia },
+        };
 
-      try {
-        const buf = await downloadMediaMessage(
-          reuploadMsg,
-          'buffer',
-          {},
-          {
-            logger: SILENT_LOGGER,
-            reuploadRequest: sock.updateMediaMessage.bind(sock),
-          },
-        );
-        if (Buffer.isBuffer(buf) && buf.length > 0) return buf;
-      } catch {}
+        let updateSucceeded = false;
+        try {
+          const updatedMsg = await sock.updateMediaMessage(reuploadMsg);
+          updateSucceeded = true;
+          const updatedNode = unwrapMediaNodeFromMessage(updatedMsg?.message, [
+            reuploadMediaField,
+            resolvedMediaKey,
+            'videoMessage',
+            'imageMessage',
+            'audioMessage',
+            'documentMessage',
+            'stickerMessage',
+          ]);
+          const refreshedMedia = updatedNode
+            ? {
+                ...normalizedMedia,
+                ...updatedNode,
+                mediaKey: toMediaKeyBuffer(updatedNode.mediaKey) || keyBuffer,
+              }
+            : normalizedMedia;
+          if (Buffer.isBuffer(refreshedMedia._buffer) && refreshedMedia._buffer.length > 0) {
+            return refreshedMedia._buffer;
+          }
+          if (Buffer.isBuffer(refreshedMedia.buffer) && refreshedMedia.buffer.length > 0) {
+            return refreshedMedia.buffer;
+          }
+          const refreshedBuf = await streamMediaToBuffer(refreshedMedia, dlType).catch(() => null);
+          if (refreshedBuf) return refreshedBuf;
+        } catch {
+          // continue to next candidate key / fallback
+        }
+
+        if (updateSucceeded || hasValidUrl || hasDirectPath) {
+          try {
+            const buf = await downloadMediaMessage(
+              reuploadMsg,
+              'buffer',
+              {},
+              {
+                logger: SILENT_LOGGER,
+                reuploadRequest: sock.updateMediaMessage.bind(sock),
+              },
+            );
+            if (Buffer.isBuffer(buf) && buf.length > 0) return buf;
+          } catch {}
+        }
+      }
     }
 
     if (typeof sock.downloadMediaMessage === 'function') {
-      try {
-        const customBuf = await sock.downloadMediaMessage({
-          key: msg.key,
-          message: { [resolvedMediaKey]: normalizedMedia },
-        });
-        if (Buffer.isBuffer(customBuf) && customBuf.length > 0) return customBuf;
-      } catch {}
+      for (const candidateKey of candidateKeys) {
+        try {
+          const customBuf = await sock.downloadMediaMessage({
+            key: candidateKey,
+            message: { [resolvedMediaKey]: normalizedMedia },
+          });
+          if (Buffer.isBuffer(customBuf) && customBuf.length > 0) return customBuf;
+        } catch {}
+      }
     }
   }
 

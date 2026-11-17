@@ -2170,6 +2170,132 @@ test('. Vv resilient recovery: stripped empty bytes merge, deviceSentMessage/fut
     assert.equal(quoteFailedOnce, true);
     assert.equal(dmSent.length, 1);
     assert.deepEqual(dmSent[0].payload.image, dmReuploadBytes);
+
+    // 11. Group LID -> PN participant fallback in updateMediaMessage reupload & preserved group participant when loaded from sock.store
+    const grpId = '120363000000100099@g.us';
+    const grpLid = '998877665544@lid';
+    const grpPn = '254700000088@s.whatsapp.net';
+    const grpReuploadBytes = Buffer.from('group-lid-pn-reupload-image');
+    const seenGroupReuploadParticipants = [];
+    const { sock: grpBaseSock, sent: grpSent } = createAckAwareSock();
+    const grpSock = {
+      ...grpBaseSock,
+      signalRepository: {
+        lidMapping: {
+          getPNForLID: async (lid) => (lid === grpLid ? grpPn : null),
+        },
+      },
+      updateMediaMessage: async (m) => {
+        seenGroupReuploadParticipants.push(m?.key?.participant || null);
+        if (m?.key?.participant === grpLid) {
+          throw new Error('LID participant reupload rejected');
+        }
+        if (m?.key?.participant === grpPn) {
+          return {
+            key: m.key,
+            message: {
+              imageMessage: {
+                mediaKey: m.message.imageMessage.mediaKey,
+                _buffer: grpReuploadBytes,
+              },
+            },
+          };
+        }
+        throw new Error('Unexpected participant');
+      },
+      downloadMediaMessage: async (m) => {
+        if (m?.key?.participant === grpPn) return grpReuploadBytes;
+        throw new Error('Must match PN participant');
+      },
+    };
+    await vvCmd.execute({
+      sock: grpSock,
+      from: grpId,
+      msg: {
+        key: { remoteJid: grpId, id: 'cmd-vv-grp-lid-pn' },
+        message: {
+          extendedTextMessage: {
+            text: '. Vv',
+            contextInfo: {
+              stanzaId: 'vo-grp-lid-pn-1',
+              participant: grpLid,
+              quotedMessage: {
+                viewOnceMessageV2: {
+                  message: {
+                    imageMessage: {
+                      viewOnce: true,
+                      mediaKey: base64MediaKey,
+                      caption: 'Group secret',
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    assert.deepEqual(seenGroupReuploadParticipants, [grpLid, grpPn]);
+    assert.equal(grpSent.length, 1);
+    assert.deepEqual(grpSent[0].payload.image, grpReuploadBytes);
+    assert.match(grpSent[0].payload.caption, /Group secret/);
+
+    // 12. Group . Vv on completely stripped quote ({}) triggers requestPlaceholderResend and recovers media
+    const { EventEmitter: GrpEE } = await import('node:events');
+    const grpEv = new GrpEE();
+    const grpStrippedBytes = Buffer.from('group-stripped-empty-quote-pdo');
+    const { sock: grpEmptyBaseSock, sent: grpEmptySent } = createAckAwareSock();
+    let grpEmptyResendKey = null;
+    const grpEmptySock = {
+      ...grpEmptyBaseSock,
+      ev: grpEv,
+      requestPlaceholderResend: async (key) => {
+        grpEmptyResendKey = key;
+        setTimeout(() => {
+          grpEv.emit('messages.upsert', {
+            type: 'notify',
+            messages: [
+              {
+                key: { remoteJid: grpId, id: key.id, fromMe: false, participant: grpPn },
+                message: {
+                  viewOnceMessageV2: {
+                    message: {
+                      imageMessage: {
+                        viewOnce: true,
+                        caption: 'Recovered empty group quote',
+                        _buffer: grpStrippedBytes,
+                      },
+                    },
+                  },
+                },
+              },
+            ],
+          });
+        }, 15);
+      },
+    };
+    await vvCmd.execute({
+      sock: grpEmptySock,
+      from: grpId,
+      msg: {
+        key: { remoteJid: grpId, id: 'cmd-vv-grp-empty-quote' },
+        message: {
+          extendedTextMessage: {
+            text: '. Vv',
+            contextInfo: {
+              stanzaId: 'vo-grp-empty-quote-1',
+              participant: grpPn,
+              quotedMessage: {},
+            },
+          },
+        },
+      },
+    });
+    assert.equal(grpEmptyResendKey?.remoteJid, grpId);
+    assert.equal(grpEmptyResendKey?.participant, grpPn);
+    assert.equal(grpEmptySent.length, 1);
+    assert.deepEqual(grpEmptySent[0].payload.image, grpStrippedBytes);
+    assert.match(grpEmptySent[0].payload.caption, /Recovered empty group quote/);
   } finally {
     clearViewOnceCache();
     if (prevCacheDir === undefined) delete process.env.SPIDER_VIEWONCE_CACHE_DIR;
