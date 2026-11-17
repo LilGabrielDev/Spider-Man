@@ -15,8 +15,20 @@ import {
   detectHostingProviderAsync,
   resetHostDetectorCache,
 } from '../../spider/utils/hostDetector.js';
-import { getWorkerMemoryExecArgv } from '../../spider/utils/resourceGuard.js';
-import { reloadCommandsFromDisk } from '../../spider/utils/runtimeControl.js';
+import {
+  getWorkerMemoryExecArgv,
+  readPanelMemoryLimitBytes,
+  getEffectiveMemoryLimitBytes,
+  isLowMemoryEnvironment,
+  isRenderFreePlan,
+  getContainerMemoryStats,
+  startSessionAndCacheCleaner,
+} from '../../spider/utils/resourceGuard.js';
+import {
+  reloadCommandsFromDisk,
+  registerRuntimeHandlers,
+  resetRuntimeHandlers,
+} from '../../spider/utils/runtimeControl.js';
 import { loadLegacyCommands } from '../utils/legacyPlugins.js';
 
 function getFreePort() {
@@ -364,6 +376,250 @@ test('Katabump fresh SESSION container replenishes pre-keys past MIN_UPLOAD_INTE
   } finally {
     config.BOT_PIC = origBotPic;
     config.AUTO_READ = origAutoRead;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('Katabump SERVER_MEMORY limits drive low-memory sizing, worker flags, cleaner pressure limit, and .host container RAM', async () => {
+  const MB = 1024 * 1024;
+  const maxCgroupFs = {
+    existsSync: (p) => p === '/sys/fs/cgroup/memory.max',
+    readFileSync: () => 'max',
+  };
+
+  assert.equal(readPanelMemoryLimitBytes({ SERVER_MEMORY: '256' }), 256 * MB);
+  assert.equal(readPanelMemoryLimitBytes({ SERVER_MEMORY: '512' }), 512 * MB);
+  assert.equal(readPanelMemoryLimitBytes({ SERVER_MEMORY: '' }), null);
+
+  assert.equal(
+    getEffectiveMemoryLimitBytes({
+      totalMemBytes: 16_384 * MB,
+      env: { SERVER_MEMORY: '256', KATABUMP: '1' },
+      fsImpl: maxCgroupFs,
+    }),
+    256 * MB,
+  );
+
+  assert.equal(
+    isLowMemoryEnvironment({
+      totalMemBytes: 16_384 * MB,
+      env: { SERVER_MEMORY: '512', KATABUMP: '1' },
+      fsImpl: maxCgroupFs,
+    }),
+    true,
+  );
+  assert.equal(
+    isRenderFreePlan({
+      totalMemBytes: 16_384 * MB,
+      env: { SERVER_MEMORY: '512', KATABUMP: '1' },
+      fsImpl: maxCgroupFs,
+    }),
+    false,
+  );
+
+  assert.deepEqual(
+    getWorkerMemoryExecArgv({
+      totalMemBytes: 16_384 * MB,
+      env: { SERVER_MEMORY: '256', KATABUMP: '1' },
+      existingExecArgv: [],
+      fsImpl: maxCgroupFs,
+    }),
+    ['--max-old-space-size=166', '--expose-gc'],
+  );
+  assert.deepEqual(
+    getWorkerMemoryExecArgv({
+      totalMemBytes: 16_384 * MB,
+      env: { SERVER_MEMORY: '512', P_SERVER_UUID: 'kata-512' },
+      existingExecArgv: [],
+      fsImpl: maxCgroupFs,
+    }),
+    ['--max-old-space-size=320', '--expose-gc'],
+  );
+  assert.deepEqual(
+    getWorkerMemoryExecArgv({
+      totalMemBytes: 16_384 * MB,
+      env: { SERVER_MEMORY: '128', KATABUMP: '1' },
+      existingExecArgv: [],
+      fsImpl: maxCgroupFs,
+    }),
+    ['--max-old-space-size=96', '--expose-gc'],
+  );
+
+  const stats = getContainerMemoryStats({
+    totalMemBytes: 16_384 * MB,
+    env: { SERVER_MEMORY: '512', KATABUMP: '1' },
+    fsImpl: {
+      existsSync: (p) => p === '/sys/fs/cgroup/memory.current',
+      readFileSync: () => String(128 * MB),
+    },
+    osImpl: { totalmem: () => 16_384 * MB, freemem: () => 8_192 * MB },
+  });
+  assert.equal(stats.totalBytes, 512 * MB);
+  assert.equal(stats.usedBytes, 128 * MB);
+  assert.equal(stats.freeBytes, 384 * MB);
+  assert.equal(stats.percent, 25);
+  assert.equal(stats.isContainerLimited, true);
+
+  // Cleaner uses SERVER_MEMORY=256 as the memory pressure ceiling on Katabump
+  let pressureInfo = null;
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'spider-kata-cleaner-'));
+  const cleaner = startSessionAndCacheCleaner({
+    cwd: tmpDir,
+    authDir: path.join(tmpDir, 'auth'),
+    env: { SERVER_MEMORY: '256', KATABUMP: '1' },
+    intervalMs: 60_000,
+    memoryWatchIntervalMs: 0,
+    quiet: true,
+    onMemoryPressure: (info) => {
+      pressureInfo = info;
+    },
+  });
+  try {
+    const res = cleaner.checkMemoryNow({ force: true });
+    assert.equal(res.memoryTrimmed, true);
+    assert.ok(pressureInfo);
+    assert.ok(pressureInfo.limitBytes <= 256 * MB);
+  } finally {
+    cleaner.stop();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+
+  // .host reports 0.50 GB container RAM when SERVER_MEMORY=512
+  const origKatabump = process.env.KATABUMP;
+  const origServerMemory = process.env.SERVER_MEMORY;
+  process.env.KATABUMP = '1';
+  process.env.SERVER_MEMORY = '512';
+  resetHostDetectorCache();
+  try {
+    const { commands: hostCmds } = await import('../commands/Host.js');
+    const hostCmd = hostCmds.find((c) => c.name === 'host');
+    const sent = [];
+    await hostCmd.execute({
+      sock: {
+        sendMessage: async (jid, payload) => {
+          sent.push({ jid, payload });
+          return { key: { id: 'host-mem-1', remoteJid: jid, fromMe: true } };
+        },
+      },
+      from: '254700000001@s.whatsapp.net',
+      text: '',
+      msg: { key: { id: 'in-host-mem', remoteJid: '254700000001@s.whatsapp.net', fromMe: true } },
+    });
+    assert.equal(sent.length, 1);
+    assert.match(sent[0].payload.text, /Katabump/);
+    assert.match(sent[0].payload.text, /0\.50\s*GB/);
+  } finally {
+    if (origKatabump === undefined) delete process.env.KATABUMP;
+    else process.env.KATABUMP = origKatabump;
+    if (origServerMemory === undefined) delete process.env.SERVER_MEMORY;
+    else process.env.SERVER_MEMORY = origServerMemory;
+    resetHostDetectorCache();
+  }
+});
+
+test('Katabump .restart uses supervised restart handler without hard-exiting, and .env-sample preserves SERVER_PORT', async () => {
+  const { commands: userCmds } = await import('../commands/User.js');
+  const restartCmd = userCmds.find((c) => c.name === 'restart');
+  assert.ok(restartCmd);
+
+  const origSupervised = process.env.SPIDER_SUPERVISED;
+  let shutdownCalled = 0;
+  process.env.SPIDER_SUPERVISED = '1';
+  registerRuntimeHandlers({
+    shutdownForRestart: async () => {
+      shutdownCalled += 1;
+    },
+  });
+
+  const sent = [];
+  try {
+    await restartCmd.execute({
+      sock: {
+        sendMessage: async (jid, payload) => {
+          sent.push({ jid, payload });
+          return { key: { id: 'restart-1', remoteJid: jid, fromMe: true } };
+        },
+      },
+      from: '254700000001@s.whatsapp.net',
+      msg: { key: { id: 'in-restart', remoteJid: '254700000001@s.whatsapp.net', fromMe: true } },
+    });
+    assert.equal(sent.length, 1);
+    assert.equal(shutdownCalled, 1);
+  } finally {
+    resetRuntimeHandlers();
+    if (origSupervised === undefined) delete process.env.SPIDER_SUPERVISED;
+    else process.env.SPIDER_SUPERVISED = origSupervised;
+  }
+
+  const envSample = fs.readFileSync(path.join(process.cwd(), '.env-sample'), 'utf8');
+  assert.equal(/^\s*PORT\s*=/m.test(envSample), false, '.env-sample must keep PORT= commented so SERVER_PORT works');
+});
+
+test('Katabump worker survives HTTP EADDRINUSE port conflict without crashing', async () => {
+  const occupiedServer = net.createServer();
+  await new Promise((resolve, reject) => {
+    occupiedServer.once('error', reject);
+    occupiedServer.listen(0, '0.0.0.0', resolve);
+  });
+  const occupiedPort = occupiedServer.address().port;
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'spider-katabump-eaddrinuse-'));
+  const authDir = path.join(tmpDir, 'auth');
+  const dbPath = path.join(tmpDir, 'lil.db');
+
+  const sampleCreds = {
+    noiseKey: { private: { type: 'Buffer', data: [1, 2, 3] }, public: { type: 'Buffer', data: [4, 5, 6] } },
+    signedIdentityKey: { private: { type: 'Buffer', data: [7, 8, 9] }, public: { type: 'Buffer', data: [10, 11, 12] } },
+    signedPreKey: { keyPair: { private: { type: 'Buffer', data: [13] }, public: { type: 'Buffer', data: [14] } }, signature: { type: 'Buffer', data: [15] }, keyId: 1 },
+    registrationId: 54321,
+    advSecretKey: 'dGVzdA==',
+    me: { id: '254700000001:5@s.whatsapp.net' },
+    registered: true,
+  };
+
+  const child = spawn(process.execPath, ['index.js'], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PORT: '',
+      APP_PORT: '',
+      SERVER_PORT: String(occupiedPort),
+      SERVER_MEMORY: '512',
+      KATABUMP: '1',
+      AUTH_DIR: authDir,
+      LIL_DB_PATH: dbPath,
+      SESSION: Buffer.from(JSON.stringify(sampleCreds), 'utf8').toString('base64'),
+      SESSION_ID: '',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  let stdout = '';
+  let stderr = '';
+  let exitedEarly = false;
+  child.stdout.on('data', (c) => { stdout += c.toString(); });
+  child.stderr.on('data', (c) => { stderr += c.toString(); });
+  child.on('exit', () => { exitedEarly = true; });
+
+  try {
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline && !(stdout + stderr).includes('EADDRINUSE')) {
+      if (exitedEarly) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+
+    const combinedOutput = `${stdout}\n${stderr}`;
+    assert.equal(exitedEarly, false, `Worker crashed on EADDRINUSE instead of surviving.\nSTDOUT:\n${stdout}\nSTDERR:\n${stderr}`);
+    assert.match(combinedOutput, /HTTP server error on port \d+ \(EADDRINUSE\)/);
+  } finally {
+    child.kill('SIGTERM');
+    await new Promise((resolve) => {
+      child.on('exit', resolve);
+      setTimeout(() => {
+        try { child.kill('SIGKILL'); } catch {}
+        resolve();
+      }, 5000);
+    });
+    await new Promise((resolve) => occupiedServer.close(resolve));
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });

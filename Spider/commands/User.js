@@ -11,6 +11,7 @@ import {
   resolveQuotedDeleteTargetAsync,
   resolveTargetFromMessage,
 } from '../../spider/utils/groupActionHelper.js';
+import { applyPostUpdateReload } from '../../spider/utils/runtimeControl.js';
 
 let isStatusFetching = false;
 let fetchInterval = null;
@@ -419,7 +420,10 @@ export const commands = [
     execute: async ({ sock, from, msg }) => {
       const restartMsg = await t(from, 'user', 'restartMessage');
       await sock.sendMessage(from, { text: restartMsg }, { quoted: msg });
-      process.exit(0);
+      const reloadRes = await applyPostUpdateReload();
+      if (reloadRes?.mode !== 'supervised_restart') {
+        process.exit(0);
+      }
     },
   },
 ];
