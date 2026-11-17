@@ -1,9 +1,10 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { downloadContentFromMessage } from '@whiskeysockets/baileys';
+import { downloadContentFromMessage, downloadMediaMessage } from '@whiskeysockets/baileys';
 import { spiderDivider, spiderFooter, spiderHeader, spiderRow } from '../Spider/utils/tableStyle.js';
 import { cleanJid, extractPhoneDigits } from './utils/groupRoleResolver.js';
+import { SILENT_LOGGER } from './utils/privacyLogger.js';
 
 function resolveWritableAntivvPath(fileName = 'antivv.json') {
   const candidates = [
@@ -71,6 +72,68 @@ export function createAntivvStore({ filePath = '' } = {}) {
 
 export const defaultAntivvStore = createAntivvStore();
 
+const VIEW_ONCE_CACHE_LIMIT = 250;
+export const viewOnceCache =
+  globalThis.__spiderViewOnceCache || (globalThis.__spiderViewOnceCache = new Map());
+
+export function getCachedViewOnce(id) {
+  if (!id) return null;
+  return viewOnceCache.get(id) || null;
+}
+
+export function setCachedViewOnce(id, entry) {
+  if (!id || !entry || !Buffer.isBuffer(entry.buffer) || entry.buffer.length === 0) {
+    return false;
+  }
+  if (viewOnceCache.has(id)) {
+    viewOnceCache.delete(id);
+  }
+  viewOnceCache.set(id, entry);
+  while (viewOnceCache.size > VIEW_ONCE_CACHE_LIMIT) {
+    const oldestKey = viewOnceCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    viewOnceCache.delete(oldestKey);
+  }
+  return true;
+}
+
+export function clearViewOnceCache() {
+  viewOnceCache.clear();
+}
+
+export function normalizeMediaKey(mediaKey) {
+  if (!mediaKey) return null;
+  if (Buffer.isBuffer(mediaKey)) return mediaKey;
+  if (typeof mediaKey === 'string') return mediaKey.trim() ? mediaKey : null;
+  if (mediaKey instanceof Uint8Array || Array.isArray(mediaKey)) {
+    return Buffer.from(mediaKey);
+  }
+  if (typeof mediaKey === 'object') {
+    if (mediaKey.type === 'Buffer' && Array.isArray(mediaKey.data)) {
+      return Buffer.from(mediaKey.data);
+    }
+    const numericKeys = Object.keys(mediaKey)
+      .filter((k) => /^\d+$/.test(k))
+      .sort((a, b) => Number(a) - Number(b));
+    if (numericKeys.length > 0) {
+      return Buffer.from(numericKeys.map((k) => Number(mediaKey[k]) & 0xff));
+    }
+  }
+  return null;
+}
+
+export function hasValidMediaKey(mediaKey) {
+  const normalized = normalizeMediaKey(mediaKey);
+  if (!normalized) return false;
+  if (Buffer.isBuffer(normalized) || normalized instanceof Uint8Array) {
+    return normalized.length > 0;
+  }
+  if (typeof normalized === 'string') {
+    return normalized.trim().length > 0;
+  }
+  return false;
+}
+
 const capturedViewOnceIds = new Map();
 function markCapturedViewOnce(id) {
   if (!id) return;
@@ -91,8 +154,8 @@ export function extractViewOnceMedia(rawMessage) {
   if (!rawMessage || typeof rawMessage !== 'object') return null;
 
   let layer = rawMessage;
-  let explicitViewOnce = false;
-  for (let depth = 0; depth < 6 && layer && typeof layer === 'object'; depth += 1) {
+  let explicitViewOnce = Boolean(rawMessage.viewOnce === true);
+  for (let depth = 0; depth < 8 && layer && typeof layer === 'object'; depth += 1) {
     if (layer.viewOnceMessageV2?.message) {
       explicitViewOnce = true;
       layer = layer.viewOnceMessageV2.message;
@@ -112,22 +175,48 @@ export function extractViewOnceMedia(rawMessage) {
       layer = layer.ephemeralMessage.message;
       continue;
     }
+    if (layer.documentWithCaptionMessage?.message) {
+      layer = layer.documentWithCaptionMessage.message;
+      continue;
+    }
+    if (layer.editedMessage?.message) {
+      layer =
+        layer.editedMessage.message?.protocolMessage?.editedMessage ||
+        layer.editedMessage.message;
+      continue;
+    }
+    if (layer.groupStatusMessageV2?.message) {
+      layer = layer.groupStatusMessageV2.message;
+      continue;
+    }
+    if (layer.associatedChildMessage?.message) {
+      layer = layer.associatedChildMessage.message;
+      continue;
+    }
+    if (layer.botInvokeMessage?.message) {
+      layer = layer.botInvokeMessage.message;
+      continue;
+    }
     break;
   }
 
+  if (!layer || typeof layer !== 'object') return null;
+  if (layer.viewOnce === true) explicitViewOnce = true;
+
   const candidates = [
-    ['image', 'image', layer.imageMessage],
-    ['video', 'video', layer.videoMessage],
-    ['video', 'video', layer.ptvMessage],
-    ['audio', 'audio', layer.audioMessage],
+    ['image', 'image', layer.imageMessage, false],
+    ['video', 'video', layer.videoMessage, false],
+    ['video', 'video', layer.ptvMessage, true],
+    ['audio', 'audio', layer.audioMessage, false],
   ];
 
-  for (const [type, dlType, media] of candidates) {
+  for (const [type, dlType, media, isPtv] of candidates) {
     if (!media || typeof media !== 'object') continue;
     if (explicitViewOnce || media.viewOnce === true) {
       return {
         type,
         dlType,
+        isPtv,
         media,
         caption: String(media.caption || '').trim(),
       };
@@ -137,19 +226,122 @@ export function extractViewOnceMedia(rawMessage) {
   return null;
 }
 
-async function downloadViewOnceBuffer(info) {
+async function downloadViewOnceBuffer(info, { downloader = null, sock = null, msg = null } = {}) {
   if (!info?.media) return null;
   if (Buffer.isBuffer(info.media._buffer)) return info.media._buffer;
   if (Buffer.isBuffer(info.media.buffer)) return info.media.buffer;
+
+  const normalizedKey = normalizeMediaKey(info.media.mediaKey);
+  if (!hasValidMediaKey(normalizedKey)) return null;
+
+  const normalizedMedia = {
+    ...info.media,
+    mediaKey: normalizedKey,
+  };
+
+  if (typeof downloader === 'function') {
+    const out = await downloader(normalizedMedia, info.dlType);
+    return Buffer.isBuffer(out) && out.length > 0 ? out : null;
+  }
+
+  const hasValidUrl =
+    typeof normalizedMedia.url === 'string' && normalizedMedia.url.trim().startsWith('https://');
+  const hasDirectPath =
+    typeof normalizedMedia.directPath === 'string' && normalizedMedia.directPath.trim().length > 0;
+  if (!hasValidUrl && !hasDirectPath) return null;
+
   try {
-    const stream = await downloadContentFromMessage(info.media, info.dlType);
+    const stream = await downloadContentFromMessage(normalizedMedia, info.dlType);
     const chunks = [];
     for await (const chunk of stream) {
       chunks.push(chunk);
     }
-    return chunks.length > 0 ? Buffer.concat(chunks) : null;
+    const buf = chunks.length > 0 ? Buffer.concat(chunks) : null;
+    if (buf && buf.length > 0) return buf;
+  } catch (err) {
+    const status = err?.status || err?.output?.statusCode;
+    if (
+      msg &&
+      sock &&
+      typeof sock.updateMediaMessage === 'function' &&
+      (status === 401 ||
+        status === 403 ||
+        status === 404 ||
+        status === 410 ||
+        /\b(401|403|404|410)\b/.test(String(err?.message || '')))
+    ) {
+      try {
+        const mediaKey = info.isPtv
+          ? 'ptvMessage'
+          : info.type === 'image'
+            ? 'imageMessage'
+            : info.type === 'video'
+              ? 'videoMessage'
+              : 'audioMessage';
+        const fullMsg = { key: msg.key, message: { [mediaKey]: normalizedMedia } };
+        const buf = await downloadMediaMessage(
+          fullMsg,
+          'buffer',
+          {},
+          {
+            logger: SILENT_LOGGER,
+            reuploadRequest: sock.updateMediaMessage.bind(sock),
+          },
+        );
+        return Buffer.isBuffer(buf) && buf.length > 0 ? buf : null;
+      } catch {
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Downloads and caches view-once media bytes on arrival while the mediaKey
+ * and CDN URL are still fresh, so manual .vv / .vv2 works even after
+ * WhatsApp strips mediaKey/viewOnce from quoted replies or expires the media.
+ */
+export async function cacheViewOnce(msg, { downloader = null, sock = null } = {}) {
+  try {
+    const raw = msg?.message;
+    const msgId = msg?.key?.id;
+    if (!raw || !msgId) return { cached: false, reason: 'missing-message' };
+
+    const chatJid = String(msg?.key?.remoteJid || '');
+    if (chatJid === 'status@broadcast') return { cached: false, reason: 'status-broadcast' };
+
+    const vo = extractViewOnceMedia(raw);
+    if (!vo) return { cached: false, reason: 'not-viewonce' };
+
+    if (viewOnceCache.has(msgId)) {
+      return { cached: true, alreadyCached: true, id: msgId, type: vo.type };
+    }
+
+    const hasInlineBuf = Buffer.isBuffer(vo.media._buffer) || Buffer.isBuffer(vo.media.buffer);
+    if (!hasInlineBuf && !hasValidMediaKey(vo.media.mediaKey)) {
+      return { cached: false, reason: 'missing-mediakey' };
+    }
+
+    const buffer = await downloadViewOnceBuffer(vo, { downloader, sock, msg });
+    if (!buffer || buffer.length === 0) {
+      return { cached: false, reason: 'download-failed' };
+    }
+
+    setCachedViewOnce(msgId, {
+      type: vo.type,
+      dlType: vo.dlType,
+      isPtv: Boolean(vo.isPtv),
+      buffer,
+      mimetype: vo.media.mimetype || '',
+      caption: vo.caption || '',
+      ptt: Boolean(vo.media.ptt),
+      timestamp: Date.now(),
+    });
+
+    return { cached: true, id: msgId, type: vo.type };
   } catch {
-    return null;
+    return { cached: false, reason: 'error' };
   }
 }
 
@@ -211,7 +403,21 @@ export async function handleViewOnceAutoSave({
     new Set([cleanJid(senderJid)].filter((j) => j && !j.endsWith('@g.us'))),
   );
 
-  const buffer = await downloadViewOnceBuffer(vo);
+  const cached = msgId ? getCachedViewOnce(msgId) : null;
+  const buffer = cached?.buffer || (await downloadViewOnceBuffer(vo, { sock, msg }));
+  if (msgId && buffer && !cached) {
+    setCachedViewOnce(msgId, {
+      type: vo.type,
+      dlType: vo.dlType,
+      isPtv: Boolean(vo.isPtv),
+      buffer,
+      mimetype: vo.media?.mimetype || '',
+      caption: vo.caption || '',
+      ptt: Boolean(vo.media?.ptt),
+      timestamp: Date.now(),
+    });
+  }
+
   try {
     if (buffer) {
       if (vo.type === 'image') {
