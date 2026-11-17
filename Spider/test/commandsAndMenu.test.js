@@ -260,17 +260,16 @@ test('menu command and handleMenuCategoryReply work across ?reload= module bound
   assert.ok(reloadedMenuCmd, 'menu command must be loaded');
 
   const menuReturn = await reloadedMenuCmd.execute(makeCtx('menu', { sock, from: chatJid }));
-  assert.ok(sent.length >= 1, 'menu should send at least one message');
+  assert.equal(sent.length, 1, 'menu should send exactly one combined message');
   const firstMenuMsgId = sent[0].id;
   assert.ok(firstMenuMsgId, 'menu message should have a key.id');
   assert.ok(menuReturn?.key?.id, 'menu execute should return last sent message');
 
-  const combinedMenuText = sent
-    .map((m) => m.payload.caption || m.payload.text || '')
-    .join('\n');
+  const combinedMenuText = sent[0].payload.caption || sent[0].payload.text || '';
   assert.match(combinedMenuText, /SYSTEM MENU/);
   assert.match(combinedMenuText, /COMMAND CATEGORIES/);
   assert.match(combinedMenuText, /GENERAL/);
+  assert.match(combinedMenuText, /SPIDER MAN \/\/ /);
 
   // 1. Quoted reply targeting menu message ID
   const replySent = [];
@@ -417,15 +416,15 @@ test('menu command and handleMenuCategoryReply work across ?reload= module bound
 });
 
 test('menu direct selection, fallback image buffer, list/help/category/categories/findcmd commands work', async () => {
-  // Remote image fails -> falls back to local spider-man.jpg buffer + continuation message
+  // Remote image fails -> falls back to local spider-man.jpg buffer in a single combined message
   const fallbackSent = [];
   const fallbackSock = createMockSock(fallbackSent, { failFirstImage: true });
   const longText = Array.from({ length: 40 }, (_, i) => `Line ${i + 1} with enough padding to exceed 900 chars`).join('\n');
   const visualMsgs = await sendMenuVisual(fallbackSock, '254700000002@s.whatsapp.net', longText, { key: { id: 'q-1' } });
-  assert.equal(visualMsgs.length, 2, 'long menu should send image+caption and continuation text');
+  assert.equal(visualMsgs.length, 1, 'menu should always send as one single image+caption message');
+  assert.equal(fallbackSent.length, 1);
   assert.ok(Buffer.isBuffer(fallbackSent[0].payload.image), 'should fall back to local Buffer image');
-  assert.ok(fallbackSent[0].payload.caption.length <= 900, 'caption must stay within 900 chars');
-  assert.ok(fallbackSent[1].payload.text.length > 0, 'continuation message should contain remaining lines');
+  assert.equal(fallbackSent[0].payload.caption, longText, 'caption must contain the entire menu including the lower part');
 
   const sent = [];
   const sock = createMockSock(sent);
