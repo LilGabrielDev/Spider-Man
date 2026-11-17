@@ -15,6 +15,7 @@ import {
 import { applyPostUpdateReload } from '../../spider/utils/runtimeControl.js';
 import {
   MAX_BIO_LENGTH,
+  PRESET_AUTOBIOS,
   applyProfileBio,
   defaultAutobioManager,
   defaultAutobioStore,
@@ -27,17 +28,20 @@ function getAutobioManager() {
 }
 
 function buildAutobioStatusCard(botName, state, headline = 'AUTO BIO') {
+  const savedDisplay =
+    state.bios.length > 0 ? `${state.bios.length}` : `0 (${PRESET_AUTOBIOS.length} built-in active)`;
   const lines = [
     spiderHeader(botName, headline),
     spiderRow('STATUS', state.enabled ? '🟢 ON' : '🔴 OFF', '⚙️'),
     spiderRow('INTERVAL', formatAutobioInterval(state.intervalMs), '⏱️'),
-    spiderRow('SAVED BIOS', `${state.bios.length}`, '📝'),
+    spiderRow('SAVED BIOS', savedDisplay, '📝'),
     spiderRow('LAST ABOUT', state.lastBio || 'Not updated yet', '💬'),
     spiderDivider('COMMANDS'),
     spiderRow('ENABLE', '.autobio on', '▶️'),
+    spiderRow('PRESETS', `.autobio presets (${PRESET_AUTOBIOS.length} bios)`, '📚'),
     spiderRow('ADD BIO', '.autobio add <text>', '➕'),
     spiderRow('SET BIO', '.autobio set <text>', '✏️'),
-    spiderRow('LIST', '.autobio list', '📋'),
+    spiderRow('LIST', '.autobio list [page|all]', '📋'),
     spiderRow('DELETE', '.autobio del <#|all>', '🗑️'),
     spiderRow('INTERVAL', '.autobio interval 60s', '🕒'),
     spiderRow('DISABLE', '.autobio off', '⏹️'),
@@ -184,14 +188,18 @@ export const commands = [
           spiderHeader(botName, 'AUTO BIO ENABLED'),
           spiderRow('STATUS', '🟢 ON', '⚙️'),
           spiderRow('INTERVAL', formatAutobioInterval(res.state.intervalMs), '⏱️'),
-          spiderRow('SAVED BIOS', `${res.state.bios.length}`, '📝'),
+          spiderRow(
+            'SAVED BIOS',
+            res.state.bios.length > 0 ? `${res.state.bios.length}` : `0 (${PRESET_AUTOBIOS.length} built-in)`,
+            '📝',
+          ),
           spiderRow(
             'ABOUT NOW',
             res.updated ? res.bio : `⚠️ Failed: ${res.error || 'Socket not ready'}`,
             res.updated ? '✅' : '⚠️',
           ),
           ...(res.truncated ? [spiderRow('NOTE', `Trimmed to ${MAX_BIO_LENGTH} chars`, '✂️')] : []),
-          spiderFooter('WHATSAPP ABOUT UPDATED'),
+          spiderFooter(res.updated ? 'WHATSAPP ABOUT UPDATED' : 'AUTO BIO SAVED (RETRYING ON TICK)'),
         ];
         return sock.sendMessage(from, { text: rows.join('\n') }, { quoted: msg });
       }
@@ -227,7 +235,7 @@ export const commands = [
             res.updated ? '✅' : '⚠️',
           ),
           ...(res.truncated ? [spiderRow('NOTE', `Trimmed to ${MAX_BIO_LENGTH} chars`, '✂️')] : []),
-          spiderFooter('VISIBLE ON WHATSAPP ABOUT'),
+          spiderFooter(res.updated ? 'VISIBLE ON WHATSAPP ABOUT' : 'BIO SAVED (WILL RETRY)'),
         ];
         return sock.sendMessage(from, { text: rows.join('\n') }, { quoted: msg });
       }
@@ -253,7 +261,25 @@ export const commands = [
             res.updated ? '✅' : '⚠️',
           ),
           ...(res.truncated ? [spiderRow('NOTE', `Trimmed to ${MAX_BIO_LENGTH} chars`, '✂️')] : []),
-          spiderFooter('VISIBLE ON WHATSAPP ABOUT'),
+          spiderFooter(res.updated ? 'VISIBLE ON WHATSAPP ABOUT' : 'BIO SAVED (WILL RETRY)'),
+        ];
+        return sock.sendMessage(from, { text: rows.join('\n') }, { quoted: msg });
+      }
+
+      if (sub === 'presets' || sub === 'preset' || sub === 'load' || sub === '100' || sub === 'pack') {
+        const replace = restText.toLowerCase() === 'replace' || restText.toLowerCase() === 'reset';
+        const res = await manager.loadPresets({ sock, replace, enableAuto: true });
+        const rows = [
+          spiderHeader(botName, 'PRESET BIOS LOADED'),
+          spiderRow('STATUS', '🟢 ON', '⚙️'),
+          spiderRow('ADDED', `${res.addedCount} preset(s)`, '📚'),
+          spiderRow('TOTAL SAVED', `${res.total}`, '📝'),
+          spiderRow(
+            'ABOUT NOW',
+            res.updated ? res.bio : `⚠️ Saved, update failed: ${res.error || 'Socket not ready'}`,
+            res.updated ? '✅' : '⚠️',
+          ),
+          spiderFooter(res.updated ? 'WHATSAPP ABOUT UPDATED' : 'PRESETS SAVED (WILL RETRY)'),
         ];
         return sock.sendMessage(from, { text: rows.join('\n') }, { quoted: msg });
       }
@@ -261,18 +287,46 @@ export const commands = [
       if (sub === 'list' || sub === 'ls' || sub === 'status' || sub === 'info' || sub === 'show') {
         const state = store.getState();
         const activeIdx = state.bios.length > 0 ? state.currentIndex % state.bios.length : -1;
+        const pageSize = 25;
+        const showAll = restText.toLowerCase() === 'all';
+        const totalPages = Math.max(1, Math.ceil(state.bios.length / pageSize));
+        const requestedPage = Number.parseInt(restText || '1', 10);
+        const page = Number.isFinite(requestedPage)
+          ? Math.min(totalPages, Math.max(1, requestedPage))
+          : 1;
+        const startIdx = showAll ? 0 : (page - 1) * pageSize;
+        const endIdx = showAll ? state.bios.length : Math.min(state.bios.length, startIdx + pageSize);
+
         const bioRows =
           state.bios.length > 0
-            ? state.bios.map((b, i) => `> ┃ ${i === activeIdx ? '👉' : '•'} *#${i + 1}*  ›  ${b}`)
-            : ['> ┃ ℹ️ No custom bios saved — using dynamic live status.'];
+            ? state.bios
+                .slice(startIdx, endIdx)
+                .map((b, offset) => {
+                  const realIdx = startIdx + offset;
+                  return `> ┃ ${realIdx === activeIdx ? '👉' : '•'} *#${realIdx + 1}*  ›  ${b}`;
+                })
+            : [
+                `> ┃ ℹ️ No custom bios saved — rotating *${PRESET_AUTOBIOS.length}* built-in bios automatically.`,
+                '> ┃ 💡 Run *.autobio presets* to load all 100 into your list.',
+              ];
+
+        const dividerLabel =
+          state.bios.length > pageSize && !showAll
+            ? `SAVED BIOS (${state.bios.length}) • PAGE ${page}/${totalPages}`
+            : `SAVED BIOS (${state.bios.length})`;
+        const footerText =
+          state.bios.length > pageSize && !showAll
+            ? `NEXT: .autobio list ${page < totalPages ? page + 1 : 1} | ALL: .autobio list all`
+            : 'ADD: .autobio add <text> | PRESETS: .autobio presets';
+
         const rows = [
           spiderHeader(botName, 'AUTO BIO LIST'),
           spiderRow('STATUS', state.enabled ? '🟢 ON' : '🔴 OFF', '⚙️'),
           spiderRow('INTERVAL', formatAutobioInterval(state.intervalMs), '⏱️'),
           spiderRow('LAST ABOUT', state.lastBio || 'Not updated yet', '💬'),
-          spiderDivider(`SAVED BIOS (${state.bios.length})`),
+          spiderDivider(dividerLabel),
           ...bioRows,
-          spiderFooter('ADD: .autobio add <text> | DEL: .autobio del <#>'),
+          spiderFooter(footerText),
         ];
         return sock.sendMessage(from, { text: rows.join('\n') }, { quoted: msg });
       }
@@ -369,7 +423,7 @@ export const commands = [
           res.updated ? '✅' : '⚠️',
         ),
         ...(res.truncated ? [spiderRow('NOTE', `Trimmed to ${MAX_BIO_LENGTH} chars`, '✂️')] : []),
-        spiderFooter('VISIBLE ON WHATSAPP ABOUT'),
+        spiderFooter(res.updated ? 'VISIBLE ON WHATSAPP ABOUT' : 'BIO SAVED (WILL RETRY)'),
       ];
       return sock.sendMessage(from, { text: rows.join('\n') }, { quoted: msg });
     },
