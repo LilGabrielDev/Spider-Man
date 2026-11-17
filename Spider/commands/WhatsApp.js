@@ -1,8 +1,10 @@
-import { downloadContentFromMessage, S_WHATSAPP_NET } from '@whiskeysockets/baileys';
+import { downloadContentFromMessage, downloadMediaMessage, S_WHATSAPP_NET } from '@whiskeysockets/baileys';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
 import config from '../../spider/config.js';
+import { messageStore } from '../../spider/anti.js';
+import { SILENT_LOGGER } from '../../spider/utils/privacyLogger.js';
 import { t } from '../france/translator.js';
 import { cleanJid, extractPhoneDigits } from '../../spider/utils/groupRoleResolver.js';
 import {
@@ -11,14 +13,161 @@ import {
   isSendMessageFailure,
   isViewOnceMessage,
   resolveTargetFromMessage,
+  unwrapMessageContent,
 } from '../../spider/utils/groupActionHelper.js';
 import { getPhoneFromJid, resolveRuntimeOwnerJid } from '../../spider/utils/userJid.js';
 
-async function getBuffer(mediaMsg, mediaType) {
-  const stream = await downloadContentFromMessage(mediaMsg, mediaType);
-  const chunks = [];
-  for await (const chunk of stream) chunks.push(chunk);
-  return Buffer.concat(chunks);
+function normalizeMediaKey(mediaKey) {
+  if (!mediaKey) return mediaKey;
+  if (Buffer.isBuffer(mediaKey) || typeof mediaKey === 'string') return mediaKey;
+  if (mediaKey instanceof Uint8Array || Array.isArray(mediaKey)) return Buffer.from(mediaKey);
+  if (typeof mediaKey === 'object' && mediaKey.type === 'Buffer' && Array.isArray(mediaKey.data)) {
+    return Buffer.from(mediaKey.data);
+  }
+  return mediaKey;
+}
+
+function mergeMediaNodes(primary, fallback) {
+  if (!primary && !fallback) return null;
+  const out = { ...(fallback || {}), ...(primary || {}) };
+  if (fallback && primary) {
+    for (const key of Object.keys(fallback)) {
+      if (out[key] === undefined || out[key] === null || out[key] === '') {
+        out[key] = fallback[key];
+      }
+    }
+  }
+  return out;
+}
+
+async function getBuffer(mediaMsg, mediaType, sock = null, fullMsg = null) {
+  if (!mediaMsg || typeof mediaMsg !== 'object') {
+    throw new Error('Missing media message payload');
+  }
+  if (Buffer.isBuffer(mediaMsg._buffer)) return mediaMsg._buffer;
+  if (Buffer.isBuffer(mediaMsg.buffer)) return mediaMsg.buffer;
+
+  const normalizedMedia = {
+    ...mediaMsg,
+    mediaKey: normalizeMediaKey(mediaMsg.mediaKey),
+  };
+
+  const hasValidUrl =
+    typeof normalizedMedia.url === 'string' &&
+    normalizedMedia.url.startsWith('https://mmg.whatsapp.net/');
+  const hasDirectPath =
+    typeof normalizedMedia.directPath === 'string' &&
+    normalizedMedia.directPath.trim().length > 0;
+
+  if ((!hasValidUrl && !hasDirectPath) || !normalizedMedia.mediaKey) {
+    throw new Error('View-once media credentials are missing or expired');
+  }
+
+  try {
+    const stream = await downloadContentFromMessage(normalizedMedia, mediaType);
+    const chunks = [];
+    for await (const chunk of stream) chunks.push(chunk);
+    return Buffer.concat(chunks);
+  } catch (err) {
+    const status = err?.status || err?.output?.statusCode;
+    if (
+      fullMsg &&
+      sock &&
+      typeof sock.updateMediaMessage === 'function' &&
+      (status === 404 || status === 410 || /\b(404|410)\b/.test(String(err?.message || '')))
+    ) {
+      return downloadMediaMessage(
+        fullMsg,
+        'buffer',
+        {},
+        {
+          logger: SILENT_LOGGER,
+          reuploadRequest: sock.updateMediaMessage.bind(sock),
+        },
+      );
+    }
+    throw err;
+  }
+}
+
+async function buildViewOncePayload({ sock, from, msg }) {
+  const { contextInfo, rawQuotedMessage, quotedMessage } = extractContextInfo(msg);
+  const stanzaId = contextInfo?.stanzaId || '';
+  const stored = stanzaId ? messageStore.get(stanzaId) : null;
+  const storedRaw = stored?.message || null;
+  const storedUnwrapped = storedRaw ? unwrapMessageContent(storedRaw) : null;
+
+  if (!quotedMessage && !rawQuotedMessage && !storedUnwrapped) {
+    return { status: 'no-reply' };
+  }
+
+  const isVo =
+    isViewOnceMessage(rawQuotedMessage) ||
+    isViewOnceMessage(storedRaw) ||
+    Boolean(
+      quotedMessage?.imageMessage?.viewOnce ||
+        quotedMessage?.videoMessage?.viewOnce ||
+        quotedMessage?.ptvMessage?.viewOnce ||
+        quotedMessage?.audioMessage?.viewOnce ||
+        storedUnwrapped?.imageMessage?.viewOnce ||
+        storedUnwrapped?.videoMessage?.viewOnce ||
+        storedUnwrapped?.ptvMessage?.viewOnce ||
+        storedUnwrapped?.audioMessage?.viewOnce,
+    );
+
+  if (!isVo) {
+    return { status: 'not-viewonce' };
+  }
+
+  const imageMsg = mergeMediaNodes(quotedMessage?.imageMessage, storedUnwrapped?.imageMessage);
+  const videoMsg = mergeMediaNodes(
+    quotedMessage?.videoMessage || quotedMessage?.ptvMessage,
+    storedUnwrapped?.videoMessage || storedUnwrapped?.ptvMessage,
+  );
+  const audioMsg = mergeMediaNodes(quotedMessage?.audioMessage, storedUnwrapped?.audioMessage);
+
+  const reuploadKey = stored?.key || {
+    remoteJid: from,
+    id: stanzaId,
+    fromMe: isFromBot(contextInfo?.participant, sock),
+    ...(contextInfo?.participant ? { participant: contextInfo.participant } : {}),
+  };
+
+  const footerCaption = await t(from, 'whatsapp', 'vv.caption');
+  const formatCaption = (media) => {
+    const orig = String(media?.caption || '').trim();
+    return orig ? `${orig}\n\n${footerCaption}` : footerCaption;
+  };
+
+  if (imageMsg) {
+    const normalized = { ...imageMsg, mediaKey: normalizeMediaKey(imageMsg.mediaKey) };
+    const fullMsg = { key: reuploadKey, message: { imageMessage: normalized } };
+    const buf = await getBuffer(normalized, 'image', sock, fullMsg);
+    return { status: 'ok', payload: { image: buf, caption: formatCaption(imageMsg) } };
+  }
+
+  if (videoMsg) {
+    const normalized = { ...videoMsg, mediaKey: normalizeMediaKey(videoMsg.mediaKey) };
+    const fullMsg = { key: reuploadKey, message: { videoMessage: normalized } };
+    const buf = await getBuffer(normalized, 'video', sock, fullMsg);
+    return { status: 'ok', payload: { video: buf, caption: formatCaption(videoMsg) } };
+  }
+
+  if (audioMsg) {
+    const normalized = { ...audioMsg, mediaKey: normalizeMediaKey(audioMsg.mediaKey) };
+    const fullMsg = { key: reuploadKey, message: { audioMessage: normalized } };
+    const buf = await getBuffer(normalized, 'audio', sock, fullMsg);
+    return {
+      status: 'ok',
+      payload: {
+        audio: buf,
+        mimetype: audioMsg.mimetype || 'audio/mp4',
+        ptt: Boolean(audioMsg.ptt),
+      },
+    };
+  }
+
+  return { status: 'unsupported' };
 }
 
 const resizeImage = async (filePath) => {
@@ -492,86 +641,64 @@ export const commands = [
   },
   {
     name: 'vv',
-    aliases: [],
+    aliases: ['v', 'viewonce', 'vo'],
     description: 'Reveals view-once images, videos or audios.',
     category: 'User',
     execute: async ({ sock, from, msg }) => {
-      const { rawQuotedMessage, quotedMessage } = extractContextInfo(msg);
-      if (!quotedMessage) return;
-      const isVo =
-        isViewOnceMessage(rawQuotedMessage) ||
-        Boolean(
-          quotedMessage.imageMessage?.viewOnce ||
-            quotedMessage.videoMessage?.viewOnce ||
-            quotedMessage.ptvMessage?.viewOnce ||
-            quotedMessage.audioMessage?.viewOnce,
-        );
-      if (!isVo) return;
       try {
-        let payload;
-        const caption = await t(from, 'whatsapp', 'vv.caption');
-        if (quotedMessage.imageMessage) {
-          const buf = await getBuffer(quotedMessage.imageMessage, 'image');
-          payload = { image: buf, caption };
-        } else if (quotedMessage.videoMessage || quotedMessage.ptvMessage) {
-          const buf = await getBuffer(
-            quotedMessage.videoMessage || quotedMessage.ptvMessage,
-            'video',
+        const result = await buildViewOncePayload({ sock, from, msg });
+        if (result.status === 'no-reply') {
+          await sock.sendMessage(
+            from,
+            { text: '👁️ Please reply to a view-once image, video, or audio message.' },
+            { quoted: msg },
           );
-          payload = { video: buf, caption };
-        } else if (quotedMessage.audioMessage) {
-          const buf = await getBuffer(quotedMessage.audioMessage, 'audio');
-          payload = { audio: buf, mimetype: 'audio/mp4' };
+          return;
         }
-        if (payload) {
-          await sock.sendMessage(from, payload, { quoted: msg });
+        if (result.status === 'not-viewonce') {
+          await sock.sendMessage(
+            from,
+            { text: '👁️ That message is not a view-once message.' },
+            { quoted: msg },
+          );
+          return;
         }
+        if (result.status !== 'ok' || !result.payload) {
+          await sock.sendMessage(
+            from,
+            { text: '❌ Unsupported view-once media type.' },
+            { quoted: msg },
+          );
+          return;
+        }
+        await sock.sendMessage(from, result.payload, { quoted: msg });
       } catch (err) {
         console.error('vv command error:', err);
+        await sock.sendMessage(
+          from,
+          {
+            text: `❌ Failed to reveal view-once media: ${err?.message || 'media expired or unavailable.'}`,
+          },
+          { quoted: msg },
+        );
       }
     },
   },
   {
     name: 'vv2',
-    aliases: ['😂', '❤️', '👍'],
+    aliases: ['v2', '😂', '❤️', '👍'],
     description: 'Sends the view once media to the bot owner.',
     category: 'User',
     execute: async ({ sock, from, msg }) => {
-      const { rawQuotedMessage, quotedMessage } = extractContextInfo(msg);
-      if (!quotedMessage) return;
-      const isVo =
-        isViewOnceMessage(rawQuotedMessage) ||
-        Boolean(
-          quotedMessage.imageMessage?.viewOnce ||
-            quotedMessage.videoMessage?.viewOnce ||
-            quotedMessage.ptvMessage?.viewOnce ||
-            quotedMessage.audioMessage?.viewOnce,
-        );
-      if (!isVo) return;
-      const ownerJid = resolveRuntimeOwnerJid({ sock, config });
-      if (!ownerJid) {
-        console.log('Owner/linked-account JID not available');
-        return;
-      }
       try {
-        let payload;
-        const caption = await t(from, 'whatsapp', 'vv.caption');
-        if (quotedMessage.imageMessage) {
-          const buf = await getBuffer(quotedMessage.imageMessage, 'image');
-          payload = { image: buf, caption };
-        } else if (quotedMessage.videoMessage || quotedMessage.ptvMessage) {
-          const buf = await getBuffer(
-            quotedMessage.videoMessage || quotedMessage.ptvMessage,
-            'video',
-          );
-          payload = { video: buf, caption };
-        } else if (quotedMessage.audioMessage) {
-          const buf = await getBuffer(quotedMessage.audioMessage, 'audio');
-          payload = { audio: buf, mimetype: 'audio/mp4' };
+        const result = await buildViewOncePayload({ sock, from, msg });
+        if (result.status !== 'ok' || !result.payload) return;
+        const ownerJid = resolveRuntimeOwnerJid({ sock, config });
+        if (!ownerJid) {
+          console.log('Owner/linked-account JID not available');
+          return;
         }
-        if (payload) {
-          await sock.sendMessage(ownerJid, payload);
-        }
+        await sock.sendMessage(ownerJid, result.payload);
       } catch (err) {
         console.error('vv2Command error:', err);
       }
