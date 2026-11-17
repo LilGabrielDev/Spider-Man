@@ -8,7 +8,12 @@ import { EventEmitter } from 'node:events';
 import config from '../../spider/config.js';
 import { deleteMessageSafely } from '../../spider/utils/groupActionHelper.js';
 import { createAntilinkStore, defaultAntilinkStore, handleAntiLinkMessage } from '../../spider/utils/antilink.js';
-import { createAntibadwordStore, detectBadword, handleAntiBadwordMessage } from '../../spider/utils/antibadword.js';
+import {
+  createAntibadwordStore,
+  defaultAntibadwordStore,
+  detectBadword,
+  handleAntiBadwordMessage,
+} from '../../spider/utils/antibadword.js';
 import { createAntitagStore, detectMassTag, handleAntiTagMessage } from '../../spider/utils/antitag.js';
 import { createAntimentionStore, detectGroupMention, handleAntiMentionMessage } from '../../spider/utils/antimention.js';
 import { createAntispamStore, createSpamTracker, handleAntiSpamMessage } from '../../spider/utils/antispam.js';
@@ -318,6 +323,127 @@ test('antibadword detects default + custom words, deletes both sides, warns, and
     const bw1Deletes = sent.filter((s) => s.payload?.delete?.id === 'BW-1').map((s) => s.payload.delete.participant);
     assert.ok(bw1Deletes.includes('445566778899@lid'));
     assert.ok(bw1Deletes.includes('254744445555@s.whatsapp.net'));
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('antibadword strict mode catches obfuscation, homoglyphs, leetspeak, spacing, elongation, and mute while sparing clean words', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'spider-antibadword-strict-'));
+  try {
+    const store = createAntibadwordStore({ filePath: makeTempFile(tmpDir, 'antibadword.json') });
+    const groupJid = '120363000000100099@g.us';
+    const metadata = {
+      id: groupJid,
+      participants: [
+        { id: '254700000099@s.whatsapp.net', admin: 'admin' },
+        { id: '254766660001@s.whatsapp.net', admin: null },
+      ],
+    };
+
+    const defaultCfg = store.getGroupConfig(groupJid);
+    assert.equal(defaultCfg.strict, true);
+    assert.equal(defaultCfg.action, 'warnkick');
+    assert.equal(defaultCfg.maxWarns, 2);
+
+    store.setGroupConfig(groupJid, { enabled: true, strict: true, action: 'mute' });
+    store.addCustomWord(groupJid, 'scamcoin');
+
+    const evasionPayloads = [
+      'f\u200Buck this', // zero-width char
+      'you ѕhіt', // Cyrillic homoglyphs
+      '𝐟𝐮𝐜𝐤 off', // math bold unicode
+      'f u c k you', // spaced characters
+      's.h.i.t happens', // dot-separated
+      'total b-i-t-c-h', // hyphen-separated
+      'sh1thead', // leetspeak + compound
+      'complete a$$hole', // symbol leetspeak
+      's**t man', // wildcard masked
+      'fuuuuuuuck', // elongated repeat
+      'stop bullshitting', // compound profanity stem
+      'join s.c.a.m.c.o.i.n', // separated custom word
+    ];
+    for (const sample of evasionPayloads) {
+      assert.equal(
+        detectBadword(sample, store.getGroupConfig(groupJid)).matched,
+        true,
+        `Expected strict antibadword to catch: ${sample}`,
+      );
+    }
+
+    const cleanPayloads = [
+      'hello friend',
+      'classic cocktail party',
+      'please assess the assumption',
+      'passing through scunthorpe by parachute',
+      'good morning class',
+    ];
+    for (const sample of cleanPayloads) {
+      assert.equal(
+        detectBadword(sample, store.getGroupConfig(groupJid)).matched,
+        false,
+        `Unexpected false positive on clean text: ${sample}`,
+      );
+    }
+
+    // Whitelist allows specific term
+    store.addWhitelistWord(groupJid, 'scamcoin');
+    assert.equal(detectBadword('buy scamcoin', store.getGroupConfig(groupJid)).matched, false);
+
+    // Standard mode (strict: false) only matches clean boundaries
+    assert.equal(detectBadword('fuuuuuuuck', { strict: false }).matched, false);
+    assert.equal(detectBadword('what the fuck', { strict: false }).matched, true);
+
+    // Mute enforcement locks group chat and deletes offending document filename
+    const { sock, settingUpdates, sent } = createGroupMockSock({ metadata });
+    const muteRes = await handleAntiBadwordMessage({
+      sock,
+      from: groupJid,
+      sender: '254766660001@s.whatsapp.net',
+      msg: {
+        key: { remoteJid: groupJid, id: 'BW-MUTE-1', fromMe: false, participant: '254766660001@s.whatsapp.net' },
+        message: { documentMessage: { fileName: 'b.i.t.c.h.pdf' } },
+      },
+      store,
+    });
+    assert.equal(muteRes.handled, true);
+    assert.equal(muteRes.deleted, true);
+    assert.equal(muteRes.muted, true);
+    assert.equal(settingUpdates.length, 1);
+    assert.equal(settingUpdates[0].setting, 'announcement');
+    assert.ok(sent.some((s) => s.payload?.delete?.id === 'BW-MUTE-1'));
+
+    // Command `.antibadword strict` activates zero-tolerance preset cleanly
+    const cmd = antiCommands.find((c) => c.name === 'antibadword');
+    assert.ok(cmd);
+    const cmdGroup = '120363000000100100@g.us';
+    const cmdSent = [];
+    const cmdSock = {
+      async sendMessage(_to, payload) {
+        cmdSent.push(payload);
+      },
+    };
+    try {
+      await cmd.execute({
+        sock: cmdSock,
+        from: cmdGroup,
+        msg: { key: { remoteJid: cmdGroup, id: 'CMD-1' } },
+        text: 'strict',
+        args: ['strict'],
+        config,
+        isGroupAdmin: true,
+        isBotGroupAdmin: true,
+        isOwner: true,
+      });
+      const updated = defaultAntibadwordStore.getGroupConfig(cmdGroup);
+      assert.equal(updated.enabled, true);
+      assert.equal(updated.strict, true);
+      assert.equal(updated.action, 'kick');
+      assert.equal(updated.maxWarns, 1);
+      assert.match(cmdSent[0].text, /ANTIBADWORD STRICT PRESET/);
+    } finally {
+      defaultAntibadwordStore.resetAll();
+    }
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
