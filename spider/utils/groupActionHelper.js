@@ -89,7 +89,8 @@ export function isViewOnceMessage(rawMessage) {
       cursor.videoMessage?.viewOnce ||
       cursor.ptvMessage?.viewOnce ||
       cursor.audioMessage?.viewOnce ||
-      cursor.documentMessage?.viewOnce
+      cursor.documentMessage?.viewOnce ||
+      cursor.stickerMessage?.viewOnce
     ) {
       return true;
     }
