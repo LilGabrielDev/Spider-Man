@@ -2016,6 +2016,160 @@ test('. Vv resilient recovery: stripped empty bytes merge, deviceSentMessage/fut
     assert.ok(reuploadPayloadSeen?.message?.videoMessage);
     assert.equal(reuploadPayloadSeen?.message?.ptvMessage, undefined);
     assert.deepEqual(ptvBuf, ptvRecoveredBytes);
+
+    // 8. groupMentionedMessage & limitSharingMessage view-once wrappers unwrap cleanly
+    const wrappedGroupMention = {
+      groupMentionedMessage: {
+        message: {
+          limitSharingMessage: {
+            message: {
+              viewOnceMessageV2Extension: {
+                message: {
+                  documentMessage: {
+                    viewOnce: true,
+                    fileName: 'secret.pdf',
+                    mimetype: 'application/pdf',
+                    mediaKey: Buffer.from([1, 2, 3, 4]),
+                    _buffer: Buffer.from('pdf-secret-bytes'),
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    assert.equal(isViewOnceMessage(wrappedGroupMention), true);
+    const unwrappedDoc = extractViewOnceMedia(wrappedGroupMention);
+    assert.equal(unwrappedDoc?.type, 'document');
+    assert.equal(unwrappedDoc?.media?.fileName, 'secret.pdf');
+
+    // 9. Placeholder resend PDO recovery recovers uncached view-once from stripped quote
+    const { EventEmitter } = await import('node:events');
+    const ev = new EventEmitter();
+    const { sock: baseSock, sent: pdoSent, groupMeta: pdoGroup } = createAckAwareSock();
+    let resendRequestedKey = null;
+    const pdoBytes = Buffer.from('pdo-placeholder-recovered-image');
+    const pdoSock = {
+      ...baseSock,
+      ev,
+      requestPlaceholderResend: async (key) => {
+        resendRequestedKey = key;
+        setTimeout(() => {
+          ev.emit('messages.upsert', {
+            type: 'notify',
+            messages: [
+              {
+                key: { remoteJid: pdoGroup.id, id: key.id, fromMe: false },
+                message: {
+                  viewOnceMessageV2: {
+                    message: {
+                      imageMessage: {
+                        viewOnce: true,
+                        caption: 'PDO recovered',
+                        mimetype: 'image/jpeg',
+                        _buffer: pdoBytes,
+                      },
+                    },
+                  },
+                },
+              },
+            ],
+          });
+        }, 15);
+      },
+    };
+
+    await vvCmd.execute({
+      sock: pdoSock,
+      from: pdoGroup.id,
+      msg: {
+        key: { remoteJid: pdoGroup.id, id: 'cmd-vv-pdo-1' },
+        message: {
+          extendedTextMessage: {
+            text: '. Vv',
+            contextInfo: {
+              stanzaId: 'vo-pdo-uncached-1',
+              participant: '254700000099@s.whatsapp.net',
+              quotedMessage: {
+                imageMessage: { mimetype: 'image/jpeg' },
+              },
+            },
+          },
+        },
+      },
+    });
+    assert.equal(resendRequestedKey?.id, 'vo-pdo-uncached-1');
+    assert.equal(resendRequestedKey?.participant, '254700000099@s.whatsapp.net');
+    assert.equal(pdoSent.length, 1);
+    assert.deepEqual(pdoSent[0].payload.image, pdoBytes);
+    assert.match(pdoSent[0].payload.caption, /PDO recovered/);
+
+    // 10. DM reupload (without url/directPath, base64 mediaKey string) omits participant on key & decodes mediaKey to Buffer
+    const dmJid = '254700000055@s.whatsapp.net';
+    const base64MediaKey = Buffer.from(Array.from({ length: 32 }, (_, i) => i + 1)).toString('base64');
+    const dmReuploadBytes = Buffer.from('dm-reupload-recovered-image');
+    let seenDmUpdateKey = null;
+    let seenDmMediaKeyIsBuffer = false;
+    const { sock: dmBaseSock, sent: dmSent } = createAckAwareSock();
+    let quoteFailedOnce = false;
+    const dmSock = {
+      ...dmBaseSock,
+      updateMediaMessage: async (m) => {
+        seenDmUpdateKey = m.key;
+        seenDmMediaKeyIsBuffer = Buffer.isBuffer(m?.message?.imageMessage?.mediaKey);
+        return {
+          key: m.key,
+          message: {
+            imageMessage: {
+              mediaKey: m.message.imageMessage.mediaKey,
+              directPath: '/v/t62.7118-24/recovered',
+            },
+          },
+        };
+      },
+      downloadMediaMessage: async () => dmReuploadBytes,
+      sendMessage: async (jid, payload, opts) => {
+        if (opts?.quoted && !quoteFailedOnce) {
+          quoteFailedOnce = true;
+          throw new Error('Quoted stanza unavailable');
+        }
+        return dmBaseSock.sendMessage(jid, payload, opts);
+      },
+    };
+    await vvCmd.execute({
+      sock: dmSock,
+      from: dmJid,
+      msg: {
+        key: { remoteJid: dmJid, id: 'cmd-vv-dm-reupload' },
+        message: {
+          extendedTextMessage: {
+            text: '. Vv',
+            contextInfo: {
+              stanzaId: 'vo-dm-reupload-1',
+              participant: '254700000055@s.whatsapp.net',
+              quotedMessage: {
+                viewOnceMessageV2: {
+                  message: {
+                    imageMessage: {
+                      viewOnce: true,
+                      mediaKey: base64MediaKey,
+                      mimetype: 'image/webp',
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    assert.equal(seenDmMediaKeyIsBuffer, true);
+    assert.equal(seenDmUpdateKey?.participant, undefined);
+    assert.equal(seenDmUpdateKey?.fromMe, false);
+    assert.equal(quoteFailedOnce, true);
+    assert.equal(dmSent.length, 1);
+    assert.deepEqual(dmSent[0].payload.image, dmReuploadBytes);
   } finally {
     clearViewOnceCache();
     if (prevCacheDir === undefined) delete process.env.SPIDER_VIEWONCE_CACHE_DIR;
