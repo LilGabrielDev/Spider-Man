@@ -1,12 +1,22 @@
 {
   "name": "SPIDER-MAN-MD",
-  "description": "SPIDER-MAN MD WhatsApp Multi-Device Bot",
+  "description": "SPIDER-MAN MD — Modular Node.js WhatsApp Multi-Device (MD) bot powered by @whiskeysockets/baileys with Pair Code/QR login, AI tools, media downloaders, group protection, and automations.",
   "repository": "https://github.com/LilGabrielDev/Spider-Man",
   "keywords": [
     "whatsapp",
+    "whatsapp-bot",
+    "whatsapp-md",
+    "whatsapp-multi-device",
     "baileys",
+    "nodejs",
     "bot",
-    "spider-man"
+    "spider-man",
+    "spider-man-md",
+    "group-management",
+    "anti-link",
+    "anti-delete",
+    "media-downloader",
+    "sticker-bot"
   ],
   "env": {
     "MODE": {

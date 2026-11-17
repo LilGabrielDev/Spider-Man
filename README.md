@@ -4,7 +4,12 @@
 
 # 🕸️ SPIDER-MAN MD
 
-**Fast, modular WhatsApp Multi-Device bot powered by `@whiskeysockets/baileys` & Express.**
+**Fast, modular Node.js WhatsApp Multi-Device (MD) Bot powered by `@whiskeysockets/baileys` & Express — featuring Pair Code / QR login, AI tools, media downloaders, group protection, and one-click cloud deployment.**
+
+![GitHub Stars](https://img.shields.io/github/stars/LilGabrielDev/Spider-Man?style=flat-square&color=7C3AED)
+![GitHub Forks](https://img.shields.io/github/forks/LilGabrielDev/Spider-Man?style=flat-square&color=2563EB)
+![Node.js](https://img.shields.io/badge/Node.js-%3E%3D20-339933?style=flat-square&logo=nodedotjs&logoColor=white)
+![License](https://img.shields.io/github/license/LilGabrielDev/Spider-Man?style=flat-square&color=111827)
 
 [![PAIR CODE](https://img.shields.io/badge/PAIR%20CODE-7C3AED?style=for-the-badge&logo=whatsapp&logoColor=white)](https://lilgabriel-session.onrender.com/pair)
 [![SCAN QR](https://img.shields.io/badge/SCAN%20QR-111827?style=for-the-badge&logo=qrcode&logoColor=white)](https://lilgabriel-session.onrender.com/qr)
@@ -62,11 +67,13 @@ Deploy directly via the **[Koyeb button](https://app.koyeb.com/deploy?type=git&r
 
 ## ⚡ Features
 
-- **Multi-Device Auth** — Supports `SESSION_ID` (`LIL~` gzipped/base64) and `SESSION` (base64 `creds.json`).
-- **Modular Commands** — Native plugins in `Spider/commands/` plus full legacy command compatibility.
-- **Group Protection** — Anti-link, anti-spam, anti-flood, anti-scam, 24h anti-duplicate, anti-bot, anti-badword, admin protection, and lockdown mode.
-- **Automations** — Anti-delete, anti-edit, anti-call, auto-read, auto-react, status auto-view/like, auto-bio, and view-once auto-save.
-- **Health Server** — Built-in Express server exposing `GET /` and `GET /health`.
+- **Multi-Device Auth (Pair Code & QR)** — Supports `SESSION_ID` (`LIL~` gzipped/base64) and `SESSION` (base64 `creds.json`) via `@whiskeysockets/baileys`.
+- **AI & Vision Commands** — Built-in GPT, Gemini, DeepSeek, and image vision analysis right inside WhatsApp chats.
+- **Media & Social Downloaders** — Download music, playlists, lyrics, audio recognition (Shazam), and videos from YouTube, TikTok, Instagram, Facebook, and X/Twitter.
+- **Group Protection & Moderation** — Anti-link, anti-spam, anti-flood, anti-scam, anti-advertisement, 24h anti-duplicate, anti-bot, anti-badword, admin protection, activity stats, reminders, and lockdown mode.
+- **WhatsApp Automations** — Anti-delete, anti-edit, anti-call, auto-read, auto-react, status auto-view/like, auto-bio, and view-once media auto-save.
+- **Stickers, Converters & Modular Plugins** — Sticker maker, media-to-URL uploader, logo generator, multi-language translator, ZIP backup, native `Spider/commands/` plugins, and full legacy command compatibility.
+- **Cloud-Ready Health Server** — Built-in Express server exposing `GET /` and `GET /health`, tuned for Heroku, Koyeb, Render, Railway, Docker, Katabump, Pterodactyl panels, VPS, and Termux.
 
 ---
 
