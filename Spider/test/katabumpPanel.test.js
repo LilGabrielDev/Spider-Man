@@ -623,3 +623,49 @@ test('Katabump worker survives HTTP EADDRINUSE port conflict without crashing', 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('General, Structure, and legacy plugins handle omitted config without TypeError, and supervisor/worker guard uncaughtException + EPIPE', async () => {
+  const { commands: generalCmds } = await import('../commands/General.js');
+  const { commands: structureCmds } = await import('../commands/Structure.js');
+  const sent = [];
+  const mockSock = {
+    user: { id: '254700000001:5@s.whatsapp.net' },
+    sendMessage: async (jid, payload) => {
+      sent.push({ jid, payload });
+      return { key: { id: `safe-${sent.length}`, remoteJid: jid, fromMe: true } };
+    },
+  };
+  const ownerCmd = generalCmds.find((c) => c.name === 'owner');
+  const trtCmd = generalCmds.find((c) => c.name === 'trt');
+  const structureCmd = structureCmds.find((c) => c.name === 'structure');
+
+  await ownerCmd.execute({ sock: mockSock, from: '254700000001@s.whatsapp.net', msg: { key: { id: 'o1' } } });
+  await trtCmd.execute({ sock: mockSock, from: '254700000001@s.whatsapp.net', text: '', msg: { key: { id: 't1' } } });
+  await structureCmd.execute({ sock: mockSock, from: '254700000001@s.whatsapp.net', text: 'help', msg: { key: { id: 's1' } } });
+  assert.equal(sent.length, 3);
+
+  const legacyCmds = await loadLegacyCommands();
+  const devLegacy = legacyCmds.find((c) => c.name === 'dev');
+  assert.ok(devLegacy);
+  await devLegacy.execute({
+    sock: mockSock,
+    from: '254700000001@s.whatsapp.net',
+    sender: '254700000001@s.whatsapp.net',
+    senderNumber: '254700000001',
+    args: [],
+    text: '',
+    isOwner: true,
+    msg: { key: { id: 'd1', remoteJid: '254700000001@s.whatsapp.net', fromMe: true }, message: { conversation: '.dev' } },
+  });
+  assert.ok(sent.length >= 4);
+
+  const supervisorSource = fs.readFileSync(path.join(process.cwd(), 'index.js'), 'utf8');
+  assert.match(supervisorSource, /process\.on\(["']uncaughtException["']/);
+  assert.match(supervisorSource, /process\.on\(["']unhandledRejection["']/);
+  assert.match(supervisorSource, /process\.stdout\?\.on\?\.\(["']error["']/);
+
+  const workerSource = fs.readFileSync(path.join(process.cwd(), 'spider', 'index.js'), 'utf8');
+  assert.match(workerSource, /process\['on'\]\('uncaughtException'/);
+  assert.match(workerSource, /process\['on'\]\('unhandledRejection'/);
+  assert.match(workerSource, /process\['stdout'\]\?\.\['on'\]\?\.\('error'/);
+});

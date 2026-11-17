@@ -82,6 +82,18 @@ function forwardSignal(signal) {
     }
 }
 
+process.stdout?.on?.("error", () => {});
+process.stderr?.on?.("error", () => {});
+process.on("unhandledRejection", (reason) => {
+    if (shuttingDown) return;
+    console.warn(`⚠️ [SUPERVISOR] Unhandled rejection: ${reason?.message || String(reason || "unknown")}`);
+});
+process.on("uncaughtException", (error) => {
+    if (shuttingDown) return;
+    const code = error?.code || "";
+    console.warn(`⚠️ [SUPERVISOR] Recovered uncaught exception${code ? ` (${code})` : ""}: ${error?.message || String(error || "unknown")}`);
+});
+
 process.on("SIGINT", () => forwardSignal("SIGINT"));
 process.on("SIGTERM", () => forwardSignal("SIGTERM"));
 

@@ -412,7 +412,7 @@ export async function loadLegacyCommands() {
       adminOnly: Boolean(adminOnly),
       botAdminOnly: Boolean(cmd.botAdminOnly),
       execute: async (ctx) => {
-        legacyConfig.MODE = ctx.config.MODE;
+        legacyConfig.MODE = (ctx.config || _0x21bd49).MODE;
         legacyConfig.OWNER_NUMBER = resolveRuntimeOwnerPhone({
           sock: ctx.sock,
           config: ctx.config || _0x21bd49,
@@ -535,7 +535,7 @@ export async function loadLegacyCommands() {
           isSuperUser: Boolean(ctx.isOwner),
           quoted: view.quoted,
           reply: view.reply,
-          send: (payload, options) => ctx.sock.sendMessage(ctx.from, payload, options),
+          send: (payload, options) => ctx.sock?.sendMessage?.(ctx.from, payload, options),
           react: view.react,
           config: legacyConfig,
         };
