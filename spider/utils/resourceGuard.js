@@ -272,6 +272,25 @@ export function isRenderEnvironment(env = process.env) {
   );
 }
 
+export function isKoyebEnvironment(env = process.env) {
+  if (!env || typeof env !== 'object') return false;
+  const koyebFlag = String(env.KOYEB || '').trim().toLowerCase();
+  if (koyebFlag === 'true' || koyebFlag === '1') return true;
+  return Boolean(
+    env.KOYEB_ENV ||
+    env.KOYEB_SERVICE_NAME ||
+    env.KOYEB_SERVICE_ID ||
+    env.KOYEB_APP_NAME ||
+    env.KOYEB_INSTANCE_ID ||
+    env.KOYEB_DEPLOYMENT_ID ||
+    env.KOYEB_REGIONAL_DEPLOYMENT_ID ||
+    env.KOYEB_INSTANCE_TYPE ||
+    env.KOYEB_REGION ||
+    env.KOYEB_PUBLIC_DOMAIN ||
+    env.KOYEB_GIT_SHA,
+  );
+}
+
 export function getEffectiveMemoryLimitBytes({ totalMemBytes, env = process.env, fsImpl = fs } = {}) {
   const cgroupLimit = readCgroupMemoryLimitBytes(fsImpl);
   const panelLimit = readPanelMemoryLimitBytes(env);
@@ -303,6 +322,25 @@ export function isRenderFreePlan({
   return totalMb > 0 && totalMb <= 512;
 }
 
+export function isKoyebFreePlan({
+  totalMemBytes,
+  env = process.env,
+  fsImpl = fs,
+} = {}) {
+  const override = String(env?.SPIDER_KOYEB_FREE || '').trim().toLowerCase();
+  if (override === '0' || override === 'false') return false;
+  if (override === '1' || override === 'true') return true;
+
+  if (!isKoyebEnvironment(env)) return false;
+
+  const instanceType = String(env?.KOYEB_INSTANCE_TYPE || '').trim().toLowerCase();
+  if (instanceType === 'free' || instanceType === 'nano') return true;
+
+  const effectiveBytes = getEffectiveMemoryLimitBytes({ totalMemBytes, env, fsImpl });
+  const totalMb = Math.floor(effectiveBytes / (1024 * 1024));
+  return totalMb > 0 && totalMb <= 512;
+}
+
 export function isLowMemoryEnvironment({
   totalMemBytes,
   env = process.env,
@@ -313,6 +351,7 @@ export function isLowMemoryEnvironment({
   if (override === '1' || override === 'true') return true;
 
   if (isRenderFreePlan({ totalMemBytes, env, fsImpl })) return true;
+  if (isKoyebFreePlan({ totalMemBytes, env, fsImpl })) return true;
 
   const effectiveBytes = getEffectiveMemoryLimitBytes({ totalMemBytes, env, fsImpl });
   const totalMb = Math.floor(effectiveBytes / (1024 * 1024));
@@ -389,6 +428,16 @@ export function getWorkerMemoryExecArgv({
   const effectiveBytes = getEffectiveMemoryLimitBytes({ totalMemBytes, env, fsImpl });
   const totalMb = Math.floor(effectiveBytes / (1024 * 1024));
 
+  if (isKoyebFreePlan({ totalMemBytes, env, fsImpl })) {
+    const instanceType = String(env?.KOYEB_INSTANCE_TYPE || '').trim().toLowerCase();
+    const isNano = instanceType === 'nano' || (totalMb > 0 && totalMb <= 256);
+    return [
+      `--max-old-space-size=${isNano ? 144 : 200}`,
+      '--max-semi-space-size=4',
+      '--expose-gc',
+    ];
+  }
+
   let targetMb;
   if (totalMb <= 0) {
     targetMb = 320;
@@ -405,7 +454,8 @@ export function getWorkerMemoryExecArgv({
     readPanelMemoryLimitBytes(env) ||
     env?.KATABUMP ||
     env?.KATABUMP_SERVER ||
-    env?.P_SERVER_UUID,
+    env?.P_SERVER_UUID ||
+    isKoyebEnvironment(env),
   );
   if (totalMb > 0 && totalMb <= 512 && hasPanelLimitHint) {
     args.push('--expose-gc');
@@ -967,6 +1017,7 @@ export function startResourceMaintenance({
   onMemoryPressure,
 } = {}) {
   const renderFree = isRenderFreePlan({ env });
+  const koyebFree = isKoyebFreePlan({ env });
   const lowMemory = isLowMemoryEnvironment({ env });
   const effectiveHighWaterRatio =
     Number.isFinite(Number(memoryHighWaterRatio)) && Number(memoryHighWaterRatio) > 0
@@ -1013,6 +1064,10 @@ export function startResourceMaintenance({
     const limits = [cgroupLimit, panelLimit].filter((n) => Number.isFinite(n) && n > 0);
     if (renderFree) {
       limits.push(512 * 1024 * 1024);
+    }
+    if (koyebFree) {
+      const isNano = String(env?.KOYEB_INSTANCE_TYPE || '').trim().toLowerCase() === 'nano';
+      limits.push((isNano ? 256 : 512) * 1024 * 1024);
     }
     if (limits.length > 0) {
       return Math.min(...limits);

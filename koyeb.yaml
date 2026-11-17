@@ -1,0 +1,43 @@
+name: spider-man-md
+type: web
+git:
+  repository: github.com/LilGabrielDev/Spider-Man
+  branch: main
+  build_command: npm install --omit=dev --legacy-peer-deps --no-audit --no-fund
+  run_command: npm start
+ports:
+  - port: 3000
+    protocol: http
+routes:
+  - path: /
+    port: 3000
+health_checks:
+  - grace_period: 30
+    interval: 30
+    restart_limit: 3
+    timeout: 10
+    http:
+      port: 3000
+      path: /
+      method: GET
+instance_types:
+  - free
+env:
+  - key: PORT
+    value: "3000"
+  - key: MODE
+    value: private
+  - key: TZ
+    value: Africa/Nairobi
+  - key: SESSION_ID
+    value: ""
+  - key: SESSION
+    value: ""
+  - key: OWNER_NAME
+    value: Spider Man
+  - key: BOT_NAME
+    value: Spider Man
+  - key: ADMIN_PROTECTION
+    value: "on"
+  - key: AUTO_READ
+    value: "off"

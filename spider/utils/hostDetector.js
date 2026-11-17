@@ -399,8 +399,18 @@ export function detectHostingProvider({
     safeEnv.KOYEB_SERVICE_NAME ||
     safeEnv.KOYEB_SERVICE_ID ||
     safeEnv.KOYEB_APP_NAME ||
+    safeEnv.KOYEB_INSTANCE_ID ||
+    safeEnv.KOYEB_DEPLOYMENT_ID ||
+    safeEnv.KOYEB_REGIONAL_DEPLOYMENT_ID ||
+    safeEnv.KOYEB_INSTANCE_TYPE ||
     safeEnv.KOYEB_REGION ||
-    safeEnv.KOYEB_PUBLIC_DOMAIN
+    safeEnv.KOYEB_DC ||
+    safeEnv.KOYEB_HYPERVISOR_ID ||
+    safeEnv.KOYEB_ORGANIZATION_ID ||
+    safeEnv.KOYEB_PUBLIC_DOMAIN ||
+    safeEnv.KOYEB_GIT_SHA ||
+    safeEnv.KOYEB_GIT_BRANCH ||
+    safeEnv.KOYEB_GIT_REPOSITORY
   ) {
     return 'Koyeb';
   }
