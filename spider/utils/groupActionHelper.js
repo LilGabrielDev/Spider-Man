@@ -1108,7 +1108,7 @@ export async function pinMessageSafely({
     return { ok: false, error: 'missing-pin-key' };
   }
 
-  const payload = { pin: key, type, time };
+  const payload = Number(type) === 1 ? { pin: key, type: 1, time: time || 86400 } : { pin: key, type };
   const firstTry = await sendWithAckCheck({
     sock,
     from,
