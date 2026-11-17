@@ -2,6 +2,7 @@ import { S_WHATSAPP_NET } from '@whiskeysockets/baileys';
 import { formatJid, protectOwner } from '../france/index.js';
 import { t } from '../france/translator.js';
 import { executeGetPP } from '../utils/profilePicture.js';
+import { spiderHeader, spiderRow, spiderDivider, spiderFooter } from '../utils/tableStyle.js';
 import { cleanJid, extractPhoneDigits } from '../../spider/utils/groupRoleResolver.js';
 import { getPhoneFromJid } from '../../spider/utils/userJid.js';
 import { listRecentChatMessages } from '../../spider/anti.js';
@@ -12,9 +13,38 @@ import {
   resolveTargetFromMessage,
 } from '../../spider/utils/groupActionHelper.js';
 import { applyPostUpdateReload } from '../../spider/utils/runtimeControl.js';
+import {
+  MAX_BIO_LENGTH,
+  applyProfileBio,
+  defaultAutobioManager,
+  defaultAutobioStore,
+  formatAutobioInterval,
+  parseAutobioInterval,
+} from '../../spider/utils/autobioStore.js';
 
-let isStatusFetching = false;
-let fetchInterval = null;
+function getAutobioManager() {
+  return globalThis.__spiderAutobioManager || defaultAutobioManager;
+}
+
+function buildAutobioStatusCard(botName, state, headline = 'AUTO BIO') {
+  const lines = [
+    spiderHeader(botName, headline),
+    spiderRow('STATUS', state.enabled ? '🟢 ON' : '🔴 OFF', '⚙️'),
+    spiderRow('INTERVAL', formatAutobioInterval(state.intervalMs), '⏱️'),
+    spiderRow('SAVED BIOS', `${state.bios.length}`, '📝'),
+    spiderRow('LAST ABOUT', state.lastBio || 'Not updated yet', '💬'),
+    spiderDivider('COMMANDS'),
+    spiderRow('ENABLE', '.autobio on', '▶️'),
+    spiderRow('ADD BIO', '.autobio add <text>', '➕'),
+    spiderRow('SET BIO', '.autobio set <text>', '✏️'),
+    spiderRow('LIST', '.autobio list', '📋'),
+    spiderRow('DELETE', '.autobio del <#|all>', '🗑️'),
+    spiderRow('INTERVAL', '.autobio interval 60s', '🕒'),
+    spiderRow('DISABLE', '.autobio off', '⏹️'),
+    spiderFooter(`MAX ${MAX_BIO_LENGTH} CHARS PER BIO`),
+  ];
+  return lines.join('\n');
+}
 
 async function fetchMetaSafe(sock, from) {
   if (!from || !String(from).endsWith('@g.us')) return null;
@@ -99,22 +129,16 @@ export const commands = [
     category: 'USER',
     ownerOnly: true,
     execute: async ({ sock, from, text, msg }) => {
-      if (!text) {
+      const rawBio = String(text || '').trim();
+      if (!rawBio) {
         const noText = await t(from, 'user', 'setbioNoText');
         return sock.sendMessage(from, { text: noText }, { quoted: msg });
       }
       try {
-        const res =
-          typeof sock.updateProfileStatus === 'function'
-            ? await sock.updateProfileStatus(text)
-            : await sock.query({
-                tag: 'iq',
-                attrs: { to: S_WHATSAPP_NET, type: 'set', xmlns: 'status' },
-                content: [{ tag: 'status', attrs: {}, content: Buffer.from(text, 'utf-8') }],
-              });
-        if (isSendMessageFailure(res)) throw new Error('setbio-failed');
+        const applied = await applyProfileBio(sock, rawBio);
+        (getAutobioManager().store || defaultAutobioStore).recordAppliedBio(applied.bio);
         const successMsg = await t(from, 'user', 'setbioSuccess');
-        await sock.sendMessage(from, { text: successMsg }, { quoted: msg });
+        await sock.sendMessage(from, { text: `${successMsg}\n\n📝 *About:* ${applied.bio}` }, { quoted: msg });
       } catch {
         const errMsg = await t(from, 'user', 'setbioError');
         await sock.sendMessage(from, { text: errMsg }, { quoted: msg });
@@ -123,54 +147,231 @@ export const commands = [
   },
   {
     name: 'autobio',
-    description: 'Toggle automatic bio',
+    aliases: ['bio', 'addbio', 'botbio', 'toggleautobio'],
+    description: 'Auto-update WhatsApp About and manage custom bios',
     category: 'USER',
     ownerOnly: true,
-    execute: async ({ sock, from, text, msg }) => {
-      if (!text) {
-        const usageMsg = await t(from, 'user', 'autobioUsage');
-        return sock.sendMessage(from, { text: usageMsg }, { quoted: msg });
+    execute: async ({ sock, from, text, msg, config }) => {
+      const botName = config?.BOT_NAME || 'Spider Man';
+      const manager = getAutobioManager();
+      const store = manager.store || defaultAutobioStore;
+      const rawText = String(text || '').trim();
+
+      if (!rawText) {
+        const state = store.getState();
+        return sock.sendMessage(from, { text: buildAutobioStatusCard(botName, state) }, { quoted: msg });
       }
-      if (text === 'on') {
-        if (isStatusFetching) {
-          const alreadyOn = await t(from, 'user', 'autobioAlreadyOn');
-          return sock.sendMessage(from, { text: alreadyOn }, { quoted: msg });
+
+      const [firstToken, ...otherTokens] = rawText.split(/\s+/);
+      const sub = String(firstToken || '').toLowerCase();
+      const restText = rawText.slice(firstToken.length).trim();
+
+      if (sub === 'help' || sub === '?') {
+        const state = store.getState();
+        return sock.sendMessage(from, { text: buildAutobioStatusCard(botName, state) }, { quoted: msg });
+      }
+
+      if (sub === 'on' || sub === 'enable' || sub === 'start') {
+        const res = await manager.enable({ sock, bioText: restText });
+        if (!res.ok) {
+          return sock.sendMessage(
+            from,
+            { text: `❌ ${res.error || 'Could not enable Auto-Bio.'}` },
+            { quoted: msg },
+          );
         }
-        isStatusFetching = true;
-        clearInterval(fetchInterval);
-        fetchInterval = setInterval(async () => {
-          try {
-            const resp = await fetch('https://nekos.life/api/v2/fact');
-            const data = await resp.json();
-            const bioText = `Spider Man: ${data.fact}`;
-            if (typeof sock.updateProfileStatus === 'function') {
-              await sock.updateProfileStatus(bioText);
-            } else {
-              await sock.query({
-                tag: 'iq',
-                attrs: { to: S_WHATSAPP_NET, type: 'set', xmlns: 'status' },
-                content: [{ tag: 'status', attrs: {}, content: Buffer.from(bioText, 'utf-8') }],
-              });
-            }
-          } catch {}
-        }, 60000);
-        fetchInterval?.unref?.();
-        const enabledMsg = await t(from, 'user', 'autobioEnabled');
-        return sock.sendMessage(from, { text: enabledMsg }, { quoted: msg });
+        const rows = [
+          spiderHeader(botName, 'AUTO BIO ENABLED'),
+          spiderRow('STATUS', '🟢 ON', '⚙️'),
+          spiderRow('INTERVAL', formatAutobioInterval(res.state.intervalMs), '⏱️'),
+          spiderRow('SAVED BIOS', `${res.state.bios.length}`, '📝'),
+          spiderRow(
+            'ABOUT NOW',
+            res.updated ? res.bio : `⚠️ Failed: ${res.error || 'Socket not ready'}`,
+            res.updated ? '✅' : '⚠️',
+          ),
+          ...(res.truncated ? [spiderRow('NOTE', `Trimmed to ${MAX_BIO_LENGTH} chars`, '✂️')] : []),
+          spiderFooter('WHATSAPP ABOUT UPDATED'),
+        ];
+        return sock.sendMessage(from, { text: rows.join('\n') }, { quoted: msg });
       }
-      if (text === 'off') {
-        if (!isStatusFetching) {
-          const alreadyOff = await t(from, 'user', 'autobioAlreadyOff');
-          return sock.sendMessage(from, { text: alreadyOff }, { quoted: msg });
+
+      if (sub === 'off' || sub === 'disable' || sub === 'stop') {
+        const wasEnabled = store.getState().enabled;
+        manager.disable();
+        const msgText = wasEnabled
+          ? await t(from, 'user', 'autobioDisabled')
+          : await t(from, 'user', 'autobioAlreadyOff');
+        return sock.sendMessage(from, { text: `🔴 ${msgText}` }, { quoted: msg });
+      }
+
+      if (sub === 'add' || sub === '+') {
+        if (!restText) {
+          return sock.sendMessage(
+            from,
+            { text: '❌ Provide the bio text to add.\nExample: *.autobio add Available 24/7 ⚡*' },
+            { quoted: msg },
+          );
         }
-        clearInterval(fetchInterval);
-        fetchInterval = null;
-        isStatusFetching = false;
-        const disabledMsg = await t(from, 'user', 'autobioDisabled');
-        return sock.sendMessage(from, { text: disabledMsg }, { quoted: msg });
+        const res = await manager.addAndApply(restText, { sock, enableAuto: true });
+        if (!res.ok) {
+          return sock.sendMessage(from, { text: `❌ ${res.error || 'Could not add bio.'}` }, { quoted: msg });
+        }
+        const rows = [
+          spiderHeader(botName, res.added ? 'BIO ADDED' : 'BIO SELECTED'),
+          spiderRow('STATUS', '🟢 ON', '⚙️'),
+          spiderRow('SLOT', `#${res.index + 1} of ${res.total}`, '📌'),
+          spiderRow(
+            'ABOUT NOW',
+            res.updated ? res.bio : `⚠️ Saved, update failed: ${res.error || 'Socket not ready'}`,
+            res.updated ? '✅' : '⚠️',
+          ),
+          ...(res.truncated ? [spiderRow('NOTE', `Trimmed to ${MAX_BIO_LENGTH} chars`, '✂️')] : []),
+          spiderFooter('VISIBLE ON WHATSAPP ABOUT'),
+        ];
+        return sock.sendMessage(from, { text: rows.join('\n') }, { quoted: msg });
       }
-      const usageMsg = await t(from, 'user', 'autobioUsage');
-      await sock.sendMessage(from, { text: usageMsg }, { quoted: msg });
+
+      if (sub === 'set' || sub === 'replace') {
+        if (!restText) {
+          return sock.sendMessage(
+            from,
+            { text: '❌ Provide the bio text to set.\nExample: *.autobio set Spider Man Online ⚡*' },
+            { quoted: msg },
+          );
+        }
+        const res = await manager.setAndApply(restText, { sock, enableAuto: true });
+        if (!res.ok) {
+          return sock.sendMessage(from, { text: `❌ ${res.error || 'Could not set bio.'}` }, { quoted: msg });
+        }
+        const rows = [
+          spiderHeader(botName, 'BIO SET'),
+          spiderRow('STATUS', '🟢 ON', '⚙️'),
+          spiderRow(
+            'ABOUT NOW',
+            res.updated ? res.bio : `⚠️ Saved, update failed: ${res.error || 'Socket not ready'}`,
+            res.updated ? '✅' : '⚠️',
+          ),
+          ...(res.truncated ? [spiderRow('NOTE', `Trimmed to ${MAX_BIO_LENGTH} chars`, '✂️')] : []),
+          spiderFooter('VISIBLE ON WHATSAPP ABOUT'),
+        ];
+        return sock.sendMessage(from, { text: rows.join('\n') }, { quoted: msg });
+      }
+
+      if (sub === 'list' || sub === 'ls' || sub === 'status' || sub === 'info' || sub === 'show') {
+        const state = store.getState();
+        const activeIdx = state.bios.length > 0 ? state.currentIndex % state.bios.length : -1;
+        const bioRows =
+          state.bios.length > 0
+            ? state.bios.map((b, i) => `> ┃ ${i === activeIdx ? '👉' : '•'} *#${i + 1}*  ›  ${b}`)
+            : ['> ┃ ℹ️ No custom bios saved — using dynamic live status.'];
+        const rows = [
+          spiderHeader(botName, 'AUTO BIO LIST'),
+          spiderRow('STATUS', state.enabled ? '🟢 ON' : '🔴 OFF', '⚙️'),
+          spiderRow('INTERVAL', formatAutobioInterval(state.intervalMs), '⏱️'),
+          spiderRow('LAST ABOUT', state.lastBio || 'Not updated yet', '💬'),
+          spiderDivider(`SAVED BIOS (${state.bios.length})`),
+          ...bioRows,
+          spiderFooter('ADD: .autobio add <text> | DEL: .autobio del <#>'),
+        ];
+        return sock.sendMessage(from, { text: rows.join('\n') }, { quoted: msg });
+      }
+
+      if (sub === 'del' || sub === 'delete' || sub === 'rm' || sub === 'remove' || sub === 'clear' || sub === 'reset') {
+        const stateBefore = store.getState();
+        if (sub === 'clear' || sub === 'reset' || restText.toLowerCase() === 'all') {
+          const cleared = store.clearBios();
+          let refreshNote = '';
+          if (stateBefore.enabled) {
+            const refreshed = await manager.updateNow({ sock });
+            if (refreshed.ok) refreshNote = refreshed.bio;
+          }
+          const rows = [
+            spiderHeader(botName, 'BIOS CLEARED'),
+            spiderRow('REMOVED', `${cleared.removedCount} bio(s)`, '🗑️'),
+            spiderRow('MODE', stateBefore.enabled ? 'Dynamic live About' : 'Off', '⚙️'),
+            ...(refreshNote ? [spiderRow('ABOUT NOW', refreshNote, '✅')] : []),
+            spiderFooter('AUTOBIO LIST UPDATED'),
+          ];
+          return sock.sendMessage(from, { text: rows.join('\n') }, { quoted: msg });
+        }
+
+        const idx = Number.parseInt(restText || otherTokens[0] || '', 10);
+        if (!Number.isFinite(idx) || idx < 1) {
+          return sock.sendMessage(
+            from,
+            { text: '❌ Usage: *.autobio del <number>* or *.autobio clear*\nUse *.autobio list* to see bio numbers.' },
+            { quoted: msg },
+          );
+        }
+        const removed = store.removeBio(idx);
+        if (!removed.ok) {
+          return sock.sendMessage(
+            from,
+            { text: `❌ Bio #${idx} not found. Use *.autobio list* to view saved bios.` },
+            { quoted: msg },
+          );
+        }
+        let refreshNote = '';
+        if (stateBefore.enabled) {
+          const refreshed = await manager.updateNow({ sock });
+          if (refreshed.ok) refreshNote = refreshed.bio;
+        }
+        const rows = [
+          spiderHeader(botName, 'BIO REMOVED'),
+          spiderRow('DELETED', removed.removed, '🗑️'),
+          spiderRow('REMAINING', `${removed.total}`, '📝'),
+          ...(refreshNote ? [spiderRow('ABOUT NOW', refreshNote, '✅')] : []),
+          spiderFooter('AUTOBIO LIST UPDATED'),
+        ];
+        return sock.sendMessage(from, { text: rows.join('\n') }, { quoted: msg });
+      }
+
+      if (sub === 'interval' || sub === 'time' || sub === 'delay') {
+        if (!restText) {
+          const current = store.getState();
+          return sock.sendMessage(
+            from,
+            {
+              text: `⏱️ Current Auto-Bio interval: *${formatAutobioInterval(current.intervalMs)}*\nUsage: *.autobio interval 60s* or *.autobio interval 5m* (min 15s, max 24h).`,
+            },
+            { quoted: msg },
+          );
+        }
+        const parsedMs = parseAutobioInterval(restText);
+        if (!parsedMs) {
+          return sock.sendMessage(
+            from,
+            { text: '❌ Invalid interval. Use values like *30s*, *1m*, *5m*, or *1h* (min 15s, max 24h).' },
+            { quoted: msg },
+          );
+        }
+        const updated = manager.setIntervalMs(parsedMs);
+        return sock.sendMessage(
+          from,
+          { text: `✅ Auto-Bio interval updated to *${formatAutobioInterval(updated.intervalMs)}*.` },
+          { quoted: msg },
+        );
+      }
+
+      // Direct text fallback: `.autobio <custom bio>` adds the bio and immediately updates WhatsApp About
+      const res = await manager.addAndApply(rawText, { sock, enableAuto: true });
+      if (!res.ok) {
+        return sock.sendMessage(from, { text: `❌ ${res.error || 'Could not update bio.'}` }, { quoted: msg });
+      }
+      const rows = [
+        spiderHeader(botName, res.added ? 'BIO ADDED' : 'BIO SELECTED'),
+        spiderRow('STATUS', '🟢 ON', '⚙️'),
+        spiderRow('SLOT', `#${res.index + 1} of ${res.total}`, '📌'),
+        spiderRow(
+          'ABOUT NOW',
+          res.updated ? res.bio : `⚠️ Saved, update failed: ${res.error || 'Socket not ready'}`,
+          res.updated ? '✅' : '⚠️',
+        ),
+        ...(res.truncated ? [spiderRow('NOTE', `Trimmed to ${MAX_BIO_LENGTH} chars`, '✂️')] : []),
+        spiderFooter('VISIBLE ON WHATSAPP ABOUT'),
+      ];
+      return sock.sendMessage(from, { text: rows.join('\n') }, { quoted: msg });
     },
   },
   {
