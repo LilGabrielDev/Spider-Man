@@ -10,7 +10,10 @@ import {
   createBaileysCacheStore,
   createBoundedMap,
   createBoundedSet,
+  getEffectiveMemoryLimitBytes,
   getWorkerMemoryExecArgv,
+  isRenderEnvironment,
+  isRenderFreePlan,
   pruneAuthDirectory,
   startSessionAndCacheCleaner,
 } from '../../spider/utils/resourceGuard.js';
@@ -728,3 +731,127 @@ test('clearTemporarySessionsAndCache deletes inactive session folders and Signal
   });
 });
 
+test('Render free plan detection scopes 512MB memory tuning without throttling paid Render or non-Render hosts', () => {
+  const MB = 1024 * 1024;
+  const makeMockFs = (cgroupMap = {}) => ({
+    existsSync: (p) => Object.prototype.hasOwnProperty.call(cgroupMap, p),
+    readFileSync: (p) => cgroupMap[p],
+  });
+
+  assert.equal(isRenderEnvironment({ RENDER: 'true' }), true);
+  assert.equal(isRenderEnvironment({ RENDER_SERVICE_ID: 'srv-123' }), true);
+  assert.equal(isRenderEnvironment({}), false);
+
+  assert.equal(
+    isRenderFreePlan({
+      totalMemBytes: 16_384 * MB,
+      env: { RENDER: 'true' },
+      fsImpl: makeMockFs({ '/sys/fs/cgroup/memory.max': String(512 * MB) }),
+    }),
+    true,
+  );
+  assert.equal(
+    isRenderFreePlan({
+      totalMemBytes: 16_384 * MB,
+      env: { RENDER: 'true', RENDER_PLAN: 'free' },
+      fsImpl: makeMockFs({}),
+    }),
+    true,
+  );
+  assert.equal(
+    isRenderFreePlan({
+      totalMemBytes: 16_384 * MB,
+      env: { RENDER: 'true' },
+      fsImpl: makeMockFs({ '/sys/fs/cgroup/memory.max': String(2_048 * MB) }),
+    }),
+    false,
+  );
+  assert.equal(
+    isRenderFreePlan({
+      totalMemBytes: 512 * MB,
+      env: {},
+      fsImpl: makeMockFs({ '/sys/fs/cgroup/memory.max': String(512 * MB) }),
+    }),
+    false,
+  );
+  assert.equal(
+    isRenderFreePlan({
+      totalMemBytes: 4_096 * MB,
+      env: { SPIDER_RENDER_FREE: '1' },
+      fsImpl: makeMockFs({}),
+    }),
+    true,
+  );
+  assert.equal(
+    isRenderFreePlan({
+      totalMemBytes: 512 * MB,
+      env: { RENDER: 'true', SPIDER_RENDER_FREE: '0' },
+      fsImpl: makeMockFs({}),
+    }),
+    false,
+  );
+
+  assert.equal(
+    getEffectiveMemoryLimitBytes({
+      totalMemBytes: 8_192 * MB,
+      fsImpl: makeMockFs({ '/sys/fs/cgroup/memory.high': String(512 * MB) }),
+    }),
+    512 * MB,
+  );
+
+  assert.deepEqual(
+    getWorkerMemoryExecArgv({
+      totalMemBytes: 16_384 * MB,
+      env: { RENDER: 'true' },
+      existingExecArgv: [],
+      fsImpl: makeMockFs({ '/sys/fs/cgroup/memory.max': String(512 * MB) }),
+    }),
+    ['--max-old-space-size=176', '--max-semi-space-size=4', '--expose-gc'],
+  );
+
+  assert.deepEqual(
+    getWorkerMemoryExecArgv({
+      totalMemBytes: 16_384 * MB,
+      env: { RENDER: 'true' },
+      existingExecArgv: [],
+      fsImpl: makeMockFs({ '/sys/fs/cgroup/memory.max': String(2_048 * MB) }),
+    }),
+    ['--max-old-space-size=512'],
+  );
+
+  const supervisorSource = fs.readFileSync(path.resolve(process.cwd(), 'index.js'), 'utf8');
+  assert.match(supervisorSource, /\.\.\.workerExecArgv,\s*WORKER_SCRIPT/);
+});
+
+test('startSessionAndCacheCleaner checkMemoryNow trims caches and invokes onMemoryPressure on Render free plans', () => {
+  const ephemeral = createBaileysCacheStore({ maxEntries: 10, ttlMs: 60_000 });
+  const protectedCache = createBaileysCacheStore({ maxEntries: 10, ttlMs: 60_000 });
+  ephemeral.set('k1', 'v1');
+  protectedCache.set('p1', 'keep');
+
+  let pressureCalls = 0;
+  let lastLimitBytes = 0;
+  const maint = startSessionAndCacheCleaner({
+    caches: [ephemeral],
+    protectedCaches: [protectedCache],
+    quiet: true,
+    intervalMs: 60_000,
+    memoryWatchIntervalMs: 30_000,
+    env: { RENDER: 'true', SPIDER_RENDER_FREE: '1' },
+    onMemoryPressure: ({ limitBytes }) => {
+      pressureCalls += 1;
+      lastLimitBytes = limitBytes;
+    },
+  });
+
+  try {
+    const res = maint.checkMemoryNow({ force: true });
+    assert.equal(res.memoryTrimmed, true);
+    assert.equal(pressureCalls, 1);
+    assert.ok(lastLimitBytes > 0 && lastLimitBytes <= 512 * 1024 * 1024);
+    assert.equal(ephemeral.get('k1'), undefined);
+    assert.equal(protectedCache.get('p1'), 'keep');
+  } finally {
+    maint.stop();
+  }
+});

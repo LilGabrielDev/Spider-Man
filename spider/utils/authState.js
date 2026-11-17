@@ -8,14 +8,20 @@ import { BufferJSON, initAuthCreds, proto } from '@whiskeysockets/baileys';
 const REQUIRED_CRED_KEYS = ['noiseKey', 'signedIdentityKey', 'registrationId', 'signedPreKey'];
 const fileLocks = new Map();
 
-function getFileLock(filePath) {
+function withFileLock(filePath, task) {
   const resolved = path.resolve(filePath);
-  let mutex = fileLocks.get(resolved);
-  if (!mutex) {
-    mutex = new Mutex();
-    fileLocks.set(resolved, mutex);
+  let entry = fileLocks.get(resolved);
+  if (!entry) {
+    entry = { mutex: new Mutex(), pending: 0 };
+    fileLocks.set(resolved, entry);
   }
-  return mutex;
+  entry.pending += 1;
+  return entry.mutex.runExclusive(task).finally(() => {
+    entry.pending -= 1;
+    if (entry.pending <= 0 && fileLocks.get(resolved) === entry) {
+      fileLocks.delete(resolved);
+    }
+  });
 }
 
 export function fixAuthFileName(file) {
@@ -340,10 +346,9 @@ export async function useHardenedMultiFileAuthState(
 
   const writeData = (data, file, { backup = false } = {}) => {
     const filePath = path.join(folder, fixAuthFileName(file));
-    const mutex = getFileLock(filePath);
     const serialized = JSON.stringify(data, BufferJSON.replacer);
 
-    const job = mutex.runExclusive(async () => {
+    const job = withFileLock(filePath, async () => {
       await atomicWriteRaw(filePath, serialized);
       if (backup) {
         await atomicWriteRaw(`${filePath}.bak`, serialized).catch(() => {});
@@ -355,8 +360,7 @@ export async function useHardenedMultiFileAuthState(
 
   const readData = async (file) => {
     const filePath = path.join(folder, fixAuthFileName(file));
-    const mutex = getFileLock(filePath);
-    return mutex.runExclusive(async () => {
+    return withFileLock(filePath, async () => {
       try {
         const raw = await readFile(filePath, { encoding: 'utf8' });
         if (!raw || !raw.trim()) return null;
@@ -369,8 +373,7 @@ export async function useHardenedMultiFileAuthState(
 
   const removeData = (file) => {
     const filePath = path.join(folder, fixAuthFileName(file));
-    const mutex = getFileLock(filePath);
-    const job = mutex.runExclusive(async () => {
+    const job = withFileLock(filePath, async () => {
       try {
         await unlink(filePath);
       } catch (err) {

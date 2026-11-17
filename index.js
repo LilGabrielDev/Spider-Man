@@ -88,9 +88,9 @@ process.on("SIGTERM", () => forwardSignal("SIGTERM"));
 function startWorker() {
     let restartRequested = false;
 
-    const child = spawn(process.execPath, [WORKER_SCRIPT], {
+    const workerExecArgv = getWorkerMemoryExecArgv();
+    const child = spawn(process.execPath, [...workerExecArgv, WORKER_SCRIPT], {
         cwd: __dirname,
-        execArgv: getWorkerMemoryExecArgv(),
         stdio: ["inherit", "inherit", "inherit", "ipc"],
         env: {
             ...process.env,

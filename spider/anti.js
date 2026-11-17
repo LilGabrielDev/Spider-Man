@@ -16,10 +16,12 @@ const messagesByChatAndId = new Map();
 const chatAliases = new Map();
 const wrappedSockets = new WeakSet();
 const DEFAULT_MAX_MESSAGES = 5000;
-const MAX_CHAT_ALIASES = 4000;
-const PERSIST_DEBOUNCE_MS = 1000;
+const DEFAULT_MAX_CHAT_ALIASES = 4000;
+const DEFAULT_PERSIST_DEBOUNCE_MS = 1000;
 
 let maxMessages = DEFAULT_MAX_MESSAGES;
+let maxChatAliases = DEFAULT_MAX_CHAT_ALIASES;
+let persistDebounceMs = DEFAULT_PERSIST_DEBOUNCE_MS;
 let persistFilePath = '';
 let persistTimer = null;
 let aliasResolver = null;
@@ -122,7 +124,7 @@ function addAliasPair(a, b) {
     chatAliases.set(a, set);
   }
   set.add(b);
-  while (chatAliases.size > MAX_CHAT_ALIASES) {
+  while (chatAliases.size > maxChatAliases) {
     const oldest = chatAliases.keys().next().value;
     if (oldest === undefined) break;
     chatAliases.delete(oldest);
@@ -165,6 +167,37 @@ export function cleanMessageStore() {
   }
 }
 
+export function trimMessageRetryStore({
+  maxEntries = Math.max(100, Math.floor(maxMessages / 2)),
+  maxAliasEntries = Math.max(200, Math.floor(maxChatAliases / 2)),
+} = {}) {
+  const cap = Number.isFinite(Number(maxEntries)) && Number(maxEntries) > 0
+    ? Math.floor(Number(maxEntries))
+    : 150;
+  let removed = 0;
+  while (messageStore.size > cap) {
+    const oldest = messageStore.keys().next().value;
+    if (oldest === undefined) break;
+    messageStore.delete(oldest);
+    removed += 1;
+  }
+  const compositeCap = cap * 3;
+  while (messagesByChatAndId.size > compositeCap) {
+    const oldest = messagesByChatAndId.keys().next().value;
+    if (oldest === undefined) break;
+    messagesByChatAndId.delete(oldest);
+  }
+  const aliasCap = Number.isFinite(Number(maxAliasEntries)) && Number(maxAliasEntries) > 0
+    ? Math.floor(Number(maxAliasEntries))
+    : maxChatAliases;
+  while (chatAliases.size > aliasCap) {
+    const oldest = chatAliases.keys().next().value;
+    if (oldest === undefined) break;
+    chatAliases.delete(oldest);
+  }
+  return removed;
+}
+
 function persistNow() {
   if (!persistFilePath) return;
   try {
@@ -194,7 +227,7 @@ function schedulePersist() {
   persistTimer = setTimeout(() => {
     persistTimer = null;
     persistNow();
-  }, PERSIST_DEBOUNCE_MS);
+  }, persistDebounceMs);
   persistTimer.unref?.();
 }
 
@@ -216,6 +249,8 @@ export function resetMessageRetryStore() {
   chatAliases.clear();
   persistFilePath = '';
   maxMessages = DEFAULT_MAX_MESSAGES;
+  maxChatAliases = DEFAULT_MAX_CHAT_ALIASES;
+  persistDebounceMs = DEFAULT_PERSIST_DEBOUNCE_MS;
   aliasResolver = null;
 }
 
@@ -245,10 +280,20 @@ function indexStoredMessage(stored) {
 export function configureMessageRetryStore({
   persistPath = '',
   maxMessages: nextMaxMessages = DEFAULT_MAX_MESSAGES,
+  maxChatAliases: nextMaxChatAliases,
+  persistDebounceMs: nextPersistDebounceMs,
 } = {}) {
   const parsedMax = Number(nextMaxMessages);
   if (Number.isFinite(parsedMax) && parsedMax > 0) {
     maxMessages = Math.floor(parsedMax);
+  }
+  const parsedAliasMax = Number(nextMaxChatAliases);
+  if (Number.isFinite(parsedAliasMax) && parsedAliasMax > 0) {
+    maxChatAliases = Math.floor(parsedAliasMax);
+  }
+  const parsedDebounce = Number(nextPersistDebounceMs);
+  if (Number.isFinite(parsedDebounce) && parsedDebounce >= 50) {
+    persistDebounceMs = Math.floor(parsedDebounce);
   }
   persistFilePath = persistPath ? path.resolve(String(persistPath)) : '';
   if (!persistFilePath) return 0;
@@ -281,7 +326,7 @@ export function rememberMessage(message) {
   const id = message?.key?.id;
   if (!id || !message?.message) return false;
 
-  const stored = { ...message, timestamp: Date.now() };
+  const stored = { key: message.key, message: message.message, timestamp: Date.now() };
   const ok = indexStoredMessage(stored);
   if (ok) {
     schedulePersist();
