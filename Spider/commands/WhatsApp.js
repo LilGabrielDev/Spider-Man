@@ -1,10 +1,9 @@
-import { downloadContentFromMessage, downloadMediaMessage, S_WHATSAPP_NET } from '@whiskeysockets/baileys';
+import { S_WHATSAPP_NET } from '@whiskeysockets/baileys';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
 import config from '../../spider/config.js';
-import { messageStore } from '../../spider/anti.js';
-import { SILENT_LOGGER } from '../../spider/utils/privacyLogger.js';
+import { getMessageForRetry, messageStore } from '../../spider/anti.js';
 import { t } from '../france/translator.js';
 import { cleanJid, extractPhoneDigits } from '../../spider/utils/groupRoleResolver.js';
 import {
@@ -17,88 +16,122 @@ import {
 } from '../../spider/utils/groupActionHelper.js';
 import { getPhoneFromJid, resolveRuntimeOwnerJid } from '../../spider/utils/userJid.js';
 import {
+  downloadMediaWithRecovery,
+  extractViewOnceMedia,
   getCachedViewOnce,
   hasValidMediaKey,
   normalizeMediaKey,
   setCachedViewOnce,
+  waitForPendingViewOnceCache,
 } from '../../spider/viewOnceAutoSave.js';
+
+function isEmptyMediaField(val) {
+  if (val === undefined || val === null) return true;
+  if (typeof val === 'string') return val.trim() === '';
+  if (Buffer.isBuffer(val) || val instanceof Uint8Array || ArrayBuffer.isView(val)) {
+    return val.byteLength === 0;
+  }
+  if (Array.isArray(val)) return val.length === 0;
+  if (typeof val === 'object' && !(val instanceof Date)) {
+    return Object.keys(val).length === 0;
+  }
+  return false;
+}
 
 function mergeMediaNodes(primary, fallback) {
   if (!primary && !fallback) return null;
   const out = { ...(fallback || {}), ...(primary || {}) };
   if (fallback && primary) {
     for (const key of Object.keys(fallback)) {
-      if (out[key] === undefined || out[key] === null || out[key] === '') {
+      if (isEmptyMediaField(out[key]) && !isEmptyMediaField(fallback[key])) {
         out[key] = fallback[key];
       }
+    }
+    if (!hasValidMediaKey(out.mediaKey) && hasValidMediaKey(fallback.mediaKey)) {
+      out.mediaKey = fallback.mediaKey;
+    }
+    const primaryUrlOk = typeof out.url === 'string' && out.url.trim().startsWith('https://');
+    const fallbackUrlOk =
+      typeof fallback.url === 'string' && fallback.url.trim().startsWith('https://');
+    if (!primaryUrlOk && fallbackUrlOk) {
+      out.url = fallback.url;
     }
   }
   return out;
 }
 
-async function getBuffer(mediaMsg, mediaType, sock = null, fullMsg = null) {
+function extractThumbnailBuffer(mediaNode) {
+  const raw = mediaNode?.jpegThumbnail;
+  if (!raw) return null;
+  let buf = null;
+  if (Buffer.isBuffer(raw)) buf = raw;
+  else if (raw instanceof Uint8Array || ArrayBuffer.isView(raw)) {
+    buf = Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength);
+  } else if (typeof raw === 'string' && raw.trim().length > 0) {
+    buf = Buffer.from(raw.trim(), 'base64');
+  } else if (raw && typeof raw === 'object' && typeof raw.__spiderBytes === 'string') {
+    buf = Buffer.from(raw.__spiderBytes, 'base64');
+  }
+  return buf && buf.length > 64 ? buf : null;
+}
+
+async function resolveStoredViewOnceMessage(sock, from, stanzaId) {
+  if (!stanzaId) return null;
+  const direct = messageStore.get(stanzaId);
+  if (direct?.message) return direct;
+
+  try {
+    const retryMsg = await getMessageForRetry({ remoteJid: from, id: stanzaId });
+    if (retryMsg) {
+      return { key: { remoteJid: from, id: stanzaId }, message: retryMsg };
+    }
+  } catch {}
+
+  if (sock?.store && typeof sock.store.loadMessage === 'function') {
+    try {
+      const loaded = await sock.store.loadMessage(from, stanzaId);
+      if (loaded?.message) return loaded;
+    } catch {}
+  }
+
+  if (typeof sock?.getMessage === 'function') {
+    try {
+      const fetched = await sock.getMessage({ remoteJid: from, id: stanzaId });
+      if (fetched?.message) return fetched;
+      if (fetched && typeof fetched === 'object' && Object.keys(fetched).length > 0) {
+        return { key: { remoteJid: from, id: stanzaId }, message: fetched };
+      }
+    } catch {}
+  }
+
+  return null;
+}
+
+async function getBuffer(mediaMsg, mediaType, sock = null, fullMsg = null, { isPtv = false } = {}) {
   if (!mediaMsg || typeof mediaMsg !== 'object') {
     throw new Error('Missing media message payload');
   }
-  if (Buffer.isBuffer(mediaMsg._buffer)) return mediaMsg._buffer;
-  if (Buffer.isBuffer(mediaMsg.buffer)) return mediaMsg.buffer;
-
-  const normalizedKey = normalizeMediaKey(mediaMsg.mediaKey);
-  const normalizedMedia = {
-    ...mediaMsg,
-    mediaKey: normalizedKey,
-  };
-
-  const hasValidUrl =
-    typeof normalizedMedia.url === 'string' && normalizedMedia.url.trim().startsWith('https://');
-  const hasDirectPath =
-    typeof normalizedMedia.directPath === 'string' &&
-    normalizedMedia.directPath.trim().length > 0;
-
-  if ((!hasValidUrl && !hasDirectPath) || !hasValidMediaKey(normalizedKey)) {
-    throw new Error(
-      'View-once media credentials are missing or expired (ask sender to resend).',
-    );
+  const buf = await downloadMediaWithRecovery({
+    media: mediaMsg,
+    dlType: mediaType,
+    isPtv,
+    sock,
+    msg: fullMsg,
+  });
+  if (Buffer.isBuffer(buf) && buf.length > 0) {
+    return buf;
   }
-
-  try {
-    const stream = await downloadContentFromMessage(normalizedMedia, mediaType);
-    const chunks = [];
-    for await (const chunk of stream) chunks.push(chunk);
-    const buf = Buffer.concat(chunks);
-    if (buf.length > 0) return buf;
-    throw new Error('Empty media stream returned');
-  } catch (err) {
-    const status = err?.status || err?.output?.statusCode;
-    if (
-      fullMsg &&
-      sock &&
-      typeof sock.updateMediaMessage === 'function' &&
-      (status === 401 ||
-        status === 403 ||
-        status === 404 ||
-        status === 410 ||
-        /\b(401|403|404|410|empty media stream)\b/i.test(String(err?.message || '')))
-    ) {
-      return downloadMediaMessage(
-        fullMsg,
-        'buffer',
-        {},
-        {
-          logger: SILENT_LOGGER,
-          reuploadRequest: sock.updateMediaMessage.bind(sock),
-        },
-      );
-    }
-    throw err;
-  }
+  throw new Error('Unable to download media');
 }
 
 async function buildViewOncePayload({ sock, from, msg }) {
   const { contextInfo, rawQuotedMessage, quotedMessage } = extractContextInfo(msg);
   const stanzaId = contextInfo?.stanzaId || '';
+  if (stanzaId) {
+    await waitForPendingViewOnceCache(stanzaId);
+  }
   const cached = stanzaId ? getCachedViewOnce(stanzaId) : null;
-  const stored = stanzaId ? messageStore.get(stanzaId) : null;
+  const stored = await resolveStoredViewOnceMessage(sock, from, stanzaId);
   const storedRaw = stored?.message || null;
   const storedUnwrapped = storedRaw ? unwrapMessageContent(storedRaw) : null;
 
@@ -112,7 +145,7 @@ async function buildViewOncePayload({ sock, from, msg }) {
     return orig ? `${orig}\n\n${footerCaption}` : footerCaption;
   };
 
-  // 1) Best path (matching silva-md-bot): bytes cached when the message first arrived
+  // 1) Best path: bytes cached on arrival (in-memory or persisted on disk)
   if (cached && Buffer.isBuffer(cached.buffer) && cached.buffer.length > 0) {
     if (cached.type === 'image') {
       return {
@@ -144,10 +177,23 @@ async function buildViewOncePayload({ sock, from, msg }) {
         },
       };
     }
+    if (cached.type === 'document') {
+      return {
+        status: 'ok',
+        payload: {
+          document: cached.buffer,
+          caption: formatTextCaption(cached.caption),
+          mimetype: cached.mimetype || 'application/octet-stream',
+        },
+      };
+    }
   }
 
-  // 2) Fallback: check quoted copy / messageStore if it is a view-once message
+  // 2) Fallback: check quoted copy / messageStore / socket store if it is a view-once message
+  const quotedVo = extractViewOnceMedia(rawQuotedMessage);
+  const storedVo = extractViewOnceMedia(storedRaw);
   const isVo =
+    Boolean(quotedVo || storedVo) ||
     isViewOnceMessage(rawQuotedMessage) ||
     isViewOnceMessage(storedRaw) ||
     Boolean(
@@ -155,22 +201,38 @@ async function buildViewOncePayload({ sock, from, msg }) {
         quotedMessage?.videoMessage?.viewOnce ||
         quotedMessage?.ptvMessage?.viewOnce ||
         quotedMessage?.audioMessage?.viewOnce ||
+        quotedMessage?.documentMessage?.viewOnce ||
         storedUnwrapped?.imageMessage?.viewOnce ||
         storedUnwrapped?.videoMessage?.viewOnce ||
         storedUnwrapped?.ptvMessage?.viewOnce ||
-        storedUnwrapped?.audioMessage?.viewOnce,
+        storedUnwrapped?.audioMessage?.viewOnce ||
+        storedUnwrapped?.documentMessage?.viewOnce,
     );
 
   if (!isVo) {
     return { status: 'not-viewonce' };
   }
 
-  const imageMsg = mergeMediaNodes(quotedMessage?.imageMessage, storedUnwrapped?.imageMessage);
-  const videoMsg = mergeMediaNodes(
-    quotedMessage?.videoMessage || quotedMessage?.ptvMessage,
-    storedUnwrapped?.videoMessage || storedUnwrapped?.ptvMessage,
+  const imageMsg = mergeMediaNodes(
+    quotedMessage?.imageMessage || (quotedVo?.type === 'image' ? quotedVo.media : null),
+    storedUnwrapped?.imageMessage || (storedVo?.type === 'image' ? storedVo.media : null),
   );
-  const audioMsg = mergeMediaNodes(quotedMessage?.audioMessage, storedUnwrapped?.audioMessage);
+  const videoMsg = mergeMediaNodes(
+    quotedMessage?.videoMessage ||
+      quotedMessage?.ptvMessage ||
+      (quotedVo?.type === 'video' ? quotedVo.media : null),
+    storedUnwrapped?.videoMessage ||
+      storedUnwrapped?.ptvMessage ||
+      (storedVo?.type === 'video' ? storedVo.media : null),
+  );
+  const audioMsg = mergeMediaNodes(
+    quotedMessage?.audioMessage || (quotedVo?.type === 'audio' ? quotedVo.media : null),
+    storedUnwrapped?.audioMessage || (storedVo?.type === 'audio' ? storedVo.media : null),
+  );
+  const documentMsg = mergeMediaNodes(
+    quotedMessage?.documentMessage || (quotedVo?.type === 'document' ? quotedVo.media : null),
+    storedUnwrapped?.documentMessage || (storedVo?.type === 'document' ? storedVo.media : null),
+  );
 
   const reuploadKey = stored?.key || {
     remoteJid: from,
@@ -182,7 +244,13 @@ async function buildViewOncePayload({ sock, from, msg }) {
   if (imageMsg) {
     const normalized = { ...imageMsg, mediaKey: normalizeMediaKey(imageMsg.mediaKey) };
     const fullMsg = { key: reuploadKey, message: { imageMessage: normalized } };
-    const buf = await getBuffer(normalized, 'image', sock, fullMsg);
+    const buf = await downloadMediaWithRecovery({
+      media: normalized,
+      dlType: 'image',
+      mediaTypeKey: 'imageMessage',
+      sock,
+      msg: fullMsg,
+    });
     if (stanzaId && Buffer.isBuffer(buf) && buf.length > 0) {
       setCachedViewOnce(stanzaId, {
         type: 'image',
@@ -195,27 +263,50 @@ async function buildViewOncePayload({ sock, from, msg }) {
         timestamp: Date.now(),
       });
     }
-    return {
-      status: 'ok',
-      payload: {
-        image: buf,
-        caption: formatTextCaption(imageMsg.caption),
-        mimetype: imageMsg.mimetype || 'image/jpeg',
-      },
-    };
+    if (Buffer.isBuffer(buf) && buf.length > 0) {
+      return {
+        status: 'ok',
+        payload: {
+          image: buf,
+          caption: formatTextCaption(imageMsg.caption),
+          mimetype: imageMsg.mimetype || 'image/jpeg',
+        },
+      };
+    }
+    const thumbBuf = extractThumbnailBuffer(imageMsg);
+    if (thumbBuf) {
+      return {
+        status: 'ok',
+        payload: {
+          image: thumbBuf,
+          caption: formatTextCaption(imageMsg.caption),
+          mimetype: 'image/jpeg',
+        },
+      };
+    }
+    return { status: 'unavailable' };
   }
 
   if (videoMsg) {
     const isPtv = Boolean(
       (quotedMessage?.ptvMessage && !quotedMessage?.videoMessage) ||
-        (storedUnwrapped?.ptvMessage && !storedUnwrapped?.videoMessage),
+        (storedUnwrapped?.ptvMessage && !storedUnwrapped?.videoMessage) ||
+        quotedVo?.isPtv ||
+        storedVo?.isPtv,
     );
     const normalized = { ...videoMsg, mediaKey: normalizeMediaKey(videoMsg.mediaKey) };
     const fullMsg = {
       key: reuploadKey,
       message: { [isPtv ? 'ptvMessage' : 'videoMessage']: normalized },
     };
-    const buf = await getBuffer(normalized, 'video', sock, fullMsg);
+    const buf = await downloadMediaWithRecovery({
+      media: normalized,
+      dlType: 'video',
+      mediaTypeKey: isPtv ? 'ptvMessage' : 'videoMessage',
+      isPtv,
+      sock,
+      msg: fullMsg,
+    });
     if (stanzaId && Buffer.isBuffer(buf) && buf.length > 0) {
       setCachedViewOnce(stanzaId, {
         type: 'video',
@@ -228,20 +319,40 @@ async function buildViewOncePayload({ sock, from, msg }) {
         timestamp: Date.now(),
       });
     }
-    return {
-      status: 'ok',
-      payload: {
-        video: buf,
-        caption: formatTextCaption(videoMsg.caption),
-        mimetype: videoMsg.mimetype || 'video/mp4',
-      },
-    };
+    if (Buffer.isBuffer(buf) && buf.length > 0) {
+      return {
+        status: 'ok',
+        payload: {
+          video: buf,
+          caption: formatTextCaption(videoMsg.caption),
+          mimetype: videoMsg.mimetype || 'video/mp4',
+        },
+      };
+    }
+    const thumbBuf = extractThumbnailBuffer(videoMsg);
+    if (thumbBuf) {
+      return {
+        status: 'ok',
+        payload: {
+          image: thumbBuf,
+          caption: formatTextCaption(videoMsg.caption),
+          mimetype: 'image/jpeg',
+        },
+      };
+    }
+    return { status: 'unavailable' };
   }
 
   if (audioMsg) {
     const normalized = { ...audioMsg, mediaKey: normalizeMediaKey(audioMsg.mediaKey) };
     const fullMsg = { key: reuploadKey, message: { audioMessage: normalized } };
-    const buf = await getBuffer(normalized, 'audio', sock, fullMsg);
+    const buf = await downloadMediaWithRecovery({
+      media: normalized,
+      dlType: 'audio',
+      mediaTypeKey: 'audioMessage',
+      sock,
+      msg: fullMsg,
+    });
     if (stanzaId && Buffer.isBuffer(buf) && buf.length > 0) {
       setCachedViewOnce(stanzaId, {
         type: 'audio',
@@ -254,14 +365,53 @@ async function buildViewOncePayload({ sock, from, msg }) {
         timestamp: Date.now(),
       });
     }
-    return {
-      status: 'ok',
-      payload: {
-        audio: buf,
-        mimetype: audioMsg.mimetype || 'audio/mp4',
-        ptt: Boolean(audioMsg.ptt),
-      },
-    };
+    if (Buffer.isBuffer(buf) && buf.length > 0) {
+      return {
+        status: 'ok',
+        payload: {
+          audio: buf,
+          mimetype: audioMsg.mimetype || 'audio/mp4',
+          ptt: Boolean(audioMsg.ptt),
+        },
+      };
+    }
+    return { status: 'unavailable' };
+  }
+
+  if (documentMsg) {
+    const normalized = { ...documentMsg, mediaKey: normalizeMediaKey(documentMsg.mediaKey) };
+    const fullMsg = { key: reuploadKey, message: { documentMessage: normalized } };
+    const buf = await downloadMediaWithRecovery({
+      media: normalized,
+      dlType: 'document',
+      mediaTypeKey: 'documentMessage',
+      sock,
+      msg: fullMsg,
+    });
+    if (stanzaId && Buffer.isBuffer(buf) && buf.length > 0) {
+      setCachedViewOnce(stanzaId, {
+        type: 'document',
+        dlType: 'document',
+        isPtv: false,
+        buffer: buf,
+        mimetype: documentMsg.mimetype || 'application/octet-stream',
+        caption: String(documentMsg.caption || '').trim(),
+        ptt: false,
+        timestamp: Date.now(),
+      });
+    }
+    if (Buffer.isBuffer(buf) && buf.length > 0) {
+      return {
+        status: 'ok',
+        payload: {
+          document: buf,
+          caption: formatTextCaption(documentMsg.caption),
+          mimetype: documentMsg.mimetype || 'application/octet-stream',
+          fileName: documentMsg.fileName || 'view-once-file',
+        },
+      };
+    }
+    return { status: 'unavailable' };
   }
 
   return { status: 'unsupported' };
@@ -760,6 +910,9 @@ export const commands = [
           );
           return;
         }
+        if (result.status === 'unavailable') {
+          return;
+        }
         if (result.status !== 'ok' || !result.payload) {
           await sock.sendMessage(
             from,
@@ -771,13 +924,6 @@ export const commands = [
         await sock.sendMessage(from, result.payload, { quoted: msg });
       } catch (err) {
         console.error('vv command error:', err);
-        await sock.sendMessage(
-          from,
-          {
-            text: `❌ Failed to reveal view-once media: ${err?.message || 'media expired or unavailable.'}`,
-          },
-          { quoted: msg },
-        );
       }
     },
   },

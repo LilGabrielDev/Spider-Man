@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -19,6 +20,23 @@ function resolveWritableAntivvPath(fileName = 'antivv.json') {
     } catch {}
   }
   return candidates[1];
+}
+
+function resolveViewOnceCacheDir() {
+  const envDir = String(process.env.SPIDER_VIEWONCE_CACHE_DIR || '').trim();
+  const candidates = [
+    ...(envDir ? [envDir] : []),
+    path.join(process.cwd(), 'data', 'viewonce-cache'),
+    path.join(os.tmpdir(), 'spider-man-data', 'viewonce-cache'),
+  ];
+  for (const candidate of candidates) {
+    try {
+      fs.mkdirSync(candidate, { recursive: true });
+      fs.accessSync(candidate, fs.constants.W_OK);
+      return candidate;
+    } catch {}
+  }
+  return candidates[candidates.length - 1];
 }
 
 export function createAntivvStore({ filePath = '' } = {}) {
@@ -73,15 +91,115 @@ export function createAntivvStore({ filePath = '' } = {}) {
 export const defaultAntivvStore = createAntivvStore();
 
 const VIEW_ONCE_CACHE_LIMIT = 250;
+const VIEW_ONCE_DISK_CACHE_LIMIT = 120;
+const MAX_DISK_ENTRY_BYTES = 25 * 1024 * 1024;
+
 export const viewOnceCache =
   globalThis.__spiderViewOnceCache || (globalThis.__spiderViewOnceCache = new Map());
+export const pendingViewOnceCache =
+  globalThis.__spiderPendingViewOnceCache || (globalThis.__spiderPendingViewOnceCache = new Map());
+
+function cacheDiskFileForId(id, dir = resolveViewOnceCacheDir()) {
+  const hash = crypto.createHash('sha256').update(String(id)).digest('hex');
+  return path.join(dir, `${hash}.json`);
+}
+
+function pruneDiskCache(dir) {
+  try {
+    const files = fs
+      .readdirSync(dir)
+      .filter((name) => name.endsWith('.json'))
+      .map((name) => {
+        const full = path.join(dir, name);
+        try {
+          return { full, mtimeMs: fs.statSync(full).mtimeMs };
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.mtimeMs - b.mtimeMs);
+    const excess = files.length - VIEW_ONCE_DISK_CACHE_LIMIT;
+    for (let i = 0; i < excess; i += 1) {
+      try {
+        fs.unlinkSync(files[i].full);
+      } catch {}
+    }
+  } catch {}
+}
+
+function writeDiskCacheEntry(id, entry) {
+  try {
+    if (!id || !Buffer.isBuffer(entry?.buffer) || entry.buffer.length === 0) return false;
+    if (entry.buffer.length > MAX_DISK_ENTRY_BYTES) return false;
+    const dir = resolveViewOnceCacheDir();
+    const target = cacheDiskFileForId(id, dir);
+    const tmp = `${target}.tmp-${process.pid}-${Date.now()}`;
+    const payload = JSON.stringify({
+      v: 1,
+      id: String(id),
+      type: entry.type || 'image',
+      dlType: entry.dlType || entry.type || 'image',
+      isPtv: Boolean(entry.isPtv),
+      mimetype: entry.mimetype || '',
+      caption: entry.caption || '',
+      ptt: Boolean(entry.ptt),
+      timestamp: entry.timestamp || Date.now(),
+      bufferBase64: entry.buffer.toString('base64'),
+    });
+    fs.writeFileSync(tmp, payload, { mode: 0o600 });
+    fs.renameSync(tmp, target);
+    pruneDiskCache(dir);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function readDiskCacheEntry(id) {
+  try {
+    if (!id) return null;
+    const target = cacheDiskFileForId(id);
+    if (!fs.existsSync(target)) return null;
+    const parsed = JSON.parse(fs.readFileSync(target, 'utf8'));
+    if (!parsed || parsed.id !== String(id) || typeof parsed.bufferBase64 !== 'string') {
+      return null;
+    }
+    const buffer = Buffer.from(parsed.bufferBase64, 'base64');
+    if (!Buffer.isBuffer(buffer) || buffer.length === 0) return null;
+    return {
+      type: parsed.type || 'image',
+      dlType: parsed.dlType || parsed.type || 'image',
+      isPtv: Boolean(parsed.isPtv),
+      buffer,
+      mimetype: parsed.mimetype || '',
+      caption: parsed.caption || '',
+      ptt: Boolean(parsed.ptt),
+      timestamp: parsed.timestamp || Date.now(),
+    };
+  } catch {
+    return null;
+  }
+}
 
 export function getCachedViewOnce(id) {
   if (!id) return null;
-  return viewOnceCache.get(id) || null;
+  const mem = viewOnceCache.get(id);
+  if (mem) return mem;
+  const disk = readDiskCacheEntry(id);
+  if (disk) {
+    viewOnceCache.set(id, disk);
+    while (viewOnceCache.size > VIEW_ONCE_CACHE_LIMIT) {
+      const oldestKey = viewOnceCache.keys().next().value;
+      if (oldestKey === undefined) break;
+      viewOnceCache.delete(oldestKey);
+    }
+    return disk;
+  }
+  return null;
 }
 
-export function setCachedViewOnce(id, entry) {
+export function setCachedViewOnce(id, entry, { persist = true } = {}) {
   if (!id || !entry || !Buffer.isBuffer(entry.buffer) || entry.buffer.length === 0) {
     return false;
   }
@@ -94,29 +212,82 @@ export function setCachedViewOnce(id, entry) {
     if (oldestKey === undefined) break;
     viewOnceCache.delete(oldestKey);
   }
+  if (persist) {
+    writeDiskCacheEntry(id, entry);
+  }
   return true;
 }
 
-export function clearViewOnceCache() {
+export function clearViewOnceCache({ keepDisk = false } = {}) {
   viewOnceCache.clear();
+  pendingViewOnceCache.clear();
+  if (!keepDisk) {
+    try {
+      const dir = resolveViewOnceCacheDir();
+      if (fs.existsSync(dir)) {
+        for (const name of fs.readdirSync(dir)) {
+          if (name.endsWith('.json')) {
+            try {
+              fs.unlinkSync(path.join(dir, name));
+            } catch {}
+          }
+        }
+      }
+    } catch {}
+  }
+}
+
+export async function waitForPendingViewOnceCache(id, timeoutMs = 8000) {
+  if (!id) return null;
+  const pending = pendingViewOnceCache.get(id);
+  if (!pending) return null;
+  try {
+    let timer = null;
+    return await Promise.race([
+      pending.catch(() => null),
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve(null), Math.max(50, Number(timeoutMs) || 8000));
+        timer.unref?.();
+      }),
+    ]).finally(() => {
+      if (timer) clearTimeout(timer);
+    });
+  } catch {
+    return null;
+  }
 }
 
 export function normalizeMediaKey(mediaKey) {
   if (!mediaKey) return null;
-  if (Buffer.isBuffer(mediaKey)) return mediaKey;
-  if (typeof mediaKey === 'string') return mediaKey.trim() ? mediaKey : null;
-  if (mediaKey instanceof Uint8Array || Array.isArray(mediaKey)) {
-    return Buffer.from(mediaKey);
+  if (Buffer.isBuffer(mediaKey)) return mediaKey.length > 0 ? mediaKey : null;
+  if (typeof mediaKey === 'string') return mediaKey.trim() ? mediaKey.trim() : null;
+  if (mediaKey instanceof ArrayBuffer) {
+    const buf = Buffer.from(mediaKey);
+    return buf.length > 0 ? buf : null;
+  }
+  if (mediaKey instanceof Uint8Array || ArrayBuffer.isView(mediaKey)) {
+    const buf = Buffer.from(mediaKey.buffer, mediaKey.byteOffset, mediaKey.byteLength);
+    return buf.length > 0 ? buf : null;
+  }
+  if (Array.isArray(mediaKey)) {
+    const buf = Buffer.from(mediaKey);
+    return buf.length > 0 ? buf : null;
   }
   if (typeof mediaKey === 'object') {
+    if (typeof mediaKey.__spiderBytes === 'string') {
+      const buf = Buffer.from(mediaKey.__spiderBytes, 'base64');
+      return buf.length > 0 ? buf : null;
+    }
     if (mediaKey.type === 'Buffer' && Array.isArray(mediaKey.data)) {
-      return Buffer.from(mediaKey.data);
+      const buf = Buffer.from(mediaKey.data);
+      return buf.length > 0 ? buf : null;
     }
     const numericKeys = Object.keys(mediaKey)
       .filter((k) => /^\d+$/.test(k))
       .sort((a, b) => Number(a) - Number(b));
     if (numericKeys.length > 0) {
-      return Buffer.from(numericKeys.map((k) => Number(mediaKey[k]) & 0xff));
+      const buf = Buffer.from(numericKeys.map((k) => Number(mediaKey[k]) & 0xff));
+      return buf.length > 0 ? buf : null;
     }
   }
   return null;
@@ -171,6 +342,10 @@ export function extractViewOnceMedia(rawMessage) {
       layer = layer.viewOnceMessage.message;
       continue;
     }
+    if (layer.deviceSentMessage?.message) {
+      layer = layer.deviceSentMessage.message;
+      continue;
+    }
     if (layer.ephemeralMessage?.message) {
       layer = layer.ephemeralMessage.message;
       continue;
@@ -197,6 +372,10 @@ export function extractViewOnceMedia(rawMessage) {
       layer = layer.botInvokeMessage.message;
       continue;
     }
+    if (layer.futureProofMessage?.message) {
+      layer = layer.futureProofMessage.message;
+      continue;
+    }
     break;
   }
 
@@ -208,6 +387,7 @@ export function extractViewOnceMedia(rawMessage) {
     ['video', 'video', layer.videoMessage, false],
     ['video', 'video', layer.ptvMessage, true],
     ['audio', 'audio', layer.audioMessage, false],
+    ['document', 'document', layer.documentMessage, false],
   ];
 
   for (const [type, dlType, media, isPtv] of candidates) {
@@ -226,22 +406,76 @@ export function extractViewOnceMedia(rawMessage) {
   return null;
 }
 
-async function downloadViewOnceBuffer(info, { downloader = null, sock = null, msg = null } = {}) {
-  if (!info?.media) return null;
-  if (Buffer.isBuffer(info.media._buffer)) return info.media._buffer;
-  if (Buffer.isBuffer(info.media.buffer)) return info.media.buffer;
+function isReuploadStatusError(err) {
+  if (!err) return false;
+  const status = err?.status || err?.output?.statusCode || err?.response?.status;
+  if (status === 401 || status === 403 || status === 404 || status === 410) {
+    return true;
+  }
+  const msg = String(err?.message || err || '');
+  return /\b(401|403|404|410)\b|empty media stream|unexpected server response|bad status|expired|unauthorized|forbidden/i.test(
+    msg,
+  );
+}
 
-  const normalizedKey = normalizeMediaKey(info.media.mediaKey);
+async function streamMediaToBuffer(targetMedia, dlType) {
+  const stream = await downloadContentFromMessage(targetMedia, dlType);
+  const chunks = [];
+  for await (const chunk of stream) {
+    chunks.push(chunk);
+  }
+  const buf = chunks.length > 0 ? Buffer.concat(chunks) : null;
+  return buf && buf.length > 0 ? buf : null;
+}
+
+function unwrapMediaNodeFromMessage(rawMsg, preferredKeys = []) {
+  let layer = rawMsg;
+  for (let depth = 0; depth < 6 && layer && typeof layer === 'object'; depth += 1) {
+    const next =
+      layer.viewOnceMessageV2?.message ||
+      layer.viewOnceMessageV2Extension?.message ||
+      layer.viewOnceMessage?.message ||
+      layer.deviceSentMessage?.message ||
+      layer.ephemeralMessage?.message ||
+      layer.documentWithCaptionMessage?.message ||
+      layer.futureProofMessage?.message;
+    if (!next || typeof next !== 'object') break;
+    layer = next;
+  }
+  if (!layer || typeof layer !== 'object') return null;
+  for (const key of preferredKeys) {
+    if (layer[key] && typeof layer[key] === 'object') return layer[key];
+  }
+  return null;
+}
+
+export async function downloadMediaWithRecovery({
+  media,
+  dlType,
+  mediaTypeKey = '',
+  isPtv = false,
+  downloader = null,
+  sock = null,
+  msg = null,
+} = {}) {
+  if (!media || typeof media !== 'object') return null;
+  if (Buffer.isBuffer(media._buffer) && media._buffer.length > 0) return media._buffer;
+  if (Buffer.isBuffer(media.buffer) && media.buffer.length > 0) return media.buffer;
+
+  const normalizedKey = normalizeMediaKey(media.mediaKey);
   if (!hasValidMediaKey(normalizedKey)) return null;
 
   const normalizedMedia = {
-    ...info.media,
+    ...media,
     mediaKey: normalizedKey,
   };
 
   if (typeof downloader === 'function') {
-    const out = await downloader(normalizedMedia, info.dlType);
-    return Buffer.isBuffer(out) && out.length > 0 ? out : null;
+    try {
+      const out = await downloader(normalizedMedia, dlType);
+      if (Buffer.isBuffer(out) && out.length > 0) return out;
+    } catch {}
+    return null;
   }
 
   const hasValidUrl =
@@ -250,37 +484,75 @@ async function downloadViewOnceBuffer(info, { downloader = null, sock = null, ms
     typeof normalizedMedia.directPath === 'string' && normalizedMedia.directPath.trim().length > 0;
   if (!hasValidUrl && !hasDirectPath) return null;
 
+  let lastErr = null;
+
+  // 1) Primary attempt with provided url/directPath
   try {
-    const stream = await downloadContentFromMessage(normalizedMedia, info.dlType);
-    const chunks = [];
-    for await (const chunk of stream) {
-      chunks.push(chunk);
-    }
-    const buf = chunks.length > 0 ? Buffer.concat(chunks) : null;
-    if (buf && buf.length > 0) return buf;
+    const buf = await streamMediaToBuffer(normalizedMedia, dlType);
+    if (buf) return buf;
   } catch (err) {
-    const status = err?.status || err?.output?.statusCode;
-    if (
-      msg &&
-      sock &&
-      typeof sock.updateMediaMessage === 'function' &&
-      (status === 401 ||
-        status === 403 ||
-        status === 404 ||
-        status === 410 ||
-        /\b(401|403|404|410)\b/.test(String(err?.message || '')))
-    ) {
+    lastErr = err;
+  }
+
+  // 2) Fallback to directPath only when url was stale/non-mmg or failed
+  if (hasValidUrl && hasDirectPath) {
+    try {
+      const directOnly = { ...normalizedMedia };
+      delete directOnly.url;
+      const buf = await streamMediaToBuffer(directOnly, dlType);
+      if (buf) return buf;
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+
+  const resolvedMediaKey = isPtv
+    ? 'ptvMessage'
+    : mediaTypeKey ||
+      (dlType === 'image'
+        ? 'imageMessage'
+        : dlType === 'audio'
+          ? 'audioMessage'
+          : dlType === 'document'
+            ? 'documentMessage'
+            : 'videoMessage');
+
+  // 3) Direct re-upload request + retry (handles 401/403 too, since Baileys downloadMediaMessage skips 401/403)
+  if (msg?.key && sock) {
+    // Baileys assertMediaContent doesn't recognize ptvMessage directly; map to videoMessage for updateMediaMessage
+    const reuploadMediaField = resolvedMediaKey === 'ptvMessage' ? 'videoMessage' : resolvedMediaKey;
+    const reuploadMsg = {
+      key: msg.key,
+      message: { [reuploadMediaField]: normalizedMedia },
+    };
+
+    if (typeof sock.updateMediaMessage === 'function') {
       try {
-        const mediaKey = info.isPtv
-          ? 'ptvMessage'
-          : info.type === 'image'
-            ? 'imageMessage'
-            : info.type === 'video'
-              ? 'videoMessage'
-              : 'audioMessage';
-        const fullMsg = { key: msg.key, message: { [mediaKey]: normalizedMedia } };
+        const updatedMsg = await sock.updateMediaMessage(reuploadMsg);
+        const updatedNode = unwrapMediaNodeFromMessage(updatedMsg?.message, [
+          reuploadMediaField,
+          resolvedMediaKey,
+          'videoMessage',
+          'imageMessage',
+          'audioMessage',
+          'documentMessage',
+        ]);
+        const refreshedMedia = updatedNode
+          ? {
+              ...normalizedMedia,
+              ...updatedNode,
+              mediaKey: normalizeMediaKey(updatedNode.mediaKey) || normalizedKey,
+            }
+          : normalizedMedia;
+        const refreshedBuf = await streamMediaToBuffer(refreshedMedia, dlType).catch(() => null);
+        if (refreshedBuf) return refreshedBuf;
+      } catch {
+        // continue to downloadMediaMessage fallback
+      }
+
+      try {
         const buf = await downloadMediaMessage(
-          fullMsg,
+          reuploadMsg,
           'buffer',
           {},
           {
@@ -288,13 +560,42 @@ async function downloadViewOnceBuffer(info, { downloader = null, sock = null, ms
             reuploadRequest: sock.updateMediaMessage.bind(sock),
           },
         );
-        return Buffer.isBuffer(buf) && buf.length > 0 ? buf : null;
-      } catch {
-        return null;
-      }
+        if (Buffer.isBuffer(buf) && buf.length > 0) return buf;
+      } catch {}
+    }
+
+    if (typeof sock.downloadMediaMessage === 'function') {
+      try {
+        const customBuf = await sock.downloadMediaMessage({
+          key: msg.key,
+          message: { [resolvedMediaKey]: normalizedMedia },
+        });
+        if (Buffer.isBuffer(customBuf) && customBuf.length > 0) return customBuf;
+      } catch {}
     }
   }
+
+  // 4) Single transient retry in case CDN dropped the connection
+  if (lastErr && !isReuploadStatusError(lastErr)) {
+    try {
+      const retryBuf = await streamMediaToBuffer(normalizedMedia, dlType);
+      if (retryBuf) return retryBuf;
+    } catch {}
+  }
+
   return null;
+}
+
+async function downloadViewOnceBuffer(info, { downloader = null, sock = null, msg = null } = {}) {
+  if (!info?.media) return null;
+  return downloadMediaWithRecovery({
+    media: info.media,
+    dlType: info.dlType,
+    isPtv: Boolean(info.isPtv),
+    downloader,
+    sock,
+    msg,
+  });
 }
 
 /**
@@ -302,7 +603,7 @@ async function downloadViewOnceBuffer(info, { downloader = null, sock = null, ms
  * and CDN URL are still fresh, so manual .vv / .vv2 works even after
  * WhatsApp strips mediaKey/viewOnce from quoted replies or expires the media.
  */
-export async function cacheViewOnce(msg, { downloader = null, sock = null } = {}) {
+async function cacheViewOnceInternal(msg, { downloader = null, sock = null } = {}) {
   try {
     const raw = msg?.message;
     const msgId = msg?.key?.id;
@@ -314,7 +615,7 @@ export async function cacheViewOnce(msg, { downloader = null, sock = null } = {}
     const vo = extractViewOnceMedia(raw);
     if (!vo) return { cached: false, reason: 'not-viewonce' };
 
-    if (viewOnceCache.has(msgId)) {
+    if (getCachedViewOnce(msgId)) {
       return { cached: true, alreadyCached: true, id: msgId, type: vo.type };
     }
 
@@ -343,6 +644,24 @@ export async function cacheViewOnce(msg, { downloader = null, sock = null } = {}
   } catch {
     return { cached: false, reason: 'error' };
   }
+}
+
+export async function cacheViewOnce(msg, opts = {}) {
+  const msgId = msg?.key?.id;
+  if (!msg?.message || !msgId) return { cached: false, reason: 'missing-message' };
+
+  const existingPending = pendingViewOnceCache.get(msgId);
+  if (existingPending) {
+    return existingPending;
+  }
+
+  const promise = cacheViewOnceInternal(msg, opts).finally(() => {
+    if (pendingViewOnceCache.get(msgId) === promise) {
+      pendingViewOnceCache.delete(msgId);
+    }
+  });
+  pendingViewOnceCache.set(msgId, promise);
+  return promise;
 }
 
 export async function handleViewOnceAutoSave({

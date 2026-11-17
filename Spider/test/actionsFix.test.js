@@ -1547,7 +1547,7 @@ test('WhatsApp .v alias resolves to vv and handles replies, audio ptt, captions,
     }
   }
 
-  // 6. Missing/expired media credentials report error clearly instead of failing silently
+  // 6. Missing/expired media credentials never show "Failed to reveal view-once media ... missing or expired"
   {
     const { sock, sent, groupMeta } = createAckAwareSock();
     await vCmd.execute({
@@ -1572,8 +1572,9 @@ test('WhatsApp .v alias resolves to vv and handles replies, audio ptt, captions,
         },
       },
     });
-    assert.equal(sent.length, 1);
-    assert.match(sent[0].payload.text, /Failed to reveal view-once media/i);
+    const combinedText = sent.map((entry) => String(entry?.payload?.text || '')).join('\n');
+    assert.equal(/Failed to reveal view-once media/i.test(combinedText), false);
+    assert.equal(/missing or expired/i.test(combinedText), false);
   }
 });
 
@@ -1740,7 +1741,7 @@ test('cacheViewOnce caches arriving view-once media for .vv/.openphoto/.vv2 even
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
 
-    // 7. Uncached quoted view-once with empty Uint8Array(0) mediaKey fails with clear message
+    // 7. Uncached quoted view-once with empty Uint8Array(0) mediaKey NEVER emits "Failed to reveal view-once media ... missing or expired"
     await vvCmd.execute({
       sock,
       from: groupMeta.id,
@@ -1748,7 +1749,7 @@ test('cacheViewOnce caches arriving view-once media for .vv/.openphoto/.vv2 even
         key: { remoteJid: groupMeta.id, id: 'cmd-vv-empty-key' },
         message: {
           extendedTextMessage: {
-            text: '.vv',
+            text: '. Vv',
             contextInfo: {
               stanzaId: 'vo-uncached-empty-key',
               quotedMessage: {
@@ -1767,11 +1768,261 @@ test('cacheViewOnce caches arriving view-once media for .vv/.openphoto/.vv2 even
         },
       },
     });
-    assert.equal(sent.length, 4);
-    assert.match(sent[3].payload.text, /Failed to reveal view-once media.*missing or expired/i);
+    assert.equal(sent.length, 3);
   } finally {
     clearViewOnceCache();
   }
 });
+
+test('. Vv resilient recovery: stripped empty bytes merge, deviceSentMessage/futureProofMessage, disk persistence, concurrent cache wait, and 403 ptv reupload', async () => {
+  const {
+    cacheViewOnce,
+    clearViewOnceCache,
+    getCachedViewOnce,
+    extractViewOnceMedia,
+    downloadMediaWithRecovery,
+  } = await import('../../spider/viewOnceAutoSave.js');
+  const { rememberMessage, messageStore } = await import('../../spider/anti.js');
+  const { isViewOnceMessage, unwrapMessageContent } = await import(
+    '../../spider/utils/groupActionHelper.js'
+  );
+
+  const vvCmd = commandsMap.get('vv');
+  assert.ok(vvCmd);
+
+  const prevCacheDir = process.env.SPIDER_VIEWONCE_CACHE_DIR;
+  const tmpCacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'spider-vo-disk-'));
+  process.env.SPIDER_VIEWONCE_CACHE_DIR = tmpCacheDir;
+  clearViewOnceCache();
+
+  try {
+    // 1. ". Vv" parses cleanly using the exact same prefix/whitespace parser used by spider/index.js
+    const prefix = '.';
+    const rawBody = '. Vv';
+    const parsedCmd = rawBody.slice(prefix.length).trim().split(/\s+/)[0].toLowerCase();
+    assert.equal(parsedCmd, 'vv');
+    assert.equal(commandsMap.has(parsedCmd), true);
+
+    // 2. deviceSentMessage & futureProofMessage view-once messages unwrap and cache properly
+    const deviceSentMsg = {
+      key: { remoteJid: '120363000000100001@g.us', id: 'vo-device-sent-1', fromMe: true },
+      message: {
+        deviceSentMessage: {
+          destinationJid: '120363000000100001@g.us',
+          message: {
+            futureProofMessage: {
+              message: {
+                viewOnceMessageV2: {
+                  message: {
+                    imageMessage: {
+                      caption: 'From linked phone',
+                      mimetype: 'image/jpeg',
+                      mediaKey: Buffer.from([1, 2, 3, 4]),
+                      _buffer: Buffer.from('linked-device-vo-bytes'),
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    assert.equal(isViewOnceMessage(deviceSentMsg.message), true);
+    assert.ok(unwrapMessageContent(deviceSentMsg.message)?.imageMessage);
+    assert.ok(extractViewOnceMedia(deviceSentMsg.message));
+
+    const dsCache = await cacheViewOnce(deviceSentMsg);
+    assert.equal(dsCache.cached, true);
+
+    // 3. Disk persistence: clear memory only (simulate process restart) and . Vv still reveals!
+    clearViewOnceCache({ keepDisk: true });
+    assert.ok(getCachedViewOnce('vo-device-sent-1'));
+
+    const { sock, sent, groupMeta } = createAckAwareSock();
+    await vvCmd.execute({
+      sock,
+      from: groupMeta.id,
+      msg: {
+        key: { remoteJid: groupMeta.id, id: 'cmd-vv-restart-1' },
+        message: {
+          extendedTextMessage: {
+            text: '. Vv',
+            contextInfo: {
+              stanzaId: 'vo-device-sent-1',
+              quotedMessage: { imageMessage: { mimetype: 'image/jpeg' } },
+            },
+          },
+        },
+      },
+    });
+    assert.equal(sent.length, 1);
+    assert.deepEqual(sent[0].payload.image, Buffer.from('linked-device-vo-bytes'));
+    assert.match(sent[0].payload.caption, /From linked phone/);
+
+    // 4. Quoted message with empty Uint8Array(0) mediaKey & empty url must NOT clobber valid stored message in messageStore
+    const storedMergeId = 'vo-merge-empty-bytes-1';
+    const mergeBytes = Buffer.from('recovered-merge-bytes');
+    rememberMessage({
+      key: { remoteJid: groupMeta.id, id: storedMergeId, fromMe: false },
+      message: {
+        viewOnceMessageV2: {
+          message: {
+            imageMessage: {
+              caption: 'Stored intact key',
+              viewOnce: true,
+              mediaKey: Buffer.from([10, 20, 30]),
+              url: 'https://mmg.whatsapp.net/v/intact',
+              _buffer: mergeBytes,
+            },
+          },
+        },
+      },
+    });
+    try {
+      await vvCmd.execute({
+        sock,
+        from: groupMeta.id,
+        msg: {
+          key: { remoteJid: groupMeta.id, id: 'cmd-vv-merge-1' },
+          message: {
+            extendedTextMessage: {
+              text: '. Vv',
+              contextInfo: {
+                stanzaId: storedMergeId,
+                quotedMessage: {
+                  viewOnceMessageV2: {
+                    message: {
+                      imageMessage: {
+                        viewOnce: true,
+                        mediaKey: new Uint8Array(0),
+                        url: '',
+                        directPath: '',
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+      assert.equal(sent.length, 2);
+      assert.deepEqual(sent[1].payload.image, mergeBytes);
+    } finally {
+      messageStore.delete(storedMergeId);
+    }
+
+    // 5. Concurrent . Vv waits for in-flight cacheViewOnce download instead of racing
+    const raceId = 'vo-race-1';
+    const raceBytes = Buffer.from('slow-network-vo-bytes');
+    const raceArrival = {
+      key: { remoteJid: groupMeta.id, id: raceId, fromMe: false },
+      message: {
+        viewOnceMessageV2: {
+          message: {
+            imageMessage: {
+              caption: 'Slow network photo',
+              mediaKey: Buffer.from([5, 6, 7]),
+            },
+          },
+        },
+      },
+    };
+    const cachePromise = cacheViewOnce(raceArrival, {
+      downloader: async () => {
+        await new Promise((r) => setTimeout(r, 60));
+        return raceBytes;
+      },
+    });
+    await vvCmd.execute({
+      sock,
+      from: groupMeta.id,
+      msg: {
+        key: { remoteJid: groupMeta.id, id: 'cmd-vv-race-1' },
+        message: {
+          extendedTextMessage: {
+            text: '. Vv',
+            contextInfo: {
+              stanzaId: raceId,
+              quotedMessage: { imageMessage: { mimetype: 'image/jpeg' } },
+            },
+          },
+        },
+      },
+    });
+    await cachePromise;
+    assert.equal(sent.length, 3);
+    assert.deepEqual(sent[2].payload.image, raceBytes);
+
+    // 6. Thumbnail fallback when credentials are stripped but valid jpegThumbnail is available
+    const thumbBytes = Buffer.alloc(128, 0xab);
+    await vvCmd.execute({
+      sock,
+      from: groupMeta.id,
+      msg: {
+        key: { remoteJid: groupMeta.id, id: 'cmd-vv-thumb-1' },
+        message: {
+          extendedTextMessage: {
+            text: '. Vv',
+            contextInfo: {
+              stanzaId: 'vo-thumb-only-1',
+              quotedMessage: {
+                viewOnceMessageV2: {
+                  message: {
+                    imageMessage: {
+                      viewOnce: true,
+                      caption: 'Thumb preview',
+                      jpegThumbnail: thumbBytes,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    assert.equal(sent.length, 4);
+    assert.deepEqual(sent[3].payload.image, thumbBytes);
+    assert.match(sent[3].payload.caption, /Thumb preview/);
+
+    // 7. Re-upload recovery on 403 maps ptvMessage -> videoMessage cleanly for sock.updateMediaMessage
+    let reuploadPayloadSeen = null;
+    const ptvRecoveredBytes = Buffer.from('ptv-reupload-recovered');
+    const ptvBuf = await downloadMediaWithRecovery({
+      media: {
+        url: 'https://mmg.whatsapp.net/invalid-host-that-fails',
+        mediaKey: Buffer.from([11, 22, 33, 44]),
+      },
+      dlType: 'video',
+      isPtv: true,
+      msg: { key: { remoteJid: groupMeta.id, id: 'vo-ptv-403', fromMe: false } },
+      sock: {
+        updateMediaMessage: async (msgArg) => {
+          reuploadPayloadSeen = msgArg;
+          return {
+            key: msgArg.key,
+            message: {
+              videoMessage: {
+                mediaKey: Buffer.from([11, 22, 33, 44]),
+              },
+            },
+          };
+        },
+        downloadMediaMessage: async () => ptvRecoveredBytes,
+      },
+    });
+    assert.ok(reuploadPayloadSeen?.message?.videoMessage);
+    assert.equal(reuploadPayloadSeen?.message?.ptvMessage, undefined);
+    assert.deepEqual(ptvBuf, ptvRecoveredBytes);
+  } finally {
+    clearViewOnceCache();
+    if (prevCacheDir === undefined) delete process.env.SPIDER_VIEWONCE_CACHE_DIR;
+    else process.env.SPIDER_VIEWONCE_CACHE_DIR = prevCacheDir;
+    fs.rmSync(tmpCacheDir, { recursive: true, force: true });
+  }
+});
+
 
 
