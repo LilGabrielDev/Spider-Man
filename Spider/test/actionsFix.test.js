@@ -1336,3 +1336,244 @@ test('User .del and group shields broadcast both LID and PN revokes with fresh g
     antilinkUtils.defaultAntilinkStore.setGroupConfig(linkGroup, prevCfg);
   }
 });
+
+test('WhatsApp .v alias resolves to vv and handles replies, audio ptt, captions, and messageStore recovery', async () => {
+  assert.equal(aliasesMap.get('v'), 'vv');
+  assert.equal(aliasesMap.get('vo'), 'vv');
+  assert.equal(aliasesMap.get('viewonce'), 'vv');
+  assert.equal(aliasesMap.get('v2'), 'vv2');
+
+  const vCmd = commandsMap.get(aliasesMap.get('v'));
+  const vv2Cmd = commandsMap.get(aliasesMap.get('v2'));
+  assert.ok(vCmd && vv2Cmd);
+
+  const { messageStore, rememberMessage } = await import('../../spider/anti.js');
+
+  // 1. No quoted message -> helpful reply instead of silent no-op (vv2 remains silent)
+  {
+    const { sock, sent, groupMeta } = createAckAwareSock();
+    await vCmd.execute({
+      sock,
+      from: groupMeta.id,
+      msg: {
+        key: { remoteJid: groupMeta.id, id: 'cmd-v-noreply' },
+        message: { conversation: '.v' },
+      },
+    });
+    assert.equal(sent.length, 1);
+    assert.match(sent[0].payload.text, /reply to a view-once/i);
+
+    await vv2Cmd.execute({
+      sock,
+      from: groupMeta.id,
+      msg: {
+        key: { remoteJid: groupMeta.id, id: 'cmd-v2-noreply' },
+        message: { conversation: '.v2' },
+      },
+    });
+    assert.equal(sent.length, 1);
+  }
+
+  // 2. Quoted non-view-once message -> helpful reply
+  {
+    const { sock, sent, groupMeta } = createAckAwareSock();
+    await vCmd.execute({
+      sock,
+      from: groupMeta.id,
+      msg: {
+        key: { remoteJid: groupMeta.id, id: 'cmd-v-nonvo' },
+        message: {
+          extendedTextMessage: {
+            text: '.v',
+            contextInfo: {
+              stanzaId: 'regular-msg-1',
+              participant: '3330003@lid',
+              quotedMessage: { imageMessage: { caption: 'Normal pic' } },
+            },
+          },
+        },
+      },
+    });
+    assert.equal(sent.length, 1);
+    assert.match(sent[0].payload.text, /not a view-once/i);
+  }
+
+  // 3. View-once image preserves original caption alongside revealed caption
+  {
+    const { sock, sent, groupMeta } = createAckAwareSock();
+    const imgBuf = Buffer.from('fake-jpeg-bytes');
+    await vCmd.execute({
+      sock,
+      from: groupMeta.id,
+      msg: {
+        key: { remoteJid: groupMeta.id, id: 'cmd-v-img' },
+        message: {
+          extendedTextMessage: {
+            text: '.v',
+            contextInfo: {
+              stanzaId: 'vo-img-1',
+              participant: '3330003@lid',
+              quotedMessage: {
+                viewOnceMessageV2: {
+                  message: {
+                    imageMessage: {
+                      caption: 'Original secret caption',
+                      viewOnce: true,
+                      _buffer: imgBuf,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    assert.equal(sent.length, 1);
+    assert.deepEqual(sent[0].payload.image, imgBuf);
+    assert.match(sent[0].payload.caption, /Original secret caption/);
+    assert.match(sent[0].payload.caption, /REVEALED BY Spider Man/);
+  }
+
+  // 4. View-once PTV video and voice-note audio preserve video/ptt/mimetype
+  {
+    const { sock, sent, groupMeta } = createAckAwareSock();
+    const vidBuf = Buffer.from('fake-ptv-video');
+    const audBuf = Buffer.from('fake-opus-audio');
+
+    await vCmd.execute({
+      sock,
+      from: groupMeta.id,
+      msg: {
+        key: { remoteJid: groupMeta.id, id: 'cmd-v-ptv' },
+        message: {
+          extendedTextMessage: {
+            text: '.v',
+            contextInfo: {
+              stanzaId: 'vo-ptv-1',
+              quotedMessage: {
+                viewOnceMessageV2Extension: {
+                  message: {
+                    ptvMessage: { caption: 'Circle video', _buffer: vidBuf },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    await vCmd.execute({
+      sock,
+      from: groupMeta.id,
+      msg: {
+        key: { remoteJid: groupMeta.id, id: 'cmd-v-ptt' },
+        message: {
+          extendedTextMessage: {
+            text: '.v',
+            contextInfo: {
+              stanzaId: 'vo-ptt-1',
+              quotedMessage: {
+                viewOnceMessageV2: {
+                  message: {
+                    audioMessage: {
+                      ptt: true,
+                      mimetype: 'audio/ogg; codecs=opus',
+                      _buffer: audBuf,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    assert.equal(sent.length, 2);
+    assert.deepEqual(sent[0].payload.video, vidBuf);
+    assert.match(sent[0].payload.caption, /Circle video/);
+    assert.deepEqual(sent[1].payload.audio, audBuf);
+    assert.equal(sent[1].payload.ptt, true);
+    assert.equal(sent[1].payload.mimetype, 'audio/ogg; codecs=opus');
+  }
+
+  // 5. Fallback to messageStore when WhatsApp quote strips viewOnce flag & media credentials
+  {
+    const { sock, sent, groupMeta } = createAckAwareSock();
+    const storedBuf = Buffer.from('recovered-from-store');
+    const stanzaId = 'vo-stripped-quote-1';
+    rememberMessage({
+      key: { remoteJid: groupMeta.id, id: stanzaId, fromMe: false },
+      message: {
+        viewOnceMessageV2: {
+          message: {
+            imageMessage: {
+              caption: 'Stored view-once',
+              viewOnce: true,
+              _buffer: storedBuf,
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      await vCmd.execute({
+        sock,
+        from: groupMeta.id,
+        msg: {
+          key: { remoteJid: groupMeta.id, id: 'cmd-v-stripped' },
+          message: {
+            extendedTextMessage: {
+              text: '.v',
+              contextInfo: {
+                stanzaId,
+                quotedMessage: {
+                  imageMessage: { mimetype: 'image/jpeg' },
+                },
+              },
+            },
+          },
+        },
+      });
+
+      assert.equal(sent.length, 1);
+      assert.deepEqual(sent[0].payload.image, storedBuf);
+      assert.match(sent[0].payload.caption, /Stored view-once/);
+    } finally {
+      messageStore.delete(stanzaId);
+    }
+  }
+
+  // 6. Missing/expired media credentials report error clearly instead of failing silently
+  {
+    const { sock, sent, groupMeta } = createAckAwareSock();
+    await vCmd.execute({
+      sock,
+      from: groupMeta.id,
+      msg: {
+        key: { remoteJid: groupMeta.id, id: 'cmd-v-missing-creds' },
+        message: {
+          extendedTextMessage: {
+            text: '.v',
+            contextInfo: {
+              stanzaId: 'vo-expired-1',
+              quotedMessage: {
+                viewOnceMessageV2: {
+                  message: {
+                    imageMessage: { viewOnce: true },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    assert.equal(sent.length, 1);
+    assert.match(sent[0].payload.text, /Failed to reveal view-once media/i);
+  }
+});
+
