@@ -107,7 +107,7 @@ test('detectHostingEnvironmentAsync ignores HOSTING_URL promo links', async () =
 test('shouldPreserveRelativePath protects runtime secrets, sessions, databases, and logs', () => {
   assert.equal(shouldPreserveRelativePath('.env'), true);
   assert.equal(shouldPreserveRelativePath('.env.production'), true);
-  assert.equal(shouldPreserveRelativePath('.env-sample'), false);
+  assert.equal(shouldPreserveRelativePath('.env.example'), false);
   assert.equal(shouldPreserveRelativePath('auth/creds.json'), true);
   assert.equal(shouldPreserveRelativePath('auth_info_baileys/creds.json'), true);
   assert.equal(shouldPreserveRelativePath('sessions/session.json'), true);

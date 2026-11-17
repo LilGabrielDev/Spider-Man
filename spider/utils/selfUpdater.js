@@ -116,7 +116,7 @@ export function shouldPreserveRelativePath(relPath) {
   const top = segments[0];
 
   if (PRESERVED_EXACT_PATHS.has(normalized)) return true;
-  if (top.startsWith('.env.') && top !== '.env-sample') return true;
+  if (top.startsWith('.env.') && top !== '.env.example' && top !== '.env-sample') return true;
   if (PRESERVED_TOP_DIRS.has(top)) return true;
   if (segments.includes('auth') || segments.includes('auth_info_baileys')) return true;
   if (/\.(?:db|db-journal|sqlite|sqlite3|log)$/i.test(normalized)) return true;

@@ -52,7 +52,7 @@ function restoreBotGlobals(snap) {
 }
 
 test('env templates, deployment manifests, and configs exclude user JIDs while preserving CHANNEL_JID', () => {
-  const envSample = fs.readFileSync(path.join(ROOT, '.env-sample'), 'utf8');
+  const envSample = fs.readFileSync(path.join(ROOT, '.env.example'), 'utf8');
   const appJson = fs.readFileSync(path.join(ROOT, 'app.json'), 'utf8');
   const renderYaml = fs.readFileSync(path.join(ROOT, 'render.yaml'), 'utf8');
   const readme = fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8');

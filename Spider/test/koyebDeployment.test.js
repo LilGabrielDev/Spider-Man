@@ -46,7 +46,7 @@ function makeMockFs(cgroupMap = {}) {
   };
 }
 
-test('Koyeb deployment manifests, Dockerfile, .npmrc, Procfile, .env-sample, and README are properly configured', () => {
+test('Koyeb deployment manifests, Dockerfile, .npmrc, Procfile, .env.example, and README are properly configured', () => {
   const koyebYaml = fs.readFileSync(path.join(ROOT, 'koyeb.yaml'), 'utf8');
   assert.match(koyebYaml, /^name:\s*spider-man-md/m);
   assert.match(koyebYaml, /^type:\s*web/m);
@@ -72,9 +72,9 @@ test('Koyeb deployment manifests, Dockerfile, .npmrc, Procfile, .env-sample, and
   const procfile = fs.readFileSync(path.join(ROOT, 'Procfile'), 'utf8');
   assert.match(procfile, /^web:\s*node index\.js$/m);
 
-  const envSample = fs.readFileSync(path.join(ROOT, '.env-sample'), 'utf8');
+  const envSample = fs.readFileSync(path.join(ROOT, '.env.example'), 'utf8');
   assert.match(envSample, /Koyeb/);
-  assert.equal(/^\s*PORT\s*=/m.test(envSample), false, '.env-sample must keep PORT commented for Koyeb');
+  assert.equal(/^\s*PORT\s*=/m.test(envSample), false, '.env.example must keep PORT commented for Koyeb');
   assert.doesNotMatch(envSample, /\bUSER_LID\b/);
   assert.doesNotMatch(envSample, /\bOWNER_NUMBER\b/);
 

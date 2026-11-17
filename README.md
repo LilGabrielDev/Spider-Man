@@ -82,7 +82,7 @@ Deploy directly via the **[Koyeb button](https://app.koyeb.com/deploy?type=git&r
 ```bash
 # Local / VPS / Termux
 git clone https://github.com/LilGabrielDev/Spider-Man.git && cd Spider-Man
-npm install && cp .env-sample .env && npm start
+npm install && cp .env.example .env && npm start
 
 # Docker
 docker build -t spider-man-md .
@@ -103,7 +103,7 @@ docker run -d -p 3000:3000 -e SESSION_ID="your_session" spider-man-md
 | `ADMIN_PROTECTION` | Protect group admins from destructive actions | `on` |
 | `PORT` | HTTP server port *(leave unset on managed hosts)* | `3000` |
 
-See `.env-sample` and `app.json` for optional API keys and automation toggles.
+See `.env.example` and `app.json` for optional API keys and automation toggles.
 
 ---
 

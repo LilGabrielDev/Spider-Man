@@ -517,7 +517,7 @@ test('Katabump SERVER_MEMORY limits drive low-memory sizing, worker flags, clean
   }
 });
 
-test('Katabump .restart uses supervised restart handler without hard-exiting, and .env-sample preserves SERVER_PORT', async () => {
+test('Katabump .restart uses supervised restart handler without hard-exiting, and .env.example preserves SERVER_PORT', async () => {
   const { commands: userCmds } = await import('../commands/User.js');
   const restartCmd = userCmds.find((c) => c.name === 'restart');
   assert.ok(restartCmd);
@@ -551,8 +551,8 @@ test('Katabump .restart uses supervised restart handler without hard-exiting, an
     else process.env.SPIDER_SUPERVISED = origSupervised;
   }
 
-  const envSample = fs.readFileSync(path.join(process.cwd(), '.env-sample'), 'utf8');
-  assert.equal(/^\s*PORT\s*=/m.test(envSample), false, '.env-sample must keep PORT= commented so SERVER_PORT works');
+  const envSample = fs.readFileSync(path.join(process.cwd(), '.env.example'), 'utf8');
+  assert.equal(/^\s*PORT\s*=/m.test(envSample), false, '.env.example must keep PORT= commented so SERVER_PORT works');
 });
 
 test('Katabump worker survives HTTP EADDRINUSE port conflict without crashing', async () => {
