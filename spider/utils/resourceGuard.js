@@ -212,6 +212,7 @@ export function readCgroupMemoryLimitBytes(fsImpl = fs) {
   const candidates = [
     '/sys/fs/cgroup/memory.max',
     '/sys/fs/cgroup/memory/memory.limit_in_bytes',
+    '/sys/fs/cgroup/memory.high',
   ];
   for (const filePath of candidates) {
     try {
@@ -227,6 +228,45 @@ export function readCgroupMemoryLimitBytes(fsImpl = fs) {
     }
   }
   return null;
+}
+
+export function isRenderEnvironment(env = process.env) {
+  if (!env || typeof env !== 'object') return false;
+  const renderFlag = String(env.RENDER || '').trim().toLowerCase();
+  if (renderFlag === 'true' || renderFlag === '1') return true;
+  return Boolean(
+    env.RENDER_SERVICE_ID ||
+    env.RENDER_EXTERNAL_URL ||
+    env.RENDER_INSTANCE_ID ||
+    env.RENDER_INTERNAL_HOSTNAME,
+  );
+}
+
+export function getEffectiveMemoryLimitBytes({ totalMemBytes, fsImpl = fs } = {}) {
+  const cgroupLimit = readCgroupMemoryLimitBytes(fsImpl);
+  const hostTotal = Number.isFinite(Number(totalMemBytes)) && Number(totalMemBytes) > 0
+    ? Number(totalMemBytes)
+    : os.totalmem();
+  return cgroupLimit ? Math.min(cgroupLimit, hostTotal) : hostTotal;
+}
+
+export function isRenderFreePlan({
+  totalMemBytes,
+  env = process.env,
+  fsImpl = fs,
+} = {}) {
+  const override = String(env?.SPIDER_RENDER_FREE || '').trim().toLowerCase();
+  if (override === '0' || override === 'false') return false;
+  if (override === '1' || override === 'true') return true;
+
+  if (!isRenderEnvironment(env)) return false;
+
+  const plan = String(env?.RENDER_PLAN || env?.RENDER_SERVICE_PLAN || '').trim().toLowerCase();
+  if (plan === 'free') return true;
+
+  const effectiveBytes = getEffectiveMemoryLimitBytes({ totalMemBytes, fsImpl });
+  const totalMb = Math.floor(effectiveBytes / (1024 * 1024));
+  return totalMb > 0 && totalMb <= 512;
 }
 
 export function getWorkerMemoryExecArgv({
@@ -250,11 +290,11 @@ export function getWorkerMemoryExecArgv({
     return [`--max-old-space-size=${Math.floor(envOverrideMb)}`];
   }
 
-  const cgroupLimit = readCgroupMemoryLimitBytes(fsImpl);
-  const hostTotal = Number.isFinite(Number(totalMemBytes)) && Number(totalMemBytes) > 0
-    ? Number(totalMemBytes)
-    : os.totalmem();
-  const effectiveBytes = cgroupLimit ? Math.min(cgroupLimit, hostTotal) : hostTotal;
+  if (isRenderFreePlan({ totalMemBytes, env, fsImpl })) {
+    return ['--max-old-space-size=176', '--max-semi-space-size=4', '--expose-gc'];
+  }
+
+  const effectiveBytes = getEffectiveMemoryLimitBytes({ totalMemBytes, fsImpl });
   const totalMb = Math.floor(effectiveBytes / (1024 * 1024));
 
   let targetMb;
@@ -817,11 +857,26 @@ export function startResourceMaintenance({
   maxPreKeys = 900,
   maxTcTokens = 200,
   preserveSignalKeys = false,
-  memoryHighWaterRatio = 0.85,
+  memoryHighWaterRatio,
+  memoryWatchIntervalMs,
   quiet = false,
   env = process.env,
   onCleanup,
+  onMemoryPressure,
 } = {}) {
+  const renderFree = isRenderFreePlan({ env });
+  const effectiveHighWaterRatio =
+    Number.isFinite(Number(memoryHighWaterRatio)) && Number(memoryHighWaterRatio) > 0
+      ? Number(memoryHighWaterRatio)
+      : renderFree
+        ? 0.58
+        : 0.85;
+  const effectiveMemoryWatchIntervalMs =
+    Number.isFinite(Number(memoryWatchIntervalMs)) && Number(memoryWatchIntervalMs) >= 0
+      ? Number(memoryWatchIntervalMs)
+      : renderFree
+        ? 30_000
+        : 0;
   const effectiveIntervalMs =
     Number.isFinite(Number(intervalMs)) && Number(intervalMs) > 0
       ? Number(intervalMs)
@@ -848,6 +903,45 @@ export function startResourceMaintenance({
     lastRunAt: null,
     lastSummary: null,
   };
+
+  function getMemoryLimitBytes(mem) {
+    const cgroupLimit = readCgroupMemoryLimitBytes();
+    if (renderFree) {
+      return cgroupLimit ? Math.min(cgroupLimit, 512 * 1024 * 1024) : 512 * 1024 * 1024;
+    }
+    return cgroupLimit || Math.max(mem.heapTotal * 1.5, 256 * 1024 * 1024);
+  }
+
+  function trimMemoryCaches(nowMs, { aggressive = false, force = false } = {}) {
+    const mem = process.memoryUsage();
+    const heapLimitBytes = getMemoryLimitBytes(mem);
+    const rssRatio = heapLimitBytes > 0 ? mem.rss / heapLimitBytes : 0;
+
+    if (!force && !aggressive && rssRatio < effectiveHighWaterRatio) {
+      return { memoryTrimmed: false, mem, rssRatio, heapLimitBytes };
+    }
+
+    for (const cache of caches) {
+      try {
+        if (typeof cache?.flushAll === 'function') cache.flushAll();
+        else if (typeof cache?.clear === 'function') cache.clear();
+      } catch {}
+    }
+    for (const cache of protectedCaches) {
+      try {
+        cache?.prune?.(nowMs);
+      } catch {}
+    }
+    if (typeof onMemoryPressure === 'function') {
+      try {
+        onMemoryPressure({ mem, rssRatio, limitBytes: heapLimitBytes, aggressive: Boolean(aggressive) });
+      } catch {}
+    }
+    try {
+      if (typeof globalThis.gc === 'function') globalThis.gc();
+    } catch {}
+    return { memoryTrimmed: true, mem: process.memoryUsage(), rssRatio, heapLimitBytes };
+  }
 
   function runNow({ forceMemoryTrim = false, aggressive = false } = {}) {
     if (isRunning) {
@@ -878,29 +972,10 @@ export function startResourceMaintenance({
         nowMs,
       });
 
-      const mem = process.memoryUsage();
-      const heapLimitBytes =
-        readCgroupMemoryLimitBytes() || Math.max(mem.heapTotal * 1.5, 256 * 1024 * 1024);
-      const rssRatio = heapLimitBytes > 0 ? mem.rss / heapLimitBytes : 0;
-
-      let memoryTrimmed = false;
-      if (forceMemoryTrim || aggressive || rssRatio >= memoryHighWaterRatio) {
-        memoryTrimmed = true;
-        for (const cache of caches) {
-          try {
-            if (typeof cache?.flushAll === 'function') cache.flushAll();
-            else if (typeof cache?.clear === 'function') cache.clear();
-          } catch {}
-        }
-        for (const cache of protectedCaches) {
-          try {
-            cache?.prune?.(nowMs);
-          } catch {}
-        }
-        try {
-          if (typeof globalThis.gc === 'function') globalThis.gc();
-        } catch {}
-      }
+      const { memoryTrimmed, mem } = trimMemoryCaches(nowMs, {
+        aggressive,
+        force: forceMemoryTrim,
+      });
 
       const summary = {
         ...cleanupSummary,
@@ -942,13 +1017,29 @@ export function startResourceMaintenance({
   }, effectiveIntervalMs);
   timer.unref?.();
 
+  let memoryWatchTimer = null;
+  if (effectiveMemoryWatchIntervalMs > 0) {
+    memoryWatchTimer = setInterval(() => {
+      if (isRunning) return;
+      trimMemoryCaches(Date.now());
+    }, effectiveMemoryWatchIntervalMs);
+    memoryWatchTimer.unref?.();
+  }
+
   return {
     runNow,
+    checkMemoryNow(opts = {}) {
+      return trimMemoryCaches(Date.now(), opts);
+    },
     getStats() {
       return { ...stats };
     },
     stop() {
       clearInterval(timer);
+      if (memoryWatchTimer) {
+        clearInterval(memoryWatchTimer);
+        memoryWatchTimer = null;
+      }
     },
   };
 }

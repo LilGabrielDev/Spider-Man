@@ -10,10 +10,12 @@ import {
   flushMessageRetryStore,
   getMessageForRetry,
   installMessageRetryStore,
+  messageStore,
   registerChatAlias,
   rememberMessage,
   resetMessageRetryStore,
   setChatAliasResolver,
+  trimMessageRetryStore,
 } from '../../spider/anti.js';
 import {
   createBaileysCacheStore,
@@ -284,3 +286,28 @@ test('spider/index.js wires hardened auth state, connection controller, signal g
   assert.match(source, /createBaileysSignalLogger\(/);
   assert.match(source, /'preserveSignalKeys':!!\[\]/);
 });
+
+test('trimMessageRetryStore shrinks retry cache and retains newest messages under memory pressure', async () => {
+  resetMessageRetryStore();
+  try {
+    configureMessageRetryStore({ maxMessages: 500, maxChatAliases: 500 });
+    for (let i = 0; i < 40; i += 1) {
+      rememberMessage({
+        key: { remoteJid: groupA, id: `trim-msg-${i}`, fromMe: true },
+        message: { conversation: `msg-${i}` },
+      });
+    }
+    assert.equal(messageStore.size, 40);
+
+    const removed = trimMessageRetryStore({ maxEntries: 10, maxAliasEntries: 10 });
+    assert.equal(removed, 30);
+    assert.equal(messageStore.size, 10);
+    assert.equal(await getMessageForRetry({ remoteJid: groupA, id: 'trim-msg-0' }), undefined);
+    assert.deepEqual(await getMessageForRetry({ remoteJid: groupA, id: 'trim-msg-39' }), {
+      conversation: 'msg-39',
+    });
+  } finally {
+    resetMessageRetryStore();
+  }
+});
+
