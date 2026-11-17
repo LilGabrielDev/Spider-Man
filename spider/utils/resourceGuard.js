@@ -230,6 +230,36 @@ export function readCgroupMemoryLimitBytes(fsImpl = fs) {
   return null;
 }
 
+export function readCgroupMemoryUsageBytes(fsImpl = fs) {
+  const candidates = [
+    '/sys/fs/cgroup/memory.current',
+    '/sys/fs/cgroup/memory/memory.usage_in_bytes',
+  ];
+  for (const filePath of candidates) {
+    try {
+      if (!fsImpl.existsSync(filePath)) continue;
+      const raw = String(fsImpl.readFileSync(filePath, 'utf8')).trim();
+      if (!raw || raw === 'max') continue;
+      const parsed = Number(raw);
+      if (Number.isFinite(parsed) && parsed > 0 && parsed < 1e15) {
+        return parsed;
+      }
+    } catch {
+      // Ignore environments without readable cgroup files
+    }
+  }
+  return null;
+}
+
+export function readPanelMemoryLimitBytes(env = process.env) {
+  if (!env || typeof env !== 'object') return null;
+  const raw = env.SERVER_MEMORY;
+  if (raw === undefined || raw === null || String(raw).trim() === '') return null;
+  const parsedMb = Number(raw);
+  if (!Number.isFinite(parsedMb) || parsedMb <= 0 || parsedMb >= 1e9) return null;
+  return Math.floor(parsedMb * 1024 * 1024);
+}
+
 export function isRenderEnvironment(env = process.env) {
   if (!env || typeof env !== 'object') return false;
   const renderFlag = String(env.RENDER || '').trim().toLowerCase();
@@ -242,12 +272,16 @@ export function isRenderEnvironment(env = process.env) {
   );
 }
 
-export function getEffectiveMemoryLimitBytes({ totalMemBytes, fsImpl = fs } = {}) {
+export function getEffectiveMemoryLimitBytes({ totalMemBytes, env = process.env, fsImpl = fs } = {}) {
   const cgroupLimit = readCgroupMemoryLimitBytes(fsImpl);
+  const panelLimit = readPanelMemoryLimitBytes(env);
   const hostTotal = Number.isFinite(Number(totalMemBytes)) && Number(totalMemBytes) > 0
     ? Number(totalMemBytes)
     : os.totalmem();
-  return cgroupLimit ? Math.min(cgroupLimit, hostTotal) : hostTotal;
+  let effective = hostTotal;
+  if (cgroupLimit) effective = Math.min(effective, cgroupLimit);
+  if (panelLimit) effective = Math.min(effective, panelLimit);
+  return effective;
 }
 
 export function isRenderFreePlan({
@@ -264,9 +298,67 @@ export function isRenderFreePlan({
   const plan = String(env?.RENDER_PLAN || env?.RENDER_SERVICE_PLAN || '').trim().toLowerCase();
   if (plan === 'free') return true;
 
-  const effectiveBytes = getEffectiveMemoryLimitBytes({ totalMemBytes, fsImpl });
+  const effectiveBytes = getEffectiveMemoryLimitBytes({ totalMemBytes, env, fsImpl });
   const totalMb = Math.floor(effectiveBytes / (1024 * 1024));
   return totalMb > 0 && totalMb <= 512;
+}
+
+export function isLowMemoryEnvironment({
+  totalMemBytes,
+  env = process.env,
+  fsImpl = fs,
+} = {}) {
+  const override = String(env?.SPIDER_LOW_MEMORY || '').trim().toLowerCase();
+  if (override === '0' || override === 'false') return false;
+  if (override === '1' || override === 'true') return true;
+
+  if (isRenderFreePlan({ totalMemBytes, env, fsImpl })) return true;
+
+  const effectiveBytes = getEffectiveMemoryLimitBytes({ totalMemBytes, env, fsImpl });
+  const totalMb = Math.floor(effectiveBytes / (1024 * 1024));
+  return totalMb > 0 && totalMb <= 512;
+}
+
+export function getContainerMemoryStats({
+  totalMemBytes,
+  env = process.env,
+  fsImpl = fs,
+  osImpl = os,
+} = {}) {
+  const hostTotalRaw = Number.isFinite(Number(totalMemBytes)) && Number(totalMemBytes) > 0
+    ? Number(totalMemBytes)
+    : Number(osImpl?.totalmem?.() || os.totalmem() || 0);
+  const hostTotal = hostTotalRaw > 0 ? hostTotalRaw : 1;
+
+  const cgroupLimit = readCgroupMemoryLimitBytes(fsImpl);
+  const panelLimit = readPanelMemoryLimitBytes(env);
+  const totalBytes = getEffectiveMemoryLimitBytes({ totalMemBytes: hostTotal, env, fsImpl }) || 1;
+  const isContainerLimited = Boolean(
+    (cgroupLimit && cgroupLimit < hostTotal) ||
+    (panelLimit && panelLimit < hostTotal),
+  );
+
+  let usedBytes;
+  let freeBytes;
+  if (isContainerLimited) {
+    const cgroupUsage = readCgroupMemoryUsageBytes(fsImpl);
+    const fallbackRss = Number(process.memoryUsage().rss || 0);
+    const rawUsed = cgroupUsage !== null ? cgroupUsage : fallbackRss;
+    usedBytes = Math.min(totalBytes, Math.max(0, rawUsed));
+    freeBytes = Math.max(0, totalBytes - usedBytes);
+  } else {
+    freeBytes = Math.max(0, Number(osImpl?.freemem?.() ?? os.freemem() ?? 0));
+    usedBytes = Math.max(0, totalBytes - freeBytes);
+  }
+
+  const percent = Math.max(0, Math.min(100, Math.round((usedBytes / totalBytes) * 100)));
+  return {
+    totalBytes,
+    usedBytes,
+    freeBytes,
+    percent,
+    isContainerLimited,
+  };
 }
 
 export function getWorkerMemoryExecArgv({
@@ -294,21 +386,31 @@ export function getWorkerMemoryExecArgv({
     return ['--max-old-space-size=176', '--max-semi-space-size=4', '--expose-gc'];
   }
 
-  const effectiveBytes = getEffectiveMemoryLimitBytes({ totalMemBytes, fsImpl });
+  const effectiveBytes = getEffectiveMemoryLimitBytes({ totalMemBytes, env, fsImpl });
   const totalMb = Math.floor(effectiveBytes / (1024 * 1024));
 
   let targetMb;
   if (totalMb <= 0) {
     targetMb = 320;
   } else if (totalMb <= 512) {
-    targetMb = Math.max(160, Math.min(320, Math.floor(totalMb * 0.65)));
+    targetMb = Math.max(totalMb < 256 ? 96 : 160, Math.min(320, Math.floor(totalMb * 0.65)));
   } else if (totalMb <= 1024) {
     targetMb = Math.max(256, Math.min(512, Math.floor(totalMb * 0.65)));
   } else {
     targetMb = 512;
   }
 
-  return [`--max-old-space-size=${targetMb}`];
+  const args = [`--max-old-space-size=${targetMb}`];
+  const hasPanelLimitHint = Boolean(
+    readPanelMemoryLimitBytes(env) ||
+    env?.KATABUMP ||
+    env?.KATABUMP_SERVER ||
+    env?.P_SERVER_UUID,
+  );
+  if (totalMb > 0 && totalMb <= 512 && hasPanelLimitHint) {
+    args.push('--expose-gc');
+  }
+  return args;
 }
 
 function safeStat(fsImpl, targetPath) {
@@ -865,16 +967,17 @@ export function startResourceMaintenance({
   onMemoryPressure,
 } = {}) {
   const renderFree = isRenderFreePlan({ env });
+  const lowMemory = isLowMemoryEnvironment({ env });
   const effectiveHighWaterRatio =
     Number.isFinite(Number(memoryHighWaterRatio)) && Number(memoryHighWaterRatio) > 0
       ? Number(memoryHighWaterRatio)
-      : renderFree
+      : lowMemory
         ? 0.58
         : 0.85;
   const effectiveMemoryWatchIntervalMs =
     Number.isFinite(Number(memoryWatchIntervalMs)) && Number(memoryWatchIntervalMs) >= 0
       ? Number(memoryWatchIntervalMs)
-      : renderFree
+      : lowMemory
         ? 30_000
         : 0;
   const effectiveIntervalMs =
@@ -906,10 +1009,15 @@ export function startResourceMaintenance({
 
   function getMemoryLimitBytes(mem) {
     const cgroupLimit = readCgroupMemoryLimitBytes();
+    const panelLimit = readPanelMemoryLimitBytes(env);
+    const limits = [cgroupLimit, panelLimit].filter((n) => Number.isFinite(n) && n > 0);
     if (renderFree) {
-      return cgroupLimit ? Math.min(cgroupLimit, 512 * 1024 * 1024) : 512 * 1024 * 1024;
+      limits.push(512 * 1024 * 1024);
     }
-    return cgroupLimit || Math.max(mem.heapTotal * 1.5, 256 * 1024 * 1024);
+    if (limits.length > 0) {
+      return Math.min(...limits);
+    }
+    return Math.max(mem.heapTotal * 1.5, 256 * 1024 * 1024);
   }
 
   function trimMemoryCaches(nowMs, { aggressive = false, force = false } = {}) {

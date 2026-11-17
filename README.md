@@ -40,7 +40,7 @@ npm start
 Open the [Katabump panel](https://dashboard.katabump.com/auth/login#d6b7d6) and configure a Node.js server for this repository. Use a Node.js version supported by the project (20–24), with these commands:
 
 - **Install:** `npm run install:panel`
-- **Startup:** `npm start` (runs `spider/index.js`)
+- **Startup:** `npm start` (runs `index.js`)
 
 Add `SESSION_ID` or `SESSION` as a private server variable before starting the bot. Use `.env-sample` as a reference for other optional settings, and keep session and API credentials in the panel rather than committing them to the repository.
 
@@ -68,8 +68,8 @@ See `.env-sample` and `app.json` for the full list of optional API keys and auto
 
 ## Scripts
 
-- `npm start` — Start the bot and Express HTTP server (`node "spider/index.js"`)
-- `npm run dev` — Start in development mode (`node "spider/index.js"`)
+- `npm start` — Start the bot supervisor and Express HTTP server (`node index.js`)
+- `npm run dev` — Start in development mode (`node index.js`)
 - `npm run install:panel` — Install dependencies for panel hosting
 - `npm test` — Run the Node test suite (`node --test Spider/test/*.test.js`)
 - `npm run lint` — Syntax-check core entry files

@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "start": "node index.js",
-    "install:panel": "npm install --legacy-peer-deps",
+    "install:panel": "npm install --legacy-peer-deps --no-audit --no-fund",
     "dev": "node index.js",
     "build": "node --check index.js spider/session-resolver.js spider/index.js spider/config.js spider/native-mocks.js spider/anti.js spider/utils/authState.js spider/utils/connectionManager.js spider/utils/socketResilience.js spider/utils/resourceGuard.js spider/utils/privacyLogger.js",
     "lint": "node --check index.js spider/session-resolver.js spider/index.js spider/config.js spider/native-mocks.js spider/anti.js spider/utils/authState.js spider/utils/connectionManager.js spider/utils/socketResilience.js spider/utils/resourceGuard.js spider/utils/privacyLogger.js",
