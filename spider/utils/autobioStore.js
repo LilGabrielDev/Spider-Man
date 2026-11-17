@@ -3,134 +3,16 @@ import os from 'node:os';
 import path from 'node:path';
 import { S_WHATSAPP_NET, getBinaryNodeChild } from '@whiskeysockets/baileys';
 import { isSendMessageFailure } from './groupActionHelper.js';
+import { CORE_AUTOBIOS, EXTRA_BIO_TARGET, TOTAL_BUILTIN_BIOS, getBuiltinAutobios } from './bioCatalog.js';
 
 export const MAX_BIO_LENGTH = 139;
 export const DEFAULT_AUTOBIO_INTERVAL_MS = 60_000;
 export const MIN_AUTOBIO_INTERVAL_MS = 15_000;
 export const MAX_AUTOBIO_INTERVAL_MS = 86_400_000;
-export const MAX_SAVED_BIOS = 150;
+export const MAX_SAVED_BIOS = 10_250;
 
-export const PRESET_AUTOBIOS = Object.freeze([
-  // 1-10: Live Status & Telemetry
-  '⚡ {bot} | Online & Ready • Up {uptime} ({time})',
-  '🕷️ {bot} | Active 24/7 • {date} • {time}',
-  '🚀 {bot} | Systems Nominal • Up {uptime}',
-  '🟢 Connected & Responding • {time} ({date})',
-  '⚡ Live on WhatsApp • Uptime {uptime}',
-  '🛡️ {bot} | Automated & Secure • {time}',
-  '🌐 Always Online • Synced at {time}',
-  '📡 Signal Strong • {bot} Running Smoothly',
-  '⏱️ Zero Downtime Mode • Up {uptime}',
-  '✨ {bot} | Fast, Clean & Reliable ({date})',
-
-  // 11-20: Focus & Hustle
-  '🎯 Focused on goals, silent on noise.',
-  '⚡ Building quietly, shipping daily.',
-  '🔥 Progress over perfection, every single day.',
-  '💼 Busy turning plans into reality.',
-  '🧠 Deep work in progress — reply soon.',
-  '⏳ Trading excuses for execution.',
-  '🚀 Chasing growth, not attention.',
-  '📈 1% better than yesterday.',
-  '🛠️ Creating things that actually matter.',
-  '⚡ Energy saved for things worth doing.',
-
-  // 21-30: Calm & Minimalist
-  '🌿 Peace of mind is my priority.',
-  '☁️ Slow mornings, sharp focus, calm nights.',
-  '🤍 Less clutter, more clarity.',
-  '🌊 Flowing with patience and purpose.',
-  '🕊️ Unbothered, grateful, and moving forward.',
-  '🍃 Protecting my energy like treasure.',
-  '☀️ Simple life, clear mind, good heart.',
-  '🌙 Quiet space, loud ambitions.',
-  '✨ Living in the present moment.',
-  '🫧 Calm outside, unstoppable inside.',
-
-  // 31-40: Ambition & Mindset
-  '👑 Discipline beats motivation every time.',
-  '💎 Pressure builds diamonds.',
-  '🦅 Flying above temporary distractions.',
-  '🔑 Consistency unlocks every locked door.',
-  '⚡ Stay humble, stay hungry, stay sharp.',
-  '🧭 Direction matters more than speed.',
-  '🏆 Dream big, start small, act now.',
-  '🔥 Outworking my old self.',
-  '🪜 Step by step, mile by mile.',
-  '🌟 Betting on myself every time.',
-
-  // 41-50: Tech & Developer Vibes
-  '💻 Eat. Sleep. Code. Deploy. Repeat.',
-  '⚙️ Powered by coffee and clean logic.',
-  '🖥️ Debugging life one line at a time.',
-  '🤖 Automated by {bot} • {time}',
-  '🔌 Plugged into the future.',
-  '📡 Low latency, high uptime.',
-  '🧩 Solving problems no one sees.',
-  '⌨️ Shipping updates in real time.',
-  '🔋 Battery charged, terminal open.',
-  '🛰️ Running async in a sync world.',
-
-  // 51-60: Good Vibes & Energy
-  '✨ Good vibes only, no exceptions.',
-  '🎧 Lost in good music and big ideas.',
-  '🌈 Choosing joy in every little thing.',
-  '☕ Fueled by coffee and ambition.',
-  '🌞 Bringing sunshine to every chat.',
-  '🎶 Rhythm in my soul, peace in my mind.',
-  '💫 Attracting what belongs to me.',
-  '🍀 Lucky are those who never quit.',
-  '🔥 High spirit, warm heart, sharp mind.',
-  '🌻 Growing through everything I go through.',
-
-  // 61-70: Late Night & Chill
-  '🌙 Night owl hours • Best ideas come after midnight.',
-  '🌌 Stargazing while the world sleeps.',
-  '🏙️ City lights, quiet thoughts, steady grind.',
-  '🕯️ Late night focus hits different.',
-  '🎧 Midnight playlist on repeat.',
-  '🌠 Dreaming with my eyes wide open.',
-  '🌑 Silent nights build loud futures.',
-  '🍵 Late night tea and deep conversations.',
-  '✨ Under the same stars, chasing different dreams.',
-  '🛋️ Chill mode enabled — message anytime.',
-
-  // 71-80: Short Wisdom & Quotes
-  '📖 Write a story worth rereading.',
-  '🕰️ Time reveals what words hide.',
-  '🌱 Patience makes everything bloom on time.',
-  '🪞 Fix your focus, fix your life.',
-  '⚖️ Balance work, rest, and gratitude.',
-  '🪨 Solid roots survive any storm.',
-  '🔦 Be the light you wish to see.',
-  '🎯 What you feed with focus grows.',
-  '💭 Thoughts shape habits; habits shape destiny.',
-  '🌤️ Every storm runs out of rain eventually.',
-
-  // 81-90: Sleek Status One-Liners
-  '📲 Text me, I might surprise you with a fast reply.',
-  '💬 Available for good vibes and real talk.',
-  '⚡ Short replies, genuine intentions.',
-  '📌 Pinning dreams on the calendar.',
-  '🚦 Green light to positivity only.',
-  '🔒 Private life, peaceful mind.',
-  '🧭 Exploring new paths every week.',
-  '🏁 Never finished, always leveling up.',
-  '⚡ Online now — drop your message.',
-  '🎯 Keep it real or keep it moving.',
-
-  // 91-100: Spider Man Signature & Dynamic Clock
-  '🕷️ Spider-Sense tingling • {bot} ({time})',
-  '🕸️ Connected across every chat • {date}',
-  '⚡ Fast as lightning • {bot} v2',
-  '🕷️ Swinging through tasks • Up {uptime}',
-  '🔥 Precision, speed, style • {bot}',
-  '🌐 Always in range • {time} UTC+Sync',
-  '🎭 Work in silence, let results speak.',
-  '🚨 Auto-Pilot Active • {bot} ({date})',
-  '💠 Clean code, crisp vibes, zero noise.',
-  '⚡ {bot} Auto-Bio Rotating • {date} {time}',
-]);
+export { CORE_AUTOBIOS, EXTRA_BIO_TARGET, TOTAL_BUILTIN_BIOS };
+export const PRESET_AUTOBIOS = getBuiltinAutobios();
 
 export function sanitizeBioText(raw, maxLength = MAX_BIO_LENGTH) {
   const collapsed = String(raw ?? '')
@@ -546,14 +428,18 @@ export function createAutobioStore(
     };
   }
 
-  function loadPresetBios({ replace = false } = {}) {
+  function loadPresetBios({ replace = false, limit = null } = {}) {
     const current = loadState();
-    const cleanPresets = PRESET_AUTOBIOS.map((b) => sanitizeBioText(b).text).filter(Boolean);
+    const targetLimit =
+      Number.isFinite(Number(limit)) && Number(limit) > 0
+        ? Math.min(MAX_SAVED_BIOS, Math.floor(Number(limit)))
+        : MAX_SAVED_BIOS;
+    const cleanPresets = PRESET_AUTOBIOS.slice(0, targetLimit);
     let nextBios;
     let addedCount;
 
     if (replace) {
-      nextBios = cleanPresets.slice(0, MAX_SAVED_BIOS);
+      nextBios = [...cleanPresets];
       addedCount = nextBios.length;
     } else {
       const merged = [...current.bios];
@@ -1168,8 +1054,8 @@ export function createAutobioManager({
     clearTimer();
   }
 
-  async function loadPresets({ sock = null, replace = false, enableAuto = true } = {}) {
-    const res = store.loadPresetBios({ replace });
+  async function loadPresets({ sock = null, replace = false, limit = null, enableAuto = true } = {}) {
+    const res = store.loadPresetBios({ replace, limit });
     if (enableAuto) {
       const nextState = store.setEnabled(true);
       startTimer(nextState.intervalMs);

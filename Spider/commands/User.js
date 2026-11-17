@@ -28,8 +28,11 @@ function getAutobioManager() {
 }
 
 function buildAutobioStatusCard(botName, state, headline = 'AUTO BIO') {
+  const builtinLabel = PRESET_AUTOBIOS.length.toLocaleString('en-US');
   const savedDisplay =
-    state.bios.length > 0 ? `${state.bios.length}` : `0 (${PRESET_AUTOBIOS.length} built-in active)`;
+    state.bios.length > 0
+      ? `${state.bios.length.toLocaleString('en-US')}`
+      : `0 (${builtinLabel} built-in active)`;
   const lines = [
     spiderHeader(botName, headline),
     spiderRow('STATUS', state.enabled ? '🟢 ON' : '🔴 OFF', '⚙️'),
@@ -38,7 +41,7 @@ function buildAutobioStatusCard(botName, state, headline = 'AUTO BIO') {
     spiderRow('LAST ABOUT', state.lastBio || 'Not updated yet', '💬'),
     spiderDivider('COMMANDS'),
     spiderRow('ENABLE', '.autobio on', '▶️'),
-    spiderRow('PRESETS', `.autobio presets (${PRESET_AUTOBIOS.length} bios)`, '📚'),
+    spiderRow('PRESETS', `.autobio presets (${builtinLabel} bios)`, '📚'),
     spiderRow('ADD BIO', '.autobio add <text>', '➕'),
     spiderRow('SET BIO', '.autobio set <text>', '✏️'),
     spiderRow('LIST', '.autobio list [page|all]', '📋'),
@@ -190,7 +193,9 @@ export const commands = [
           spiderRow('INTERVAL', formatAutobioInterval(res.state.intervalMs), '⏱️'),
           spiderRow(
             'SAVED BIOS',
-            res.state.bios.length > 0 ? `${res.state.bios.length}` : `0 (${PRESET_AUTOBIOS.length} built-in)`,
+            res.state.bios.length > 0
+              ? `${res.state.bios.length.toLocaleString('en-US')}`
+              : `0 (${PRESET_AUTOBIOS.length.toLocaleString('en-US')} built-in)`,
             '📝',
           ),
           spiderRow(
@@ -266,14 +271,26 @@ export const commands = [
         return sock.sendMessage(from, { text: rows.join('\n') }, { quoted: msg });
       }
 
-      if (sub === 'presets' || sub === 'preset' || sub === 'load' || sub === '100' || sub === 'pack') {
-        const replace = restText.toLowerCase() === 'replace' || restText.toLowerCase() === 'reset';
-        const res = await manager.loadPresets({ sock, replace, enableAuto: true });
+      if (
+        sub === 'presets' ||
+        sub === 'preset' ||
+        sub === 'load' ||
+        sub === '100' ||
+        sub === '10000' ||
+        sub === '10100' ||
+        sub === 'pack'
+      ) {
+        const lowerRest = restText.toLowerCase();
+        const replace = /\b(replace|reset)\b/.test(lowerRest);
+        const numericArg = Number.parseInt(restText.match(/\d+/)?.[0] || '', 10);
+        const explicitSubLimit = /^\d+$/.test(sub) ? Number.parseInt(sub, 10) : null;
+        const limit = Number.isFinite(numericArg) && numericArg > 0 ? numericArg : explicitSubLimit;
+        const res = await manager.loadPresets({ sock, replace, limit, enableAuto: true });
         const rows = [
           spiderHeader(botName, 'PRESET BIOS LOADED'),
           spiderRow('STATUS', '🟢 ON', '⚙️'),
-          spiderRow('ADDED', `${res.addedCount} preset(s)`, '📚'),
-          spiderRow('TOTAL SAVED', `${res.total}`, '📝'),
+          spiderRow('ADDED', `${res.addedCount.toLocaleString('en-US')} preset(s)`, '📚'),
+          spiderRow('TOTAL SAVED', `${res.total.toLocaleString('en-US')}`, '📝'),
           spiderRow(
             'ABOUT NOW',
             res.updated ? res.bio : `⚠️ Saved, update failed: ${res.error || 'Socket not ready'}`,
@@ -288,6 +305,7 @@ export const commands = [
         const state = store.getState();
         const activeIdx = state.bios.length > 0 ? state.currentIndex % state.bios.length : -1;
         const pageSize = 25;
+        const maxAllRows = 150;
         const showAll = restText.toLowerCase() === 'all';
         const totalPages = Math.max(1, Math.ceil(state.bios.length / pageSize));
         const requestedPage = Number.parseInt(restText || '1', 10);
@@ -295,7 +313,9 @@ export const commands = [
           ? Math.min(totalPages, Math.max(1, requestedPage))
           : 1;
         const startIdx = showAll ? 0 : (page - 1) * pageSize;
-        const endIdx = showAll ? state.bios.length : Math.min(state.bios.length, startIdx + pageSize);
+        const endIdx = showAll
+          ? Math.min(state.bios.length, maxAllRows)
+          : Math.min(state.bios.length, startIdx + pageSize);
 
         const bioRows =
           state.bios.length > 0
@@ -306,17 +326,24 @@ export const commands = [
                   return `> ┃ ${realIdx === activeIdx ? '👉' : '•'} *#${realIdx + 1}*  ›  ${b}`;
                 })
             : [
-                `> ┃ ℹ️ No custom bios saved — rotating *${PRESET_AUTOBIOS.length}* built-in bios automatically.`,
-                '> ┃ 💡 Run *.autobio presets* to load all 100 into your list.',
+                `> ┃ ℹ️ No custom bios saved — rotating *${PRESET_AUTOBIOS.length.toLocaleString('en-US')}* mixed built-in bios automatically.`,
+                '> ┃ 💡 Run *.autobio presets* to load all into your saved list.',
               ];
 
+        if (showAll && state.bios.length > maxAllRows) {
+          bioRows.push(
+            `> ┃ … showing first ${maxAllRows} of ${state.bios.length.toLocaleString('en-US')}. Use *.autobio list <page>* to browse all.`,
+          );
+        }
+
+        const totalFormatted = state.bios.length.toLocaleString('en-US');
         const dividerLabel =
           state.bios.length > pageSize && !showAll
-            ? `SAVED BIOS (${state.bios.length}) • PAGE ${page}/${totalPages}`
-            : `SAVED BIOS (${state.bios.length})`;
+            ? `SAVED BIOS (${totalFormatted}) • PAGE ${page}/${totalPages}`
+            : `SAVED BIOS (${totalFormatted})`;
         const footerText =
           state.bios.length > pageSize && !showAll
-            ? `NEXT: .autobio list ${page < totalPages ? page + 1 : 1} | ALL: .autobio list all`
+            ? `NEXT: .autobio list ${page < totalPages ? page + 1 : 1} | TOTAL PAGES: ${totalPages}`
             : 'ADD: .autobio add <text> | PRESETS: .autobio presets';
 
         const rows = [
