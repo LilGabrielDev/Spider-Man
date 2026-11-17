@@ -18,7 +18,7 @@ export const commands = [
     category: 'Owner',
     ownerOnly: true,
     execute: async ({ sock, from, text, msg, config }) => {
-      const botName = config.BOT_NAME || 'Spider Man';
+      const botName = config?.BOT_NAME || configDefault?.BOT_NAME || 'Spider Man';
       const tokens = String(text || '').trim().split(/\s+/);
       const sub = tokens[0]?.toLowerCase() || '';
 

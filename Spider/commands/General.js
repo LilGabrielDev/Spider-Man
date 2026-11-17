@@ -15,8 +15,8 @@ export const commands = [
     description: 'Translate a replied message to the specified language.',
     category: 'General',
     execute: async ({ sock, from, text, msg, config }) => {
-      const botName = config.BOT_NAME || 'Spider Man';
-      const botVersion = config.BOT_VERSION || '1.0.0';
+      const botName = config?.BOT_NAME || 'Spider Man';
+      const botVersion = config?.BOT_VERSION || '1.0.0';
       const { quotedMessage } = extractContextInfo(msg);
       if (!quotedMessage) {
         return sock.sendMessage(
@@ -72,15 +72,15 @@ export const commands = [
     description: 'Sends contact card of the bot owner.',
     category: 'General',
     execute: async ({ sock, from, msg, config }) => {
-      const botName = config.BOT_NAME || 'Spider Man';
-      const botVersion = config.BOT_VERSION || '1.0.0';
+      const botName = config?.BOT_NAME || 'Spider Man';
+      const botVersion = config?.BOT_VERSION || '1.0.0';
       let ownerNumber = resolveRuntimeOwnerPhone({ sock, config });
       if (!ownerNumber) {
         await resolveBotPhoneFromLidAsync(sock, { config });
         ownerNumber = resolveRuntimeOwnerPhone({ sock, config });
       }
       const ownerJid = resolveRuntimeOwnerJid({ sock, config });
-      const ownerName = config.OWNER_NAME || 'LilTech';
+      const ownerName = config?.OWNER_NAME || 'LilTech';
       if (!ownerNumber && !ownerJid) {
         return sock.sendMessage(
           from,
@@ -118,8 +118,8 @@ export const commands = [
     description: 'Takes a screenshot of a website using API.',
     category: 'General',
     execute: async ({ sock, from, text, msg, config }) => {
-      const botName = config.BOT_NAME || 'Spider Man';
-      const botVersion = config.BOT_VERSION || '1.0.0';
+      const botName = config?.BOT_NAME || 'Spider Man';
+      const botVersion = config?.BOT_VERSION || '1.0.0';
       if (!text) {
         return sock.sendMessage(
           from,
@@ -165,8 +165,8 @@ export const commands = [
     description: 'Get a Bible verse from a specific book, chapter, and verse.',
     category: 'General',
     execute: async ({ sock, from, text, msg, config }) => {
-      const botName = config.BOT_NAME || 'Spider Man';
-      const botVersion = config.BOT_VERSION || '1.0.0';
+      const botName = config?.BOT_NAME || 'Spider Man';
+      const botVersion = config?.BOT_VERSION || '1.0.0';
       if (!text) {
         return sock.sendMessage(
           from,
@@ -193,8 +193,8 @@ export const commands = [
     description: 'Create a poll.',
     category: 'General',
     execute: async ({ sock, from, text, msg, config }) => {
-      const botName = config.BOT_NAME || 'Spider Man';
-      const botVersion = config.BOT_VERSION || '1.0.0';
+      const botName = config?.BOT_NAME || 'Spider Man';
+      const botVersion = config?.BOT_VERSION || '1.0.0';
       const raw = String(text || '');
       const [question, optionsRaw] = raw.split('/');
       if (!question || !optionsRaw) {
@@ -222,8 +222,8 @@ export const commands = [
     description: 'Get a random fact.',
     category: 'User',
     execute: async ({ sock, from, msg, config }) => {
-      const botName = config.BOT_NAME || 'Spider Man';
-      const botVersion = config.BOT_VERSION || '1.0.0';
+      const botName = config?.BOT_NAME || 'Spider Man';
+      const botVersion = config?.BOT_VERSION || '1.0.0';
       try {
         const fact = await getRandomFact();
         await sock.sendMessage(
@@ -245,8 +245,8 @@ export const commands = [
     description: 'Get a random quote.',
     category: 'User',
     execute: async ({ sock, from, msg, config }) => {
-      const botName = config.BOT_NAME || 'Spider Man';
-      const botVersion = config.BOT_VERSION || '1.0.0';
+      const botName = config?.BOT_NAME || 'Spider Man';
+      const botVersion = config?.BOT_VERSION || '1.0.0';
       try {
         const quote = await getRandomQuote();
         const reply = `◆━━━━━━✦QUOTE✦━━━━━━◆\n◇ "${quote.body}"\n◇ — ${quote.author}\n◇ Powered by ${botName} ${botVersion}\n◇ KEEP USING ${botName}`;
@@ -265,8 +265,8 @@ export const commands = [
     description: 'Get a definition for a term.',
     category: 'Search',
     execute: async ({ sock, from, text, msg, config }) => {
-      const botName = config.BOT_NAME || 'Spider Man';
-      const botVersion = config.BOT_VERSION || '1.0.0';
+      const botName = config?.BOT_NAME || 'Spider Man';
+      const botVersion = config?.BOT_VERSION || '1.0.0';
       if (!text) {
         return sock.sendMessage(
           from,
@@ -300,8 +300,8 @@ export const commands = [
     category: 'Owner',
     ownerOnly: true,
     execute: async ({ sock, from, text, msg, config }) => {
-      const botName = config.BOT_NAME || 'Spider Man';
-      const botVersion = config.BOT_VERSION || '1.0.0';
+      const botName = config?.BOT_NAME || 'Spider Man';
+      const botVersion = config?.BOT_VERSION || '1.0.0';
       if (!text) {
         return sock.sendMessage(
           from,
