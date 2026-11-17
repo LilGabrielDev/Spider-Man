@@ -1,1 +1,845 @@
-const _0x44d28a=_0x5617;import _0x3b7e4b from'yt-search';import _0x30ae6f from'axios';import{API_CONFIG,MESSAGES}from'../france/index.js';import{spiderHeader,spiderRow,spiderDivider,spiderFooter}from'../utils/tableStyle.js';import{createRequire}from'module';import _0x587894 from'fs';import _0x154758 from'os';import _0x4db4f1 from'path';import{spawnSync,execFile}from'child_process';import{promisify}from'util';const _playRequire=createRequire(import.meta.url);function _getOptionalFfmpegStatic(){for(const _pkg of['ffmpeg-static','@ffmpeg-installer/ffmpeg']){try{const _mod=_playRequire(_pkg);const _p=typeof _mod==='string'?_mod:_mod?.['path']||_mod?.['default'];if(_p&&typeof _p==='string')return _p;}catch{}}return null;}const _0xcb427=_getOptionalFfmpegStatic();const execFileAsync=promisify(execFile);const MAX_SOURCE_BYTES=0x50*0x400*0x400;const MAX_WHATSAPP_AUDIO_BYTES=0xf*0x400*0x400;const PLAY_API_TIMEOUT_MS=0x2710;function _0x5617(_0x210ba3,_0x561763){_0x210ba3=_0x210ba3-0x0;const _0x5d9ff3=_0x210b();let _0x52d666=_0x5d9ff3[_0x210ba3];return _0x52d666;}const PLAY_DOWNLOAD_TIMEOUT_MS=0xafc8;function _0x210b(){const _0x5bed4f=['ffmpeg','/usr/bin/ffmpeg','error','trim','N/A','replace','stderr','Unknown\x20error','[URL]','label','value','audio','audio_url','url','download_url','link','string','isBuffer','data','split','pathname','aac','opus','mp4','audio/mp3','ogg','includes','m4a','audio/mpeg','arraybuffer','Mozilla/5.0\x20ULTRA-LIL','from','headers','Audio\x20download\x20link\x20was\x20not\x20valid.','default','exec','function','Local\x20audio\x20downloader\x20is\x20unavailable.','node','startsWith','endsWith','.part','join','-vn','-b:a','128k','mp3','BOT_NAME','Spider\x20Man','LilTech','play','nayanApi','sendMessage','log','STATUS','No\x20matching\x20song\x20was\x20found.','NEXT\x20STEP','SPIDER\x20MAN\x20//\x20AUDIO','concat','author','thumbnail','/hqdefault.jpg','MUSIC\x20PLAYER','MP3\x20·\x20128\x20kbps','warn','youtube','toString','https://noobs-api.top/dipto/ytDl3','set','format','payload','[PLAY]\x20audio\x20source=','via','errors','buffer','length','source','[PLAY]\x20Both\x20hosted\x20audio\x20sources\x20unavailable;\x20trying\x20local\x20fallback.','[PLAY]\x20sent\x20title=\x22','now','test','existsSync'];_0x210b=function(){return _0x5bed4f;};return _0x210b();}function findFfmpegPath(){const _0x41e138=_0x5617;const _0x20efc1=[process.env.FFMPEG_PATH,_0xcb427,_0x41e138(0x0),_0x41e138(0x1),'/usr/local/bin/ffmpeg','/data/data/com.termux/files/usr/bin/ffmpeg',process.platform==='win32'?'ffmpeg.exe':null]['filter'](Boolean);for(const _0x540588 of _0x20efc1){const _0x3b3bef=spawnSync(_0x540588,['-version'],{'stdio':'ignore'});if(!_0x3b3bef[_0x41e138(0x2)]&&_0x3b3bef['status']===0x0)return _0x540588;}if(process.platform==='win32'){try{const _0xw=spawnSync('where',['ffmpeg'],{'encoding':'utf8','stdio':['ignore','pipe','ignore']});const _0xp=String(_0xw?.stdout||'').split(/\r?\n/)[0]?.trim();if(_0xp)return _0xp;}catch{}}return null;}const FFMPEG_PATH=findFfmpegPath();function safeFileName(_0xb8ba72){const _0x4db7f7=_0x5617;return String(_0xb8ba72||'song')['replace'](/[<>:"/\\|?*\u0000-\u001f]/g,'')['replace'](/\s+/g,'\x20')[_0x4db7f7(0x3)]()['slice'](0x0,0x60)||'song';}function safeDisplay(_0x165927,_0x5d56de=_0x44d28a(0x4)){const _0x51bb54=_0x44d28a;return String(_0x165927||_0x5d56de)[_0x51bb54(0x5)](/[\r\n]+/g,'\x20')[_0x51bb54(0x3)]()['slice'](0x0,0xa0)||_0x5d56de;}function safeErrorSummary(_0x5c500d){const _0x37642e=_0x44d28a;return String(_0x5c500d?.[_0x37642e(0x6)]||_0x5c500d?.['message']||_0x37642e(0x7))[_0x37642e(0x5)](/https?:\/\/[^\s\"')]+/gi,_0x37642e(0x8))['replace'](/\s+/g,'\x20')['trim']()['slice'](0x0,0x190);}function playResponse(_0x52fa48,_0x12c293,_0x1e3013,_0x446859='SPIDER\x20MAN\x20//\x20AUDIO'){const _0x4c0fa2=[spiderHeader(_0x52fa48,_0x12c293)];_0x1e3013['forEach']((_0x35f42b,_0x40133b)=>{const _0xbccac8=_0x5617;if(_0x40133b>0x0)_0x4c0fa2['push'](spiderDivider());_0x4c0fa2['push'](spiderRow(_0x35f42b[_0xbccac8(0x9)],_0x35f42b[_0xbccac8(0xa)],_0x35f42b['marker']||'◈'));});_0x4c0fa2['push'](spiderFooter(_0x446859));return _0x4c0fa2['join']('\x0a');}function extractAudioSource(_0x397796){const _0x5a5a6c=_0x44d28a;const _0x4395d3=[_0x397796?.[_0x5a5a6c(0xb)],_0x397796?.['audioUrl'],_0x397796?.[_0x5a5a6c(0xc)],_0x397796?.['downloadUrl'],_0x397796?.['download_url'],_0x397796?.['mp3'],_0x397796?.['url']];for(const _0x56775f of _0x4395d3){if(typeof _0x56775f==='string'&&_0x56775f['trim']())return _0x56775f['trim']();if(_0x56775f&&typeof _0x56775f==='object'){const _0x558945=_0x56775f[_0x5a5a6c(0xd)]||_0x56775f['downloadUrl']||_0x56775f[_0x5a5a6c(0xe)]||_0x56775f[_0x5a5a6c(0xf)];if(typeof _0x558945===_0x5a5a6c(0x10)&&_0x558945['trim']())return _0x558945['trim']();if(Buffer[_0x5a5a6c(0x11)](_0x56775f['data'])||_0x56775f[_0x5a5a6c(0x12)]instanceof Uint8Array)return _0x56775f[_0x5a5a6c(0x12)];if(typeof _0x56775f['base64']==='string')return'data:audio/mpeg;base64,'['concat'](_0x56775f['base64']);}}return null;}function extensionFrom(_0x4e2b32,_0x388169){const _0x8e54c4=_0x44d28a;const _0x3f9fd5=String(_0x388169||'')[_0x8e54c4(0x13)](';')[0x0]['toLowerCase']();let _0x7e5773='';if(typeof _0x4e2b32==='string'){if(_0x4e2b32['startsWith']('data:')){const _0x472694=_0x4e2b32['match'](/^data:([^;,]+)/i);if(_0x472694?.[0x1])return extensionFromMime(_0x472694[0x1]);}try{_0x7e5773=_0x4db4f1['extname'](new URL(_0x4e2b32)[_0x8e54c4(0x14)])['slice'](0x1)['toLowerCase']();}catch{_0x7e5773=_0x4db4f1['extname'](_0x4e2b32)['slice'](0x1)['toLowerCase']();}}if(['mp3','m4a',_0x8e54c4(0x15),'ogg',_0x8e54c4(0x16),'wav','webm',_0x8e54c4(0x17)]['includes'](_0x7e5773))return _0x7e5773;return extensionFromMime(_0x3f9fd5)||'bin';}function extensionFromMime(_0x32e144){const _0x3b861e=_0x44d28a;const _0x4d058d=String(_0x32e144||'')['toLowerCase']();if(_0x4d058d['includes']('mpeg')||_0x4d058d['includes'](_0x3b861e(0x18)))return'mp3';if(_0x4d058d['includes'](_0x3b861e(0x19))||_0x4d058d[_0x3b861e(0x1a)](_0x3b861e(0x16)))return _0x3b861e(0x19);if(_0x4d058d['includes']('mp4')||_0x4d058d['includes'](_0x3b861e(0x1b)))return _0x3b861e(0x1b);if(_0x4d058d['includes']('wav'))return'wav';if(_0x4d058d['includes']('aac'))return'aac';if(_0x4d058d['includes']('webm'))return'webm';return'';}async function loadAudio(_0xaedbf2,_0x5cb240,_0x42f74f){const _0x4d62bd=_0x44d28a;if(Buffer['isBuffer'](_0xaedbf2)||_0xaedbf2 instanceof Uint8Array){return{'buffer':Buffer['from'](_0xaedbf2),'contentType':'audio/mpeg','source':_0xaedbf2};}if(typeof _0xaedbf2!==_0x4d62bd(0x10))throw new Error('Audio\x20source\x20is\x20not\x20a\x20supported\x20URL\x20or\x20buffer.');const _0x2a6a7f=_0xaedbf2['match'](/^data:([^;,]+)?;base64,(.+)$/i);if(_0x2a6a7f){return{'buffer':Buffer['from'](_0x2a6a7f[0x2],'base64'),'contentType':_0x2a6a7f[0x1]||_0x4d62bd(0x1c),'source':_0xaedbf2};}if(/^https?:\/\//i['test'](_0xaedbf2)){const _0xfd96b4=await _0x5cb240(_0xaedbf2,{'responseType':_0x4d62bd(0x1d),'timeout':_0x42f74f,'maxContentLength':MAX_SOURCE_BYTES,'maxBodyLength':MAX_SOURCE_BYTES,'headers':{'User-Agent':_0x4d62bd(0x1e)}});const _0x12a1e8=Buffer[_0x4d62bd(0x1f)](_0xfd96b4['data']);return{'buffer':_0x12a1e8,'contentType':_0xfd96b4[_0x4d62bd(0x20)]?.['content-type']||'','source':_0xaedbf2};}if(/^[A-Za-z0-9+/]+={0,2}$/['test'](_0xaedbf2)&&_0xaedbf2['length']>0x100){return{'buffer':Buffer['from'](_0xaedbf2,'base64'),'contentType':'audio/mpeg','source':_0xaedbf2};}throw new Error(_0x4d62bd(0x21));}async function downloadWithYtDlp(_0x1846fe,_0x49d097,_0x4e4088={}){const _0x59d1b5=_0x44d28a;let _0x5d6333=_0x4e4088['ytDlp'];if(!_0x5d6333){const _0x672cde=await import('youtube-dl-exec');_0x5d6333=_0x672cde[_0x59d1b5(0x22)]||_0x672cde;}const _0x22ff75=typeof _0x5d6333[_0x59d1b5(0x23)]===_0x59d1b5(0x24)?_0x5d6333[_0x59d1b5(0x23)]['bind'](_0x5d6333):_0x5d6333;if(typeof _0x22ff75!==_0x59d1b5(0x24))throw new Error(_0x59d1b5(0x25));const _0x5d0feb=_0x4db4f1['join'](_0x49d097,'yt-dlp-source.%(ext)s');await _0x22ff75(_0x1846fe,{'format':'bestaudio/best','output':_0x5d0feb,'noPlaylist':!![],'noWarnings':!![],'noProgress':!![],'jsRuntimes':_0x59d1b5(0x26),'restrictFilenames':!![]},{'timeout':0xafc8,'killSignal':'SIGKILL','maxBuffer':0x4*0x400*0x400});const _0x1496d7=_0x587894['readdirSync'](_0x49d097)['find'](_0x55f9ae=>_0x55f9ae[_0x59d1b5(0x27)]('yt-dlp-source.')&&!_0x55f9ae[_0x59d1b5(0x28)](_0x59d1b5(0x29)));if(!_0x1496d7)throw new Error('Local\x20audio\x20downloader\x20produced\x20no\x20file.');return _0x4db4f1[_0x59d1b5(0x2a)](_0x49d097,_0x1496d7);}async function transcodeToMp3(_0xe5c1e8,_0x31527d,_0x227d96,_0xefb054){const _0x10c866=_0x44d28a;await _0xefb054(_0x227d96,['-y','-i',_0xe5c1e8,_0x10c866(0x2b),'-c:a','libmp3lame',_0x10c866(0x2c),_0x10c866(0x2d),'-ar','44100','-ac','2','-f',_0x10c866(0x2e),_0x31527d],{'timeout':0x15f90,'maxBuffer':0x4*0x400*0x400});}export async function runPlay({sock:_0x4c9818,from:_0x213130,text:_0x3463a2,msg:_0x23d776,config:_0x3eb84f},_0x574b3b={}){const _0x1e841b=_0x44d28a;const _0x2f0a60=_0x3eb84f?.[_0x1e841b(0x2f)]||_0x1e841b(0x30);const _0x5eda97=_0x3eb84f?.['OWNER_NAME']||_0x1e841b(0x31);const _0x1e9973=MESSAGES?.[_0x1e841b(0x32)]||{};const _0x147bfc=String(_0x3463a2||'')['trim']();const _0x35a846=_0x574b3b['search']||_0x3b7e4b;const _0x13cbdc=_0x574b3b['http']||_0x30ae6f;const _0x38de4f=_0x13cbdc['get']['bind'](_0x13cbdc);const _0x426202=_0x574b3b['apiConfig']||API_CONFIG;const _0x55710c=Object['hasOwn'](_0x574b3b,'ffmpegPath')?_0x574b3b['ffmpegPath']:FFMPEG_PATH;const _0x3218ea=_0x574b3b['execFile']||execFileAsync;const _0x947ad=Number(_0x426202?.[_0x1e841b(0x33)]?.['timeout'])||PLAY_API_TIMEOUT_MS;const _0x373b25=Math['min'](_0x947ad,PLAY_API_TIMEOUT_MS);const _0x42653f=PLAY_DOWNLOAD_TIMEOUT_MS;let _0x1ad376;if(!_0x147bfc){return _0x4c9818[_0x1e841b(0x34)](_0x213130,{'text':playResponse(_0x2f0a60,'MUSIC\x20PLAYER',[{'label':'REQUEST','value':_0x1e9973['noQuery']||'Send\x20a\x20song\x20title\x20or\x20YouTube\x20link.','marker':'⚠️'},{'label':'EXAMPLE','value':'.play\x20song\x20name','marker':'›'}],'SPIDER\x20MAN\x20//\x20READY')},{'quoted':_0x23d776});}const _0x5cade4=Date['now']();console[_0x1e841b(0x35)]('[PLAY]\x20received\x20query=\x22'['concat'](_0x147bfc['slice'](0x0,0x78),'\x22'));try{await _0x4c9818[_0x1e841b(0x34)](_0x213130,{'text':playResponse(_0x2f0a60,'MUSIC\x20SEARCH',[{'label':_0x1e841b(0x36),'value':'Searching\x20for\x20your\x20song…','marker':'🔎'},{'label':'QUERY','value':_0x147bfc,'marker':'›'}],'SPIDER\x20MAN\x20//\x20AUDIO')},{'quoted':_0x23d776});const _0x661432=await _0x35a846(_0x147bfc);const _0x4c473b=_0x661432?.['videos']?.[0x0];if(!_0x4c473b){return _0x4c9818['sendMessage'](_0x213130,{'text':playResponse(_0x2f0a60,'MUSIC\x20SEARCH',[{'label':'STATUS','value':_0x1e9973['noResults']||_0x1e841b(0x37),'marker':'❌'},{'label':_0x1e841b(0x38),'value':'Try\x20a\x20different\x20title\x20or\x20YouTube\x20link.','marker':'›'}],_0x1e841b(0x39))},{'quoted':_0x23d776});}const _0x1ff158=_0x4c473b[_0x1e841b(0xd)]||'https://www.youtube.com/watch?v='[_0x1e841b(0x3a)](_0x4c473b['videoId']);const _0x2771ff=safeDisplay(_0x4c473b['title']||_0x147bfc,'Unknown\x20song');const _0x220228=safeDisplay(_0x4c473b[_0x1e841b(0x3b)]?.['name'],'Unknown');const _0x409337=safeDisplay(_0x4c473b['timestamp'],_0x1e841b(0x4));const _0x2a66cf=_0x4c473b[_0x1e841b(0x3c)]||(_0x4c473b['videoId']?'https://i.ytimg.com/vi/'['concat'](_0x4c473b['videoId'],_0x1e841b(0x3d)):'')||_0x3eb84f?.['BOT_PIC']||'';const _0x2f2c06=playResponse(_0x2f0a60,_0x1e841b(0x3e),[{'label':'TITLE','value':_0x2771ff,'marker':'🎵'},{'label':'CHANNEL','value':_0x220228,'marker':'👤'},{'label':'DURATION','value':_0x409337,'marker':'⏱️'},{'label':'AUDIO','value':_0x1e841b(0x3f),'marker':'🔊'},{'label':'STATUS','value':'Preparing\x20the\x20audio…','marker':'⏳'}],'POWERED\x20BY\x20'['concat'](_0x5eda97));try{if(_0x2a66cf){await _0x4c9818['sendMessage'](_0x213130,{'image':{'url':_0x2a66cf},'caption':_0x2f2c06},{'quoted':_0x23d776});}else{await _0x4c9818['sendMessage'](_0x213130,{'text':_0x2f2c06},{'quoted':_0x23d776});}}catch(_0x80f498){console[_0x1e841b(0x40)]('[PLAY]\x20Preview\x20send\x20failed:',_0x80f498['message']);try{await _0x4c9818['sendMessage'](_0x213130,{'text':_0x2f2c06},{'quoted':_0x23d776});}catch{}}const _0x52b271=Date['now']();const _0x488c3e=_0x373b25;async function _0x5ab5aa(){const _0xa4147e=_0x1e841b;const _0x38b5db=_0x426202?.[_0xa4147e(0x33)]?.[_0xa4147e(0x41)];if(!_0x38b5db)throw new Error('Hosted\x20downloader\x20(nayanApi)\x20is\x20not\x20configured.');const _0x59a143=new URL(_0x38b5db);_0x59a143['searchParams']['set']('url',_0x1ff158);const _0x35bd22=await _0x38de4f(_0x59a143[_0xa4147e(0x42)](),{'timeout':_0x488c3e,'maxContentLength':0x4*0x400*0x400,'headers':{'User-Agent':'Mozilla/5.0\x20ULTRA-LIL'}});const _0x316bd3=_0x35bd22['data'];const _0x33faf1=_0x316bd3?.['data']?.['data']||_0x316bd3?.[_0xa4147e(0x12)]||_0x316bd3?.['result']||_0x316bd3||{};const _0x265cf0=extractAudioSource(_0x33faf1);if(!_0x265cf0||_0x316bd3?.['status']===![]||_0x316bd3?.['success']===![]){throw new Error('nayanApi:\x20no\x20audio\x20returned.');}const _0x436ab4=await loadAudio(_0x265cf0,_0x38de4f,_0x42653f);return{..._0x436ab4,'payload':_0x33faf1,'via':'nayanApi'};}async function _0xb00813(){const _0x38d637=_0x1e841b;if(!_0x4c473b['videoId'])throw new Error('noobsApi:\x20no\x20video\x20id\x20to\x20look\x20up.');const _0x37f3c6=new URL(_0x38d637(0x43));_0x37f3c6['searchParams']['set']('link',_0x4c473b['videoId']);_0x37f3c6['searchParams'][_0x38d637(0x44)](_0x38d637(0x45),'mp3');const _0x3e679f=await _0x38de4f(_0x37f3c6['toString'](),{'timeout':_0x488c3e,'maxContentLength':0x4*0x400*0x400,'headers':{'User-Agent':'Mozilla/5.0\x20ULTRA-LIL','Accept':'application/json'}});const _0x5f204c=_0x3e679f['data'];const _0x37faa3=_0x5f204c?.['downloadLink'];if(!_0x37faa3)throw new Error('noobsApi:\x20no\x20download\x20link\x20returned.');const _0x479b05=await loadAudio(_0x37faa3,_0x38de4f,_0x42653f);return{..._0x479b05,'payload':{'title':_0x5f204c?.['title']},'via':'noobsApi'};}let _0x568b9d={};let _0x15a259=null;let _0x1a94a5=null;try{const _0x3dbf47=await Promise['any']([_0x5ab5aa(),_0xb00813()]);_0x15a259=_0x3dbf47;_0x568b9d=_0x3dbf47[_0x1e841b(0x46)]||{};console['log'](_0x1e841b(0x47)[_0x1e841b(0x3a)](_0x3dbf47[_0x1e841b(0x48)],'\x20elapsedMs=')['concat'](Date['now']()-_0x52b271));}catch(_0x165ae9){_0x1a94a5=_0x165ae9;const _0x53f376=(_0x165ae9[_0x1e841b(0x49)]||[_0x165ae9])['map'](_0x1de9c3=>safeErrorSummary(_0x1de9c3));console['warn']('[PLAY]\x20Both\x20hosted\x20audio\x20sources\x20failed:',_0x53f376['join']('\x20|\x20'));}let _0x22a408;let _0x2a4829;let _0x14c2b8='';let _0x539afe=null;if(_0x15a259?.[_0x1e841b(0x4a)]?.[_0x1e841b(0x4b)]){_0x22a408=_0x15a259['buffer'];_0x2a4829=_0x15a259[_0x1e841b(0x4c)];_0x14c2b8=_0x15a259['contentType'];}else{if(!_0x55710c)throw _0x1a94a5||new Error('MP3\x20conversion\x20is\x20unavailable.');console[_0x1e841b(0x40)](_0x1e841b(0x4d));await _0x4c9818['sendMessage'](_0x213130,{'text':playResponse(_0x2f0a60,'AUDIO\x20RECOVERY',[{'label':_0x1e841b(0x36),'value':'Hosted\x20sources\x20are\x20unavailable;\x20trying\x20local\x20audio\x20recovery…','marker':'⏳'}],_0x1e841b(0x39))},{'quoted':_0x23d776});_0x1ad376=_0x587894['mkdtempSync'](_0x4db4f1['join'](_0x154758['tmpdir'](),'ultra-lil-play-'));_0x539afe=await downloadWithYtDlp(_0x1ff158,_0x1ad376,_0x574b3b);_0x22a408=_0x587894['readFileSync'](_0x539afe);_0x2a4829=_0x539afe;}if(!_0x22a408[_0x1e841b(0x4b)]||_0x22a408[_0x1e841b(0x4b)]>MAX_SOURCE_BYTES){throw new Error('The\x20downloaded\x20audio\x20is\x20empty\x20or\x20too\x20large.');}const _0x322be3=safeFileName(_0x568b9d?.['title']||_0x4c473b['title']||_0x147bfc);let _0x13c2a0=''['concat'](_0x322be3,'.mp3');if(_0x55710c){_0x1ad376||=_0x587894['mkdtempSync'](_0x4db4f1['join'](_0x154758['tmpdir'](),'ultra-lil-play-'));const _0x515c29=_0x539afe||_0x4db4f1['join'](_0x1ad376,'source.'['concat'](extensionFrom(_0x2a4829,_0x14c2b8)));const _0x1d7ace=_0x4db4f1['join'](_0x1ad376,'audio.mp3');if(!_0x539afe)_0x587894['writeFileSync'](_0x515c29,_0x22a408);await transcodeToMp3(_0x515c29,_0x1d7ace,_0x55710c,_0x3218ea);_0x22a408=_0x587894['readFileSync'](_0x1d7ace);}else if(extensionFrom(_0x2a4829,_0x14c2b8)!=='mp3'){throw new Error('MP3\x20conversion\x20is\x20unavailable\x20on\x20this\x20deployment.');}if(!_0x22a408['length']||_0x22a408[_0x1e841b(0x4b)]>MAX_WHATSAPP_AUDIO_BYTES){throw new Error('The\x20finished\x20audio\x20exceeds\x20WhatsApp’s\x2015\x20MB\x20audio-message\x20limit.');}await _0x4c9818['sendMessage'](_0x213130,{'audio':_0x22a408,'mimetype':'audio/mpeg','fileName':_0x13c2a0,'ptt':![]},{'quoted':_0x23d776});console['log'](_0x1e841b(0x4e)[_0x1e841b(0x3a)](safeDisplay(_0x4c473b['title']||_0x147bfc,_0x147bfc),'\x22\x20elapsedMs=')[_0x1e841b(0x3a)](Date['now']()-_0x5cade4));}catch(_0x230877){console[_0x1e841b(0x2)]('[PLAY]\x20Song\x20request\x20failed\x20elapsedMs='['concat'](Date[_0x1e841b(0x4f)]()-_0x5cade4,':'),safeErrorSummary(_0x230877));const _0x4dcfa5=/timeout|timed out|ETIMEDOUT|ECONNABORTED/i[_0x1e841b(0x50)](_0x230877['message'])?_0x1e9973['timeout']||'⏱️\x20The\x20song\x20service\x20timed\x20out.\x20Please\x20try\x20again.':_0x1e9973['error']||'❌\x20Could\x20not\x20prepare\x20that\x20song\x20right\x20now.\x20Please\x20try\x20again\x20later.';await _0x4c9818['sendMessage'](_0x213130,{'text':playResponse(_0x2f0a60,'PLAYBACK\x20STATUS',[{'label':'ERROR','value':_0x4dcfa5,'marker':'❌'},{'label':'NEXT\x20STEP','value':'Please\x20try\x20again\x20shortly.','marker':'›'}],'POWERED\x20BY\x20'['concat'](_0x5eda97))},{'quoted':_0x23d776});}finally{if(_0x1ad376&&_0x587894[_0x1e841b(0x51)](_0x1ad376))_0x587894['rmSync'](_0x1ad376,{'recursive':!![],'force':!![]});}}export const commands=[{'name':'play','description':'Search\x20for\x20a\x20song\x20and\x20send\x20its\x20cover\x20preview\x20plus\x20WhatsApp-playable\x20MP3\x20audio.','category':'Search','execute':runPlay}];
+import ytSearch from 'yt-search';
+import axios from 'axios';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { execFile, spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
+import { promisify } from 'node:util';
+import { API_CONFIG, MESSAGES } from '../france/index.js';
+import {
+  spiderHeader,
+  spiderRow,
+  spiderDivider,
+  spiderFooter,
+} from '../utils/tableStyle.js';
+
+const requireFromPlay = createRequire(import.meta.url);
+const execFileAsync = promisify(execFile);
+
+const MAX_SOURCE_BYTES = 80 * 1024 * 1024;
+const MAX_WHATSAPP_AUDIO_BYTES = 15 * 1024 * 1024;
+const DEFAULT_API_TIMEOUT_MS = 20_000;
+const MAX_API_TIMEOUT_MS = 30_000;
+const PLAY_DOWNLOAD_TIMEOUT_MS = 45_000;
+const FALLBACK_DOWNLOAD_TIMEOUT_MS = 20_000;
+const DEFAULT_USER_AGENT =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+
+function getOptionalFfmpegStatic() {
+  for (const pkg of ['ffmpeg-static', '@ffmpeg-installer/ffmpeg']) {
+    try {
+      const mod = requireFromPlay(pkg);
+      const binPath = typeof mod === 'string' ? mod : mod?.path || mod?.default;
+      if (binPath && typeof binPath === 'string') return binPath;
+    } catch {
+      // Optional dependency may not be installed
+    }
+  }
+  return null;
+}
+
+const OPTIONAL_FFMPEG_BIN = getOptionalFfmpegStatic();
+
+function findFfmpegPath() {
+  const candidates = [
+    process.env.FFMPEG_PATH,
+    OPTIONAL_FFMPEG_BIN,
+    'ffmpeg',
+    '/usr/bin/ffmpeg',
+    '/usr/local/bin/ffmpeg',
+    '/data/data/com.termux/files/usr/bin/ffmpeg',
+    process.platform === 'win32' ? 'ffmpeg.exe' : null,
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    try {
+      const check = spawnSync(candidate, ['-version'], { stdio: 'ignore' });
+      if (!check.error && check.status === 0) return candidate;
+    } catch {
+      // Try next candidate
+    }
+  }
+
+  if (process.platform === 'win32') {
+    try {
+      const whereRes = spawnSync('where', ['ffmpeg'], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      const firstLine = String(whereRes?.stdout || '').split(/\r?\n/)[0]?.trim();
+      if (firstLine) return firstLine;
+    } catch {
+      // Ignore Windows lookup error
+    }
+  }
+  return null;
+}
+
+const FFMPEG_PATH = findFfmpegPath();
+
+function safeFileName(name) {
+  return (
+    String(name || 'song')
+      .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 96) || 'song'
+  );
+}
+
+function safeDisplay(value, fallback = 'N/A') {
+  return (
+    String(value || fallback)
+      .replace(/[\r\n]+/g, ' ')
+      .trim()
+      .slice(0, 160) || fallback
+  );
+}
+
+function safeErrorSummary(err) {
+  const parts = Array.isArray(err?.errors) && err.errors.length ? err.errors : [err];
+  return parts
+    .map((item) => String(item?.stderr || item?.message || 'Unknown error'))
+    .join(' | ')
+    .replace(/https?:\/\/[^\s"')]+/gi, '[URL]')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 400);
+}
+
+function playResponse(botName, title, rows, footer = 'SPIDER MAN // AUDIO') {
+  const lines = [spiderHeader(botName, title)];
+  rows.forEach((row, index) => {
+    if (index > 0) lines.push(spiderDivider());
+    lines.push(spiderRow(row.label, row.value, row.marker || '◈'));
+  });
+  lines.push(spiderFooter(footer));
+  return lines.join('\n');
+}
+
+export function extractYouTubeId(input) {
+  const match = String(input || '').match(
+    /(?:youtu\.be\/|youtube\.com\/(?:watch\?(?:.*&)?v=|shorts\/|embed\/|v\/|live\/))([A-Za-z0-9_-]{11})/i,
+  );
+  return match ? match[1] : null;
+}
+
+function extensionFromMime(mime) {
+  const normalized = String(mime || '').toLowerCase();
+  if (normalized.includes('mpeg') || normalized.includes('audio/mp3')) return 'mp3';
+  if (normalized.includes('opus') || normalized.includes('ogg')) return 'ogg';
+  if (normalized.includes('mp4') || normalized.includes('m4a')) return 'm4a';
+  if (normalized.includes('wav')) return 'wav';
+  if (normalized.includes('aac')) return 'aac';
+  if (normalized.includes('webm')) return 'webm';
+  return '';
+}
+
+function extensionFrom(source, contentType) {
+  const mimeType = String(contentType || '').split(';')[0].toLowerCase();
+  let ext = '';
+  if (typeof source === 'string') {
+    if (source.startsWith('data:')) {
+      const match = source.match(/^data:([^;,]+)/i);
+      if (match?.[1]) return extensionFromMime(match[1]);
+    }
+    try {
+      ext = path.extname(new URL(source).pathname).slice(1).toLowerCase();
+    } catch {
+      ext = path.extname(source).slice(1).toLowerCase();
+    }
+  }
+  if (['mp3', 'm4a', 'aac', 'ogg', 'opus', 'wav', 'webm', 'mp4'].includes(ext)) {
+    return ext;
+  }
+  return extensionFromMime(mimeType) || 'bin';
+}
+
+function resolveCandidateValue(item) {
+  if (typeof item === 'string' && item.trim()) return item.trim();
+  if (item && typeof item === 'object') {
+    const nested = item.url || item.downloadUrl || item.download_url || item.link;
+    if (typeof nested === 'string' && nested.trim()) return nested.trim();
+    if (Buffer.isBuffer(item.data) || item.data instanceof Uint8Array) return item.data;
+    if (typeof item.base64 === 'string' && item.base64.trim()) {
+      return `data:audio/mpeg;base64,${item.base64.trim()}`;
+    }
+  }
+  return null;
+}
+
+export function extractAudioCandidates(payload, { allowVideoFallback = false } = {}) {
+  const candidates = [];
+  const seen = new Set();
+
+  const pushCandidate = (raw, kind = 'audio') => {
+    if (Array.isArray(raw)) {
+      for (const entry of raw) pushCandidate(entry, kind);
+      return;
+    }
+    const resolved = resolveCandidateValue(raw);
+    if (!resolved) return;
+    const dedupeKey = typeof resolved === 'string' ? resolved : `buf:${resolved.length}`;
+    if (seen.has(dedupeKey)) return;
+    seen.add(dedupeKey);
+    candidates.push({ source: resolved, kind });
+  };
+
+  const audioFields = [
+    payload?.audio,
+    payload?.audioUrl,
+    payload?.audio_url,
+    payload?.downloadLink,
+    payload?.downloadUrl,
+    payload?.download_url,
+    payload?.mp3,
+    payload?.music,
+    payload?.url,
+    payload?.link,
+    payload?.download,
+  ];
+  for (const field of audioFields) pushCandidate(field, 'audio');
+
+  if (allowVideoFallback) {
+    const videoFields = [
+      payload?.video,
+      payload?.videoUrl,
+      payload?.video_url,
+      payload?.video_hd,
+      payload?.high,
+      payload?.hd,
+      payload?.sd,
+      payload?.low,
+    ];
+    for (const field of videoFields) pushCandidate(field, 'video');
+  }
+
+  return candidates;
+}
+
+function isInvalidMediaPayload(buffer, contentType) {
+  const ct = String(contentType || '').toLowerCase();
+  if (
+    ct.includes('text/html') ||
+    ct.includes('application/xhtml') ||
+    ct.includes('application/json') ||
+    ct.includes('application/xml') ||
+    ct.includes('text/xml') ||
+    ct.includes('text/plain')
+  ) {
+    return true;
+  }
+
+  const head = buffer.subarray(0, 256).toString('utf8').trimStart().toLowerCase();
+  if (
+    head.startsWith('<!doctype') ||
+    head.startsWith('<html') ||
+    head.startsWith('<head') ||
+    head.startsWith('<body') ||
+    head.startsWith('<?xml') ||
+    (head.startsWith('{') && /"(error|status|success|message|code)"\s*:/.test(head))
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function looksLikeMp3Buffer(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 4) return false;
+  if (buffer[0] === 0x49 && buffer[1] === 0x44 && buffer[2] === 0x33) return true; // ID3
+  if (buffer[0] === 0xff && (buffer[1] & 0xe0) === 0xe0) return true; // MPEG frame sync
+  return false;
+}
+
+async function loadAudio(source, httpGet, timeoutMs) {
+  if (Buffer.isBuffer(source) || source instanceof Uint8Array) {
+    const buffer = Buffer.from(source);
+    if (!buffer.length) throw new Error('Audio buffer is empty.');
+    return { buffer, contentType: 'audio/mpeg', source };
+  }
+
+  if (typeof source !== 'string') {
+    throw new Error('Audio source is not a supported URL or buffer.');
+  }
+
+  const dataUriMatch = source.match(/^data:([^;,]+)?;base64,(.+)$/i);
+  if (dataUriMatch) {
+    const buffer = Buffer.from(dataUriMatch[2], 'base64');
+    if (!buffer.length) throw new Error('Base64 audio payload is empty.');
+    return {
+      buffer,
+      contentType: dataUriMatch[1] || 'audio/mpeg',
+      source,
+    };
+  }
+
+  if (/^https?:\/\//i.test(source)) {
+    const res = await httpGet(source, {
+      responseType: 'arraybuffer',
+      timeout: timeoutMs,
+      maxContentLength: MAX_SOURCE_BYTES,
+      maxBodyLength: MAX_SOURCE_BYTES,
+      headers: { 'User-Agent': DEFAULT_USER_AGENT },
+    });
+    if (res?.status >= 400) {
+      throw new Error(`Audio download returned HTTP ${res.status}`);
+    }
+    const contentType = String(res?.headers?.['content-type'] || '');
+    const buffer = Buffer.from(res?.data || []);
+    if (!buffer.length) {
+      throw new Error('Downloaded audio response was empty.');
+    }
+    if (isInvalidMediaPayload(buffer, contentType)) {
+      throw new Error(`Downloaded non-audio payload (${contentType || 'markup'})`);
+    }
+    return { buffer, contentType, source };
+  }
+
+  if (/^[A-Za-z0-9+/]+={0,2}$/.test(source) && source.length > 256) {
+    return {
+      buffer: Buffer.from(source, 'base64'),
+      contentType: 'audio/mpeg',
+      source,
+    };
+  }
+
+  throw new Error('Audio download link was not valid.');
+}
+
+async function loadFromCandidates(candidates, httpGet, defaultTimeoutMs) {
+  let lastError = null;
+  for (let i = 0; i < candidates.length; i += 1) {
+    const candidate = candidates[i];
+    const hasMore = i < candidates.length - 1;
+    const timeoutMs = hasMore
+      ? Math.min(defaultTimeoutMs, FALLBACK_DOWNLOAD_TIMEOUT_MS)
+      : defaultTimeoutMs;
+    try {
+      const loaded = await loadAudio(candidate.source, httpGet, timeoutMs);
+      return { ...loaded, candidateKind: candidate.kind };
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError || new Error('No downloadable audio source returned.');
+}
+
+async function resolveYtDlpRunner(overrides = {}) {
+  if (overrides.ytDlp) {
+    const custom = overrides.ytDlp;
+    const execFn = typeof custom.exec === 'function' ? custom.exec.bind(custom) : custom;
+    if (typeof execFn === 'function') return { execFn, isCustom: true };
+  }
+
+  try {
+    const mod = await import('youtube-dl-exec');
+    const ytDlpMod = mod.default || mod;
+    const binPath = ytDlpMod?.constants?.YOUTUBE_DL_PATH;
+    if (binPath && fs.existsSync(binPath)) {
+      const execFn = typeof ytDlpMod.exec === 'function' ? ytDlpMod.exec.bind(ytDlpMod) : ytDlpMod;
+      if (typeof execFn === 'function') return { execFn, isCustom: false };
+    }
+  } catch {
+    // Optional youtube-dl-exec unavailable
+  }
+
+  const binCandidates = [
+    process.env.YTDLP_PATH,
+    'yt-dlp',
+    '/usr/bin/yt-dlp',
+    '/usr/local/bin/yt-dlp',
+    '/data/data/com.termux/files/usr/bin/yt-dlp',
+  ].filter(Boolean);
+
+  for (const bin of binCandidates) {
+    try {
+      const check = spawnSync(bin, ['--version'], { stdio: 'ignore' });
+      if (!check.error && check.status === 0) {
+        const mod = await import('youtube-dl-exec').catch(() => null);
+        const createFn = mod?.create || mod?.default?.create;
+        if (typeof createFn === 'function') {
+          const created = createFn(bin);
+          const execFn = typeof created.exec === 'function' ? created.exec.bind(created) : created;
+          if (typeof execFn === 'function') return { execFn, isCustom: false };
+        }
+      }
+    } catch {
+      // Try next binary
+    }
+  }
+
+  return null;
+}
+
+async function downloadWithYtDlp(videoUrl, tmpDir, overrides = {}, ffmpegPath = null) {
+  if (typeof overrides.downloadWithYtDlp === 'function') {
+    return overrides.downloadWithYtDlp(videoUrl, tmpDir, overrides);
+  }
+
+  const runner = await resolveYtDlpRunner(overrides);
+  if (!runner) {
+    throw new Error('Local audio downloader is unavailable.');
+  }
+
+  const outputTemplate = path.join(tmpDir, 'yt-dlp-source.%(ext)s');
+  const baseFlags = {
+    format: 'bestaudio/best',
+    output: outputTemplate,
+    noPlaylist: true,
+    noWarnings: true,
+    noProgress: true,
+    restrictFilenames: true,
+  };
+  if (ffmpegPath && fs.existsSync(ffmpegPath)) {
+    baseFlags.ffmpegLocation = ffmpegPath;
+  }
+
+  const flagVariants = [
+    { ...baseFlags, extractorArgs: 'youtube:player_client=android,ios,web' },
+    { ...baseFlags, jsRuntimes: 'node' },
+    baseFlags,
+  ];
+
+  let lastErr = null;
+  for (const flags of flagVariants) {
+    try {
+      await runner.execFn(videoUrl, flags, {
+        timeout: PLAY_DOWNLOAD_TIMEOUT_MS,
+        killSignal: 'SIGKILL',
+        maxBuffer: 4 * 1024 * 1024,
+      });
+      const files = fs.readdirSync(tmpDir);
+      const found = files.find(
+        (file) => file.startsWith('yt-dlp-source.') && !file.endsWith('.part'),
+      );
+      if (found) return path.join(tmpDir, found);
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+
+  throw lastErr || new Error('Local audio downloader produced no file.');
+}
+
+async function transcodeToMp3(inputPath, outputPath, ffmpegPath, execFileFn) {
+  await execFileFn(
+    ffmpegPath,
+    ['-y', '-i', inputPath, '-vn', '-c:a', 'libmp3lame', '-b:a', '128k', '-ar', '44100', '-ac', '2', '-f', 'mp3', outputPath],
+    { timeout: 90_000, maxBuffer: 4 * 1024 * 1024 },
+  );
+}
+
+function parseDurationSeconds(timestamp) {
+  const parts = String(timestamp || '')
+    .split(':')
+    .map((n) => Number(n));
+  if (!parts.length || parts.some((n) => !Number.isFinite(n) || n < 0)) return 0;
+  return parts.reduce((acc, val) => acc * 60 + val, 0);
+}
+
+export async function runPlay({ sock, from, text, msg, config }, overrides = {}) {
+  const botName = config?.BOT_NAME || 'Spider Man';
+  const ownerName = config?.OWNER_NAME || 'LilTech';
+  const playMsgs = MESSAGES?.play || {};
+  const trimmedQuery = String(text || '').trim();
+
+  const search = overrides.search || ytSearch;
+  const httpClient = overrides.http || axios;
+  const httpGet = httpClient.get.bind(httpClient);
+  const apiConfig = overrides.apiConfig || API_CONFIG;
+  const ffmpegPath = Object.hasOwn(overrides, 'ffmpegPath')
+    ? overrides.ffmpegPath
+    : FFMPEG_PATH;
+  const execFileFn = overrides.execFile || execFileAsync;
+
+  const rawConfiguredTimeout = Number(apiConfig?.nayanApi?.timeout);
+  const apiTimeoutMs =
+    Number.isFinite(rawConfiguredTimeout) && rawConfiguredTimeout > 0
+      ? Math.min(rawConfiguredTimeout, MAX_API_TIMEOUT_MS)
+      : DEFAULT_API_TIMEOUT_MS;
+  const downloadTimeoutMs = PLAY_DOWNLOAD_TIMEOUT_MS;
+
+  let tmpDir;
+
+  if (!trimmedQuery) {
+    return sock.sendMessage(
+      from,
+      {
+        text: playResponse(
+          botName,
+          'MUSIC PLAYER',
+          [
+            {
+              label: 'REQUEST',
+              value: playMsgs.noQuery || 'Send a song title or YouTube link.',
+              marker: '⚠️',
+            },
+            { label: 'EXAMPLE', value: '.play song name', marker: '›' },
+          ],
+          'SPIDER MAN // READY',
+        ),
+      },
+      { quoted: msg },
+    );
+  }
+
+  const requestStartedAt = Date.now();
+  console.log(`[PLAY] received query="${trimmedQuery.slice(0, 120)}"`);
+
+  try {
+    await sock.sendMessage(
+      from,
+      {
+        text: playResponse(
+          botName,
+          'MUSIC SEARCH',
+          [
+            { label: 'STATUS', value: 'Searching for your song…', marker: '🔎' },
+            { label: 'QUERY', value: trimmedQuery, marker: '›' },
+          ],
+          'SPIDER MAN // AUDIO',
+        ),
+      },
+      { quoted: msg },
+    );
+
+    const directVideoId = extractYouTubeId(trimmedQuery);
+    let searchResult = null;
+    try {
+      searchResult = await search(trimmedQuery);
+    } catch (searchErr) {
+      if (!directVideoId) throw searchErr;
+    }
+
+    const searchVideos = Array.isArray(searchResult?.videos) ? searchResult.videos : [];
+    let primaryVideo = searchVideos[0] || null;
+    if (!primaryVideo && directVideoId) {
+      primaryVideo = {
+        videoId: directVideoId,
+        url: `https://www.youtube.com/watch?v=${directVideoId}`,
+        title: trimmedQuery,
+        author: { name: 'YouTube' },
+        timestamp: 'N/A',
+        thumbnail: `https://i.ytimg.com/vi/${directVideoId}/hqdefault.jpg`,
+      };
+    }
+
+    if (!primaryVideo) {
+      return sock.sendMessage(
+        from,
+        {
+          text: playResponse(
+            botName,
+            'MUSIC SEARCH',
+            [
+              {
+                label: 'STATUS',
+                value: playMsgs.noResults || 'No matching song was found.',
+                marker: '❌',
+              },
+              {
+                label: 'NEXT STEP',
+                value: 'Try a different title or YouTube link.',
+                marker: '›',
+              },
+            ],
+            'SPIDER MAN // AUDIO',
+          ),
+        },
+        { quoted: msg },
+      );
+    }
+
+    const videoUrl =
+      primaryVideo.url || `https://www.youtube.com/watch?v=${primaryVideo.videoId}`;
+    const displayTitle = safeDisplay(primaryVideo.title || trimmedQuery, 'Unknown song');
+    const displayChannel = safeDisplay(primaryVideo.author?.name, 'Unknown');
+    const displayDuration = safeDisplay(primaryVideo.timestamp, 'N/A');
+    const thumbUrl =
+      primaryVideo.thumbnail ||
+      (primaryVideo.videoId
+        ? `https://i.ytimg.com/vi/${primaryVideo.videoId}/hqdefault.jpg`
+        : '') ||
+      config?.BOT_PIC ||
+      '';
+
+    const previewCaption = playResponse(
+      botName,
+      'MUSIC PLAYER',
+      [
+        { label: 'TITLE', value: displayTitle, marker: '🎵' },
+        { label: 'CHANNEL', value: displayChannel, marker: '👤' },
+        { label: 'DURATION', value: displayDuration, marker: '⏱️' },
+        { label: 'AUDIO', value: 'MP3 · 128 kbps', marker: '🔊' },
+        { label: 'STATUS', value: 'Preparing the audio…', marker: '⏳' },
+      ],
+      `POWERED BY ${ownerName}`,
+    );
+
+    try {
+      if (thumbUrl) {
+        await sock.sendMessage(
+          from,
+          { image: { url: thumbUrl }, caption: previewCaption },
+          { quoted: msg },
+        );
+      } else {
+        await sock.sendMessage(from, { text: previewCaption }, { quoted: msg });
+      }
+    } catch (previewErr) {
+      console.warn('[PLAY] Preview send failed:', previewErr.message);
+      try {
+        await sock.sendMessage(from, { text: previewCaption }, { quoted: msg });
+      } catch {
+        // Best-effort preview notification
+      }
+    }
+
+    const allowVideoFallback = Boolean(ffmpegPath);
+
+    async function fetchFromNayan(targetUrl) {
+      const endpoint = apiConfig?.nayanApi?.youtube;
+      if (!endpoint) throw new Error('Hosted downloader (nayanApi) is not configured.');
+      const requestUrl = new URL(endpoint);
+      requestUrl.searchParams.set('url', targetUrl);
+
+      const response = await httpGet(requestUrl.toString(), {
+        timeout: apiTimeoutMs,
+        maxContentLength: 4 * 1024 * 1024,
+        headers: { 'User-Agent': DEFAULT_USER_AGENT },
+      });
+      const body = response.data;
+      const payload = body?.data?.data || body?.data || body?.result || body || {};
+      if (body?.status === false || body?.success === false) {
+        throw new Error('nayanApi: returned unsuccessful status.');
+      }
+      const candidates = extractAudioCandidates(payload, { allowVideoFallback });
+      if (!candidates.length) {
+        throw new Error('nayanApi: no audio returned.');
+      }
+      const loaded = await loadFromCandidates(candidates, httpGet, downloadTimeoutMs);
+      return { ...loaded, payload, via: 'nayanApi' };
+    }
+
+    async function fetchFromNoobs(targetVideoId) {
+      if (!targetVideoId) throw new Error('noobsApi: no video id to look up.');
+      const base = apiConfig?.noobsApi || 'https://noobs-api.top';
+      const requestUrl = new URL('/dipto/ytDl3', base);
+      requestUrl.searchParams.set('link', targetVideoId);
+      requestUrl.searchParams.set('format', 'mp3');
+
+      const response = await httpGet(requestUrl.toString(), {
+        timeout: apiTimeoutMs,
+        maxContentLength: 4 * 1024 * 1024,
+        headers: { 'User-Agent': DEFAULT_USER_AGENT, Accept: 'application/json' },
+      });
+      const body = response.data;
+      const candidates = extractAudioCandidates(body || {}, { allowVideoFallback });
+      if (!candidates.length) {
+        throw new Error('noobsApi: no download link returned.');
+      }
+      const loaded = await loadFromCandidates(candidates, httpGet, downloadTimeoutMs);
+      return { ...loaded, payload: { title: body?.title }, via: 'noobsApi' };
+    }
+
+    async function fetchFromNexray(targetUrl) {
+      const requestUrl = new URL('https://api.nexray.web.id/downloader/ytmp3');
+      requestUrl.searchParams.set('url', targetUrl);
+
+      const response = await httpGet(requestUrl.toString(), {
+        timeout: Math.min(apiTimeoutMs, 12_000),
+        maxContentLength: 4 * 1024 * 1024,
+        headers: { 'User-Agent': DEFAULT_USER_AGENT, Accept: 'application/json' },
+      });
+      const body = response.data;
+      if (body?.status === false) {
+        throw new Error('nexray: unavailable.');
+      }
+      const payload = body?.result || body?.data || body || {};
+      const candidates = extractAudioCandidates(payload, { allowVideoFallback });
+      if (!candidates.length) {
+        throw new Error('nexray: no audio returned.');
+      }
+      const loaded = await loadFromCandidates(candidates, httpGet, downloadTimeoutMs);
+      return { ...loaded, payload, via: 'nexray' };
+    }
+
+    const fetchStartedAt = Date.now();
+    let payloadMeta = {};
+    let resolvedDownload = null;
+    let primaryError = null;
+
+    // Tier 1: Primary hosted providers (nayanApi + noobsApi)
+    try {
+      const firstHit = await Promise.any([
+        fetchFromNayan(videoUrl),
+        fetchFromNoobs(primaryVideo.videoId),
+      ]);
+      resolvedDownload = firstHit;
+      payloadMeta = firstHit.payload || {};
+      console.log(`[PLAY] audio source=${firstHit.via} elapsedMs=${Date.now() - fetchStartedAt}`);
+    } catch (err) {
+      primaryError = err;
+      const errors = (err?.errors || [err]).map((e) => safeErrorSummary(e));
+      console.warn('[PLAY] Primary hosted audio sources failed:', errors.join(' | '));
+    }
+
+    // Tier 2: Secondary hosted fallbacks (custom overrides, nexray, or alternate search match)
+    if (!resolvedDownload?.buffer?.length) {
+      const secondaryJobs = [];
+
+      if (Array.isArray(overrides.fallbackSources)) {
+        for (const fn of overrides.fallbackSources) {
+          if (typeof fn === 'function') secondaryJobs.push(fn(videoUrl, primaryVideo));
+        }
+      }
+
+      if (!overrides.skipBuiltinFallbacks) {
+        secondaryJobs.push(fetchFromNexray(videoUrl));
+        // Retry nayanApi once in case of transient edge error
+        secondaryJobs.push(fetchFromNayan(videoUrl));
+
+        // If user searched by title (not direct URL), try alternate search matches (<= 15m)
+        if (!directVideoId && searchVideos.length > 1) {
+          const altVideos = searchVideos
+            .slice(1, 3)
+            .filter((v) => {
+              const secs = parseDurationSeconds(v?.timestamp);
+              return (v?.url || v?.videoId) && (secs === 0 || secs <= 900);
+            });
+          for (const alt of altVideos) {
+            const altUrl = alt.url || `https://www.youtube.com/watch?v=${alt.videoId}`;
+            secondaryJobs.push(fetchFromNayan(altUrl));
+          }
+        }
+      }
+
+      if (secondaryJobs.length) {
+        try {
+          const fallbackHit = await Promise.any(secondaryJobs);
+          resolvedDownload = fallbackHit;
+          payloadMeta = fallbackHit.payload || {};
+          console.log(
+            `[PLAY] audio fallback source=${fallbackHit.via || 'secondary'} elapsedMs=${Date.now() - fetchStartedAt}`,
+          );
+        } catch (fallbackErr) {
+          const errors = (fallbackErr?.errors || [fallbackErr]).map((e) => safeErrorSummary(e));
+          console.warn('[PLAY] Secondary hosted audio fallbacks failed:', errors.join(' | '));
+        }
+      }
+    }
+
+    let rawBuffer;
+    let sourceRef;
+    let contentType = '';
+    let localFile = null;
+
+    if (resolvedDownload?.buffer?.length) {
+      rawBuffer = resolvedDownload.buffer;
+      sourceRef = resolvedDownload.source;
+      contentType = resolvedDownload.contentType || '';
+    } else {
+      // Tier 3: Silent local yt-dlp fallback ONLY when a local yt-dlp runner is available
+      const hasCustomLocal =
+        typeof overrides.downloadWithYtDlp === 'function' || Boolean(overrides.ytDlp);
+      const localRunner = hasCustomLocal ? true : Boolean(await resolveYtDlpRunner(overrides));
+
+      if (!localRunner || !ffmpegPath) {
+        throw primaryError || new Error('No working audio download source is currently available.');
+      }
+
+      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ultra-lil-play-'));
+      localFile = await downloadWithYtDlp(videoUrl, tmpDir, overrides, ffmpegPath);
+      rawBuffer = fs.readFileSync(localFile);
+      sourceRef = localFile;
+    }
+
+    if (!rawBuffer.length || rawBuffer.length > MAX_SOURCE_BYTES) {
+      throw new Error('The downloaded audio is empty or too large.');
+    }
+
+    const baseFileName = safeFileName(
+      payloadMeta?.title || primaryVideo.title || trimmedQuery,
+    );
+    const outFileName = `${baseFileName}.mp3`;
+    const detectedExt = extensionFrom(sourceRef, contentType);
+
+    if (ffmpegPath) {
+      tmpDir ||= fs.mkdtempSync(path.join(os.tmpdir(), 'ultra-lil-play-'));
+      const inputPath = localFile || path.join(tmpDir, `source.${detectedExt}`);
+      const outputPath = path.join(tmpDir, 'audio.mp3');
+      if (!localFile) fs.writeFileSync(inputPath, rawBuffer);
+      try {
+        await transcodeToMp3(inputPath, outputPath, ffmpegPath, execFileFn);
+        rawBuffer = fs.readFileSync(outputPath);
+      } catch (transcodeErr) {
+        const alreadyMp3 = detectedExt === 'mp3' || looksLikeMp3Buffer(rawBuffer);
+        if (!alreadyMp3) throw transcodeErr;
+        console.warn('[PLAY] FFmpeg transcode skipped for valid MP3:', transcodeErr.message);
+      }
+    } else if (detectedExt !== 'mp3' && !looksLikeMp3Buffer(rawBuffer)) {
+      throw new Error('MP3 conversion is unavailable on this deployment.');
+    }
+
+    if (!rawBuffer.length || rawBuffer.length > MAX_WHATSAPP_AUDIO_BYTES) {
+      throw new Error('The finished audio exceeds WhatsApp’s 15 MB audio-message limit.');
+    }
+
+    await sock.sendMessage(
+      from,
+      {
+        audio: rawBuffer,
+        mimetype: 'audio/mpeg',
+        fileName: outFileName,
+        ptt: false,
+      },
+      { quoted: msg },
+    );
+
+    console.log(
+      `[PLAY] sent title="${safeDisplay(primaryVideo.title || trimmedQuery, trimmedQuery)}" elapsedMs=${Date.now() - requestStartedAt}`,
+    );
+  } catch (err) {
+    const summary = safeErrorSummary(err);
+    console.error(
+      `[PLAY] Song request failed elapsedMs=${Date.now() - requestStartedAt}:`,
+      summary,
+    );
+    const isTimeout = /timeout|timed out|ETIMEDOUT|ECONNABORTED/i.test(summary);
+    const errorValue = isTimeout
+      ? playMsgs.timeout || '⏱️ The song service timed out. Please try again.'
+      : playMsgs.error || '❌ Could not prepare that song right now. Please try again later.';
+
+    await sock.sendMessage(
+      from,
+      {
+        text: playResponse(
+          botName,
+          'PLAYBACK STATUS',
+          [
+            { label: 'ERROR', value: errorValue, marker: '❌' },
+            { label: 'NEXT STEP', value: 'Please try again shortly.', marker: '›' },
+          ],
+          `POWERED BY ${ownerName}`,
+        ),
+      },
+      { quoted: msg },
+    );
+  } finally {
+    if (tmpDir && fs.existsSync(tmpDir)) {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }
+}
+
+export const commands = [
+  {
+    name: 'play',
+    description:
+      'Search for a song and send its cover preview plus WhatsApp-playable MP3 audio.',
+    category: 'Search',
+    execute: runPlay,
+  },
+];
