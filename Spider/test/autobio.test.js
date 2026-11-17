@@ -457,17 +457,17 @@ test('applyProfileBio does not retry protocol fallbacks on non-schema socket err
   assert.equal(count, 1);
 });
 
-test('PRESET_AUTOBIOS contains 100 unique valid bios that rotate dynamically and load into store/commands', async () => {
-  assert.equal(PRESET_AUTOBIOS.length, 100);
-  assert.ok(MAX_SAVED_BIOS >= 100);
+test('PRESET_AUTOBIOS contains 10,100 unique mixed bios (100 core + 10,000 additional) that rotate with zero repetition', async () => {
+  assert.equal(PRESET_AUTOBIOS.length, 10_100);
+  assert.ok(MAX_SAVED_BIOS >= 10_100);
 
-  const uniqueRaw = new Set(PRESET_AUTOBIOS.map((b) => b.trim()));
-  assert.equal(uniqueRaw.size, 100, 'all 100 preset bios must be distinct');
+  const uniqueNormalized = new Set(PRESET_AUTOBIOS.map((b) => b.trim().toLowerCase()));
+  assert.equal(uniqueNormalized.size, 10_100, 'all 10,100 preset bios must be strictly unique');
 
-  const nowMs = Date.UTC(2026, 10, 17, 13, 30, 0);
+  const nowMs = Date.UTC(2026, 10, 17, 13, 45, 0);
   const startTimeMs = nowMs - 7_260_000;
-  const generated = new Set();
-  for (let i = 0; i < 100; i += 1) {
+  const expandedSet = new Set();
+  for (let i = 0; i < PRESET_AUTOBIOS.length; i += 1) {
     const bio = buildDynamicBio({
       botName: 'Spider Man',
       tz: 'UTC',
@@ -476,11 +476,18 @@ test('PRESET_AUTOBIOS contains 100 unique valid bios that rotate dynamically and
       index: i,
     });
     assert.ok(bio.length > 0 && bio.length <= MAX_BIO_LENGTH, `bio #${i + 1} invalid length: ${bio.length}`);
-    generated.add(bio);
+    expandedSet.add(bio);
   }
-  assert.equal(generated.size, 100, 'all 100 rotated bios must expand distinctly');
+  assert.equal(expandedSet.size, 10_100, 'all 10,100 expanded bios must rotate without repetition');
 
-  const tmpDir = createTempDir('spider-autobio-100-');
+  // Verify early rotation mixes pickup lines, fun lines, chill vibes, savage, wisdom, tech, etc.
+  const firstTen = PRESET_AUTOBIOS.slice(0, 10).join('\n');
+  assert.match(firstTen, /\{bot\}/);
+  assert.match(firstTen, /Wi-Fi|connection/i);
+  assert.match(firstTen, /pizza|Fitness/i);
+  assert.match(firstTen, /Midnight|tea/i);
+
+  const tmpDir = createTempDir('spider-autobio-10k-');
   const origCwd = process.cwd();
   const origGlobalManager = globalThis.__spiderAutobioManager;
   const { sock, statusUpdates, messages } = createMockSock();
@@ -499,10 +506,20 @@ test('PRESET_AUTOBIOS contains 100 unique valid bios that rotate dynamically and
     globalThis.__spiderAutobioManager = testManager;
 
     const from = '254700000001@s.whatsapp.net';
-    const fakeMsg = { key: { remoteJid: from, fromMe: true, id: 'm100' } };
+    const fakeMsg = { key: { remoteJid: from, fromMe: true, id: 'm10k' } };
     const cfg = { BOT_NAME: 'Spider Man', PREFIXES: ['.'] };
 
-    // Load all 100 presets via `.autobio presets`
+    // Load 100 presets via `.autobio presets 100`, then upgrade to all 10,100 via `.autobio presets`
+    await autobioCmd.execute({
+      sock,
+      from,
+      text: 'presets 100',
+      args: ['presets', '100'],
+      msg: fakeMsg,
+      config: cfg,
+    });
+    assert.equal(testStore.getState().bios.length, 100);
+
     await autobioCmd.execute({
       sock,
       from,
@@ -511,12 +528,11 @@ test('PRESET_AUTOBIOS contains 100 unique valid bios that rotate dynamically and
       msg: fakeMsg,
       config: cfg,
     });
-
-    assert.equal(testStore.getState().bios.length, 100);
+    assert.equal(testStore.getState().bios.length, 10_100);
     assert.equal(testStore.getState().enabled, true);
-    assert.equal(statusUpdates.length, 1);
+    assert.equal(statusUpdates.length, 2);
     assert.match(messages.at(-1).content.text, /PRESET BIOS LOADED/);
-    assert.match(messages.at(-1).content.text, /100/);
+    assert.match(messages.at(-1).content.text, /10,100/);
 
     // Pagination via `.autobio list 2`
     await autobioCmd.execute({
@@ -528,7 +544,7 @@ test('PRESET_AUTOBIOS contains 100 unique valid bios that rotate dynamically and
       config: cfg,
     });
     const listText = messages.at(-1).content.text;
-    assert.match(listText, /PAGE 2\/4/);
+    assert.match(listText, /PAGE 2\/404/);
     assert.match(listText, /#26/);
     assert.match(listText, /#50/);
   } finally {
@@ -540,5 +556,6 @@ test('PRESET_AUTOBIOS contains 100 unique valid bios that rotate dynamically and
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
 
 
