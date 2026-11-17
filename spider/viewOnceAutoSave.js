@@ -2,7 +2,12 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { downloadContentFromMessage, downloadMediaMessage } from '@whiskeysockets/baileys';
+import {
+  downloadContentFromMessage,
+  downloadEncryptedContent,
+  downloadMediaMessage,
+  getMediaKeys,
+} from '@whiskeysockets/baileys';
 import { spiderDivider, spiderFooter, spiderHeader, spiderRow } from '../Spider/utils/tableStyle.js';
 import { cleanJid, extractPhoneDigits } from './utils/groupRoleResolver.js';
 import { SILENT_LOGGER } from './utils/privacyLogger.js';
@@ -144,6 +149,7 @@ function writeDiskCacheEntry(id, entry) {
       mimetype: entry.mimetype || '',
       caption: entry.caption || '',
       ptt: Boolean(entry.ptt),
+      fileName: entry.fileName || '',
       timestamp: entry.timestamp || Date.now(),
       bufferBase64: entry.buffer.toString('base64'),
     });
@@ -175,6 +181,7 @@ function readDiskCacheEntry(id) {
       mimetype: parsed.mimetype || '',
       caption: parsed.caption || '',
       ptt: Boolean(parsed.ptt),
+      fileName: parsed.fileName || '',
       timestamp: parsed.timestamp || Date.now(),
     };
   } catch {
@@ -364,6 +371,14 @@ export function extractViewOnceMedia(rawMessage) {
       layer = layer.groupStatusMessageV2.message;
       continue;
     }
+    if (layer.groupMentionedMessage?.message) {
+      layer = layer.groupMentionedMessage.message;
+      continue;
+    }
+    if (layer.limitSharingMessage?.message) {
+      layer = layer.limitSharingMessage.message;
+      continue;
+    }
     if (layer.associatedChildMessage?.message) {
       layer = layer.associatedChildMessage.message;
       continue;
@@ -418,8 +433,35 @@ function isReuploadStatusError(err) {
   );
 }
 
+function toMediaKeyBuffer(mediaKey) {
+  const normalized = normalizeMediaKey(mediaKey);
+  if (!normalized) return null;
+  if (Buffer.isBuffer(normalized)) return normalized;
+  if (normalized instanceof Uint8Array) return Buffer.from(normalized);
+  if (typeof normalized === 'string') {
+    const trimmed = normalized.trim();
+    if (!trimmed) return null;
+    try {
+      const decoded = Buffer.from(trimmed, 'base64');
+      if (decoded.length >= 16) return decoded;
+    } catch {}
+    return Buffer.from(trimmed);
+  }
+  return null;
+}
+
 async function streamMediaToBuffer(targetMedia, dlType) {
-  const stream = await downloadContentFromMessage(targetMedia, dlType);
+  const hasUrl =
+    typeof targetMedia?.url === 'string' && targetMedia.url.trim().startsWith('https://');
+  const hasDirectPath =
+    typeof targetMedia?.directPath === 'string' && targetMedia.directPath.trim().length > 0;
+  let stream;
+  if (hasUrl && !targetMedia.url.trim().startsWith('https://mmg.whatsapp.net/') && !hasDirectPath) {
+    const keys = await getMediaKeys(toMediaKeyBuffer(targetMedia.mediaKey) || targetMedia.mediaKey, dlType);
+    stream = await downloadEncryptedContent(targetMedia.url.trim(), keys);
+  } else {
+    stream = await downloadContentFromMessage(targetMedia, dlType);
+  }
   const chunks = [];
   for await (const chunk of stream) {
     chunks.push(chunk);
@@ -438,6 +480,8 @@ function unwrapMediaNodeFromMessage(rawMsg, preferredKeys = []) {
       layer.deviceSentMessage?.message ||
       layer.ephemeralMessage?.message ||
       layer.documentWithCaptionMessage?.message ||
+      layer.groupMentionedMessage?.message ||
+      layer.limitSharingMessage?.message ||
       layer.futureProofMessage?.message;
     if (!next || typeof next !== 'object') break;
     layer = next;
@@ -465,9 +509,10 @@ export async function downloadMediaWithRecovery({
   const normalizedKey = normalizeMediaKey(media.mediaKey);
   if (!hasValidMediaKey(normalizedKey)) return null;
 
+  const keyBuffer = toMediaKeyBuffer(normalizedKey) || normalizedKey;
   const normalizedMedia = {
     ...media,
-    mediaKey: normalizedKey,
+    mediaKey: keyBuffer,
   };
 
   if (typeof downloader === 'function') {
@@ -482,16 +527,17 @@ export async function downloadMediaWithRecovery({
     typeof normalizedMedia.url === 'string' && normalizedMedia.url.trim().startsWith('https://');
   const hasDirectPath =
     typeof normalizedMedia.directPath === 'string' && normalizedMedia.directPath.trim().length > 0;
-  if (!hasValidUrl && !hasDirectPath) return null;
 
   let lastErr = null;
 
-  // 1) Primary attempt with provided url/directPath
-  try {
-    const buf = await streamMediaToBuffer(normalizedMedia, dlType);
-    if (buf) return buf;
-  } catch (err) {
-    lastErr = err;
+  // 1) Primary attempt with provided url/directPath (only when at least one location field exists)
+  if (hasValidUrl || hasDirectPath) {
+    try {
+      const buf = await streamMediaToBuffer(normalizedMedia, dlType);
+      if (buf) return buf;
+    } catch (err) {
+      lastErr = err;
+    }
   }
 
   // 2) Fallback to directPath only when url was stale/non-mmg or failed
@@ -541,7 +587,7 @@ export async function downloadMediaWithRecovery({
           ? {
               ...normalizedMedia,
               ...updatedNode,
-              mediaKey: normalizeMediaKey(updatedNode.mediaKey) || normalizedKey,
+              mediaKey: toMediaKeyBuffer(updatedNode.mediaKey) || keyBuffer,
             }
           : normalizedMedia;
         const refreshedBuf = await streamMediaToBuffer(refreshedMedia, dlType).catch(() => null);
@@ -637,6 +683,7 @@ async function cacheViewOnceInternal(msg, { downloader = null, sock = null } = {
       mimetype: vo.media.mimetype || '',
       caption: vo.caption || '',
       ptt: Boolean(vo.media.ptt),
+      fileName: vo.media.fileName || '',
       timestamp: Date.now(),
     });
 

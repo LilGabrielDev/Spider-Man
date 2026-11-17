@@ -16,6 +16,7 @@ import {
 } from '../../spider/utils/groupActionHelper.js';
 import { getPhoneFromJid, resolveRuntimeOwnerJid } from '../../spider/utils/userJid.js';
 import {
+  cacheViewOnce,
   downloadMediaWithRecovery,
   extractViewOnceMedia,
   getCachedViewOnce,
@@ -124,16 +125,160 @@ async function getBuffer(mediaMsg, mediaType, sock = null, fullMsg = null, { isP
   throw new Error('Unable to download media');
 }
 
+function hasUsableMediaCredentials(node) {
+  if (!node || typeof node !== 'object') return false;
+  if (Buffer.isBuffer(node._buffer) && node._buffer.length > 0) return true;
+  if (Buffer.isBuffer(node.buffer) && node.buffer.length > 0) return true;
+  if (!hasValidMediaKey(node.mediaKey)) return false;
+  const hasUrl = typeof node.url === 'string' && node.url.trim().startsWith('https://');
+  const hasDirectPath = typeof node.directPath === 'string' && node.directPath.trim().length > 0;
+  return hasUrl || hasDirectPath;
+}
+
+function getStrippedMediaNode(unwrappedMsg) {
+  if (!unwrappedMsg || typeof unwrappedMsg !== 'object') return null;
+  return (
+    unwrappedMsg.imageMessage ||
+    unwrappedMsg.videoMessage ||
+    unwrappedMsg.ptvMessage ||
+    unwrappedMsg.audioMessage ||
+    unwrappedMsg.documentMessage ||
+    null
+  );
+}
+
+async function requestPlaceholderMessage(sock, { from, stanzaId, contextInfo }) {
+  if (!stanzaId || typeof sock?.requestPlaceholderResend !== 'function') return null;
+
+  const isGroupChat = String(from || '').endsWith('@g.us');
+  const resendKey = {
+    remoteJid: from,
+    id: stanzaId,
+    fromMe: contextInfo?.participant ? isFromBot(contextInfo.participant, sock) : false,
+    ...(isGroupChat && contextInfo?.participant ? { participant: contextInfo.participant } : {}),
+  };
+
+  let settled = false;
+  let timer = null;
+  let onUpsert = null;
+  let onUpdate = null;
+
+  const ev = sock?.ev;
+  const hasEv = ev && typeof ev.on === 'function' && typeof ev.off === 'function';
+
+  const cleanup = () => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    if (hasEv) {
+      if (onUpsert) ev.off('messages.upsert', onUpsert);
+      if (onUpdate) ev.off('messages.update', onUpdate);
+    }
+  };
+
+  return new Promise((resolve) => {
+    const finish = (recovered) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(recovered || null);
+    };
+
+    if (hasEv) {
+      onUpsert = async ({ messages } = {}) => {
+        if (!Array.isArray(messages)) return;
+        for (const candidate of messages) {
+          if (candidate?.key?.id === stanzaId && candidate?.message) {
+            await cacheViewOnce(candidate, { sock }).catch(() => null);
+            finish(candidate);
+            return;
+          }
+        }
+      };
+
+      onUpdate = async (updates) => {
+        if (!Array.isArray(updates)) return;
+        for (const item of updates) {
+          if (item?.key?.id === stanzaId && item?.update?.message) {
+            const candidate = { key: item.key, message: item.update.message };
+            await cacheViewOnce(candidate, { sock }).catch(() => null);
+            finish(candidate);
+            return;
+          }
+        }
+      };
+
+      ev.on('messages.upsert', onUpsert);
+      ev.on('messages.update', onUpdate);
+    }
+
+    timer = setTimeout(() => finish(null), 9500);
+    timer.unref?.();
+
+    Promise.resolve(sock.requestPlaceholderResend(resendKey))
+      .then(async (res) => {
+        if (settled) return;
+        await waitForPendingViewOnceCache(stanzaId, 1500);
+        if (getCachedViewOnce(stanzaId)) {
+          finish({ key: resendKey, message: null, fromCache: true });
+          return;
+        }
+        if (res === 'RESOLVED') {
+          const updatedStored = await resolveStoredViewOnceMessage(sock, from, stanzaId);
+          if (updatedStored?.message) {
+            await cacheViewOnce(updatedStored, { sock }).catch(() => null);
+            finish(updatedStored);
+          }
+        }
+      })
+      .catch(() => {
+        finish(null);
+      });
+  });
+}
+
+async function sendRevealedMessage(sock, targetJid, payload, quotedMsg = null) {
+  if (!sock || typeof sock.sendMessage !== 'function' || !targetJid || !payload) {
+    return null;
+  }
+
+  const attempts = [];
+  if (quotedMsg) {
+    attempts.push(() => sock.sendMessage(targetJid, payload, { quoted: quotedMsg }));
+  }
+  attempts.push(() => sock.sendMessage(targetJid, payload));
+  if (typeof payload === 'object' && 'mimetype' in payload) {
+    const { mimetype: _omitted, ...minimalPayload } = payload;
+    attempts.push(() => sock.sendMessage(targetJid, minimalPayload));
+  }
+
+  let lastError = null;
+  for (const attempt of attempts) {
+    try {
+      const res = await attempt();
+      if (!isSendMessageFailure(res)) {
+        return res;
+      }
+      lastError = new Error('sendMessage returned failure status');
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  if (lastError) throw lastError;
+  return null;
+}
+
 async function buildViewOncePayload({ sock, from, msg }) {
   const { contextInfo, rawQuotedMessage, quotedMessage } = extractContextInfo(msg);
   const stanzaId = contextInfo?.stanzaId || '';
   if (stanzaId) {
     await waitForPendingViewOnceCache(stanzaId);
   }
-  const cached = stanzaId ? getCachedViewOnce(stanzaId) : null;
-  const stored = await resolveStoredViewOnceMessage(sock, from, stanzaId);
-  const storedRaw = stored?.message || null;
-  const storedUnwrapped = storedRaw ? unwrapMessageContent(storedRaw) : null;
+  let cached = stanzaId ? getCachedViewOnce(stanzaId) : null;
+  let stored = await resolveStoredViewOnceMessage(sock, from, stanzaId);
+  let storedRaw = stored?.message || null;
+  let storedUnwrapped = storedRaw ? unwrapMessageContent(storedRaw) : null;
 
   if (!quotedMessage && !rawQuotedMessage && !storedUnwrapped && !cached) {
     return { status: 'no-reply' };
@@ -145,100 +290,167 @@ async function buildViewOncePayload({ sock, from, msg }) {
     return orig ? `${orig}\n\n${footerCaption}` : footerCaption;
   };
 
+  const formatCachedEntry = (entry) => {
+    if (!entry || !Buffer.isBuffer(entry.buffer) || entry.buffer.length === 0) return null;
+    if (entry.type === 'image') {
+      return {
+        status: 'ok',
+        payload: {
+          image: entry.buffer,
+          caption: formatTextCaption(entry.caption),
+          mimetype: entry.mimetype || 'image/jpeg',
+        },
+      };
+    }
+    if (entry.type === 'video') {
+      return {
+        status: 'ok',
+        payload: {
+          video: entry.buffer,
+          caption: formatTextCaption(entry.caption),
+          mimetype: entry.mimetype || 'video/mp4',
+        },
+      };
+    }
+    if (entry.type === 'audio') {
+      return {
+        status: 'ok',
+        payload: {
+          audio: entry.buffer,
+          mimetype: entry.mimetype || 'audio/mp4',
+          ptt: Boolean(entry.ptt),
+        },
+      };
+    }
+    if (entry.type === 'document') {
+      return {
+        status: 'ok',
+        payload: {
+          document: entry.buffer,
+          caption: formatTextCaption(entry.caption),
+          mimetype: entry.mimetype || 'application/octet-stream',
+          fileName: entry.fileName || 'view-once-file',
+        },
+      };
+    }
+    return null;
+  };
+
   // 1) Best path: bytes cached on arrival (in-memory or persisted on disk)
-  if (cached && Buffer.isBuffer(cached.buffer) && cached.buffer.length > 0) {
-    if (cached.type === 'image') {
-      return {
-        status: 'ok',
-        payload: {
-          image: cached.buffer,
-          caption: formatTextCaption(cached.caption),
-          mimetype: cached.mimetype || 'image/jpeg',
-        },
-      };
+  const immediateCached = formatCachedEntry(cached);
+  if (immediateCached) return immediateCached;
+
+  const inspectSources = () => {
+    const qVo = extractViewOnceMedia(rawQuotedMessage);
+    const sVo = extractViewOnceMedia(storedRaw);
+    const voDetected =
+      Boolean(qVo || sVo) ||
+      isViewOnceMessage(rawQuotedMessage) ||
+      isViewOnceMessage(storedRaw) ||
+      Boolean(
+        quotedMessage?.imageMessage?.viewOnce ||
+          quotedMessage?.videoMessage?.viewOnce ||
+          quotedMessage?.ptvMessage?.viewOnce ||
+          quotedMessage?.audioMessage?.viewOnce ||
+          quotedMessage?.documentMessage?.viewOnce ||
+          storedUnwrapped?.imageMessage?.viewOnce ||
+          storedUnwrapped?.videoMessage?.viewOnce ||
+          storedUnwrapped?.ptvMessage?.viewOnce ||
+          storedUnwrapped?.audioMessage?.viewOnce ||
+          storedUnwrapped?.documentMessage?.viewOnce,
+      );
+
+    const img = mergeMediaNodes(
+      quotedMessage?.imageMessage || (qVo?.type === 'image' ? qVo.media : null),
+      storedUnwrapped?.imageMessage || (sVo?.type === 'image' ? sVo.media : null),
+    );
+    const vid = mergeMediaNodes(
+      quotedMessage?.videoMessage ||
+        quotedMessage?.ptvMessage ||
+        (qVo?.type === 'video' ? qVo.media : null),
+      storedUnwrapped?.videoMessage ||
+        storedUnwrapped?.ptvMessage ||
+        (sVo?.type === 'video' ? sVo.media : null),
+    );
+    const aud = mergeMediaNodes(
+      quotedMessage?.audioMessage || (qVo?.type === 'audio' ? qVo.media : null),
+      storedUnwrapped?.audioMessage || (sVo?.type === 'audio' ? sVo.media : null),
+    );
+    const doc = mergeMediaNodes(
+      quotedMessage?.documentMessage || (qVo?.type === 'document' ? qVo.media : null),
+      storedUnwrapped?.documentMessage || (sVo?.type === 'document' ? sVo.media : null),
+    );
+
+    return {
+      quotedVo: qVo,
+      storedVo: sVo,
+      isVo: voDetected,
+      imageMsg: img,
+      videoMsg: vid,
+      audioMsg: aud,
+      documentMsg: doc,
+      activeMedia: img || vid || aud || doc,
+    };
+  };
+
+  let inspected = inspectSources();
+  let triedPlaceholderResend = false;
+
+  const shouldTryPlaceholderResend = () => {
+    if (triedPlaceholderResend || !stanzaId || typeof sock?.requestPlaceholderResend !== 'function') {
+      return false;
     }
-    if (cached.type === 'video') {
-      return {
-        status: 'ok',
-        payload: {
-          video: cached.buffer,
-          caption: formatTextCaption(cached.caption),
-          mimetype: cached.mimetype || 'video/mp4',
-        },
-      };
+    if (inspected.isVo) {
+      return !hasUsableMediaCredentials(inspected.activeMedia);
     }
-    if (cached.type === 'audio') {
-      return {
-        status: 'ok',
-        payload: {
-          audio: cached.buffer,
-          mimetype: cached.mimetype || 'audio/mp4',
-          ptt: Boolean(cached.ptt),
-        },
-      };
-    }
-    if (cached.type === 'document') {
-      return {
-        status: 'ok',
-        payload: {
-          document: cached.buffer,
-          caption: formatTextCaption(cached.caption),
-          mimetype: cached.mimetype || 'application/octet-stream',
-        },
-      };
+    const strippedQuoteMedia = getStrippedMediaNode(quotedMessage);
+    return Boolean(!storedRaw && strippedQuoteMedia && !hasUsableMediaCredentials(strippedQuoteMedia));
+  };
+
+  if (shouldTryPlaceholderResend()) {
+    triedPlaceholderResend = true;
+    const recovered = await requestPlaceholderMessage(sock, { from, stanzaId, contextInfo });
+    await waitForPendingViewOnceCache(stanzaId);
+    cached = getCachedViewOnce(stanzaId);
+    const recoveredCached = formatCachedEntry(cached);
+    if (recoveredCached) return recoveredCached;
+
+    if (recovered?.message) {
+      stored = recovered;
+      storedRaw = recovered.message;
+      storedUnwrapped = unwrapMessageContent(storedRaw);
+      inspected = inspectSources();
+    } else {
+      const refreshedStored = await resolveStoredViewOnceMessage(sock, from, stanzaId);
+      if (refreshedStored?.message) {
+        stored = refreshedStored;
+        storedRaw = refreshedStored.message;
+        storedUnwrapped = unwrapMessageContent(storedRaw);
+        inspected = inspectSources();
+      }
     }
   }
 
-  // 2) Fallback: check quoted copy / messageStore / socket store if it is a view-once message
-  const quotedVo = extractViewOnceMedia(rawQuotedMessage);
-  const storedVo = extractViewOnceMedia(storedRaw);
-  const isVo =
-    Boolean(quotedVo || storedVo) ||
-    isViewOnceMessage(rawQuotedMessage) ||
-    isViewOnceMessage(storedRaw) ||
-    Boolean(
-      quotedMessage?.imageMessage?.viewOnce ||
-        quotedMessage?.videoMessage?.viewOnce ||
-        quotedMessage?.ptvMessage?.viewOnce ||
-        quotedMessage?.audioMessage?.viewOnce ||
-        quotedMessage?.documentMessage?.viewOnce ||
-        storedUnwrapped?.imageMessage?.viewOnce ||
-        storedUnwrapped?.videoMessage?.viewOnce ||
-        storedUnwrapped?.ptvMessage?.viewOnce ||
-        storedUnwrapped?.audioMessage?.viewOnce ||
-        storedUnwrapped?.documentMessage?.viewOnce,
-    );
+  let { quotedVo, storedVo, isVo, imageMsg, videoMsg, audioMsg, documentMsg } = inspected;
 
   if (!isVo) {
     return { status: 'not-viewonce' };
   }
 
-  const imageMsg = mergeMediaNodes(
-    quotedMessage?.imageMessage || (quotedVo?.type === 'image' ? quotedVo.media : null),
-    storedUnwrapped?.imageMessage || (storedVo?.type === 'image' ? storedVo.media : null),
-  );
-  const videoMsg = mergeMediaNodes(
-    quotedMessage?.videoMessage ||
-      quotedMessage?.ptvMessage ||
-      (quotedVo?.type === 'video' ? quotedVo.media : null),
-    storedUnwrapped?.videoMessage ||
-      storedUnwrapped?.ptvMessage ||
-      (storedVo?.type === 'video' ? storedVo.media : null),
-  );
-  const audioMsg = mergeMediaNodes(
-    quotedMessage?.audioMessage || (quotedVo?.type === 'audio' ? quotedVo.media : null),
-    storedUnwrapped?.audioMessage || (storedVo?.type === 'audio' ? storedVo.media : null),
-  );
-  const documentMsg = mergeMediaNodes(
-    quotedMessage?.documentMessage || (quotedVo?.type === 'document' ? quotedVo.media : null),
-    storedUnwrapped?.documentMessage || (storedVo?.type === 'document' ? storedVo.media : null),
-  );
-
+  const isGroupChat = String(from || '').endsWith('@g.us');
+  const participantJid =
+    isGroupChat && contextInfo?.participant ? contextInfo.participant : undefined;
+  const msgFromMe =
+    typeof stored?.key?.fromMe === 'boolean'
+      ? stored.key.fromMe
+      : contextInfo?.participant
+        ? isFromBot(contextInfo.participant, sock)
+        : false;
   const reuploadKey = stored?.key || {
     remoteJid: from,
     id: stanzaId,
-    fromMe: isFromBot(contextInfo?.participant, sock),
-    ...(contextInfo?.participant ? { participant: contextInfo.participant } : {}),
+    fromMe: msgFromMe,
+    ...(participantJid ? { participant: participantJid } : {}),
   };
 
   if (imageMsg) {
@@ -397,6 +609,7 @@ async function buildViewOncePayload({ sock, from, msg }) {
         mimetype: documentMsg.mimetype || 'application/octet-stream',
         caption: String(documentMsg.caption || '').trim(),
         ptt: false,
+        fileName: documentMsg.fileName || '',
         timestamp: Date.now(),
       });
     }
@@ -921,7 +1134,7 @@ export const commands = [
           );
           return;
         }
-        await sock.sendMessage(from, result.payload, { quoted: msg });
+        await sendRevealedMessage(sock, from, result.payload, msg);
       } catch (err) {
         console.error('vv command error:', err);
       }
@@ -941,7 +1154,7 @@ export const commands = [
           console.log('Owner/linked-account JID not available');
           return;
         }
-        await sock.sendMessage(ownerJid, result.payload);
+        await sendRevealedMessage(sock, ownerJid, result.payload);
       } catch (err) {
         console.error('vv2Command error:', err);
       }

@@ -16,6 +16,8 @@ const WRAPPER_KEYS = [
   'documentWithCaptionMessage',
   'editedMessage',
   'groupStatusMessageV2',
+  'groupMentionedMessage',
+  'limitSharingMessage',
   'associatedChildMessage',
   'botInvokeMessage',
   'futureProofMessage',
