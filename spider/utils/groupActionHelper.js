@@ -8,6 +8,7 @@ import {
 } from './groupRoleResolver.js';
 
 const WRAPPER_KEYS = [
+  'deviceSentMessage',
   'ephemeralMessage',
   'viewOnceMessage',
   'viewOnceMessageV2',
@@ -17,6 +18,7 @@ const WRAPPER_KEYS = [
   'groupStatusMessageV2',
   'associatedChildMessage',
   'botInvokeMessage',
+  'futureProofMessage',
 ];
 
 const CONTEXT_CARRIER_KEYS = [
@@ -84,7 +86,8 @@ export function isViewOnceMessage(rawMessage) {
       cursor.imageMessage?.viewOnce ||
       cursor.videoMessage?.viewOnce ||
       cursor.ptvMessage?.viewOnce ||
-      cursor.audioMessage?.viewOnce
+      cursor.audioMessage?.viewOnce ||
+      cursor.documentMessage?.viewOnce
     ) {
       return true;
     }
