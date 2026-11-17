@@ -7,6 +7,8 @@ import { pathToFileURL } from 'node:url';
 
 import {
   MAX_BIO_LENGTH,
+  MAX_SAVED_BIOS,
+  PRESET_AUTOBIOS,
   applyProfileBio,
   buildDynamicBio,
   createAutobioManager,
@@ -343,3 +345,200 @@ test('command loader registers autobio and aliases cleanly without collisions', 
     assert.equal(aliasesMap.get(alias), 'autobio', `expected alias ${alias} -> autobio`);
   }
 });
+
+test('applyProfileBio falls back cleanly when GraphQL returns Bad Request on duration 0 and caches winning strategy per socket', async () => {
+  const attempts = [];
+  const sock = {
+    async updateProfileStatus(arg) {
+      attempts.push(arg);
+      if (typeof arg === 'string') {
+        const err = new Error('GraphQL server error: Bad Request');
+        err.statusCode = 400;
+        throw err;
+      }
+      if (arg && typeof arg === 'object' && arg.ephemeralDurationSec === 86400 && !arg.emoji) {
+        return undefined;
+      }
+      throw new Error('Unexpected payload');
+    },
+  };
+
+  const first = await applyProfileBio(sock, '⚡ Spider Man | Online & Ready');
+  assert.equal(first.ok, true);
+  assert.equal(first.strategy, 'ephemeral86400');
+  assert.equal(attempts.length, 2);
+  assert.equal(attempts[0], '⚡ Spider Man | Online & Ready');
+  assert.deepEqual(attempts[1], {
+    text: '⚡ Spider Man | Online & Ready',
+    ephemeralDurationSec: 86400,
+  });
+
+  // Second call on the same socket uses cached working strategy directly
+  const second = await applyProfileBio(sock, 'Available 24/7 ⚡');
+  assert.equal(second.ok, true);
+  assert.equal(second.strategy, 'ephemeral86400');
+  assert.equal(attempts.length, 3);
+  assert.deepEqual(attempts[2], {
+    text: 'Available 24/7 ⚡',
+    ephemeralDurationSec: 86400,
+  });
+});
+
+test('applyProfileBio falls through emoji+86400, raw w:mex text-only, and legacy status IQ when GraphQL rejects earlier variants', async () => {
+  // Case 1: requires emoji + 86400
+  const emojiCalls = [];
+  const emojiSock = {
+    async updateProfileStatus(arg) {
+      emojiCalls.push(arg);
+      if (typeof arg === 'object' && arg.emoji && arg.ephemeralDurationSec === 86400) {
+        return undefined;
+      }
+      const err = new Error('GraphQL server error: Bad Request');
+      err.statusCode = 400;
+      throw err;
+    },
+  };
+  const emojiRes = await applyProfileBio(emojiSock, '⚡ Spider Man | Online');
+  assert.equal(emojiRes.ok, true);
+  assert.equal(emojiRes.strategy, 'ephemeral86400Emoji');
+  assert.deepEqual(emojiCalls.at(-1), {
+    text: 'Spider Man | Online',
+    emoji: '⚡',
+    ephemeralDurationSec: 86400,
+  });
+
+  // Case 2: w:mex returns GraphQL errors inside <result>, falls back to legacy xmlns='status' IQ
+  const iqCalls = [];
+  const legacyFallbackSock = {
+    async updateProfileStatus() {
+      const err = new Error('GraphQL server error: Bad Request');
+      err.statusCode = 400;
+      throw err;
+    },
+    async query(iq) {
+      iqCalls.push(iq);
+      if (iq.attrs?.xmlns === 'w:mex') {
+        return {
+          tag: 'iq',
+          attrs: { type: 'result' },
+          content: [
+            {
+              tag: 'result',
+              attrs: {},
+              content: Buffer.from(JSON.stringify({ errors: [{ message: 'Bad Request' }] }), 'utf8'),
+            },
+          ],
+        };
+      }
+      return { tag: 'iq', attrs: { type: 'result' } };
+    },
+  };
+  const legacyRes = await applyProfileBio(legacyFallbackSock, 'Custom Bio');
+  assert.equal(legacyRes.ok, true);
+  assert.equal(legacyRes.strategy, 'legacyStatusIq');
+  assert.equal(iqCalls.length, 2);
+  assert.equal(iqCalls[0].attrs.xmlns, 'w:mex');
+  assert.equal(iqCalls[1].attrs.xmlns, 'status');
+});
+
+test('applyProfileBio does not retry protocol fallbacks on non-schema socket errors', async () => {
+  let count = 0;
+  const deadSock = {
+    async updateProfileStatus() {
+      count += 1;
+      throw new Error('Connection Closed');
+    },
+    async query() {
+      count += 1;
+      return { attrs: { type: 'result' } };
+    },
+  };
+  await assert.rejects(() => applyProfileBio(deadSock, 'Hello'), /Connection Closed/);
+  assert.equal(count, 1);
+});
+
+test('PRESET_AUTOBIOS contains 100 unique valid bios that rotate dynamically and load into store/commands', async () => {
+  assert.equal(PRESET_AUTOBIOS.length, 100);
+  assert.ok(MAX_SAVED_BIOS >= 100);
+
+  const uniqueRaw = new Set(PRESET_AUTOBIOS.map((b) => b.trim()));
+  assert.equal(uniqueRaw.size, 100, 'all 100 preset bios must be distinct');
+
+  const nowMs = Date.UTC(2026, 10, 17, 13, 30, 0);
+  const startTimeMs = nowMs - 7_260_000;
+  const generated = new Set();
+  for (let i = 0; i < 100; i += 1) {
+    const bio = buildDynamicBio({
+      botName: 'Spider Man',
+      tz: 'UTC',
+      startTimeMs,
+      nowMs,
+      index: i,
+    });
+    assert.ok(bio.length > 0 && bio.length <= MAX_BIO_LENGTH, `bio #${i + 1} invalid length: ${bio.length}`);
+    generated.add(bio);
+  }
+  assert.equal(generated.size, 100, 'all 100 rotated bios must expand distinctly');
+
+  const tmpDir = createTempDir('spider-autobio-100-');
+  const origCwd = process.cwd();
+  const origGlobalManager = globalThis.__spiderAutobioManager;
+  const { sock, statusUpdates, messages } = createMockSock();
+  const autobioCmd = userCommands.find((cmd) => cmd.name === 'autobio');
+
+  const testStore = createAutobioStore(path.join(tmpDir, 'data', 'autobio.json'), { env: {} });
+  const testManager = createAutobioManager({
+    store: testStore,
+    getSock: () => sock,
+    getBotName: () => 'Spider Man',
+  });
+
+  try {
+    process.chdir(tmpDir);
+    defaultAutobioStore.clearCache();
+    globalThis.__spiderAutobioManager = testManager;
+
+    const from = '254700000001@s.whatsapp.net';
+    const fakeMsg = { key: { remoteJid: from, fromMe: true, id: 'm100' } };
+    const cfg = { BOT_NAME: 'Spider Man', PREFIXES: ['.'] };
+
+    // Load all 100 presets via `.autobio presets`
+    await autobioCmd.execute({
+      sock,
+      from,
+      text: 'presets',
+      args: ['presets'],
+      msg: fakeMsg,
+      config: cfg,
+    });
+
+    assert.equal(testStore.getState().bios.length, 100);
+    assert.equal(testStore.getState().enabled, true);
+    assert.equal(statusUpdates.length, 1);
+    assert.match(messages.at(-1).content.text, /PRESET BIOS LOADED/);
+    assert.match(messages.at(-1).content.text, /100/);
+
+    // Pagination via `.autobio list 2`
+    await autobioCmd.execute({
+      sock,
+      from,
+      text: 'list 2',
+      args: ['list', '2'],
+      msg: fakeMsg,
+      config: cfg,
+    });
+    const listText = messages.at(-1).content.text;
+    assert.match(listText, /PAGE 2\/4/);
+    assert.match(listText, /#26/);
+    assert.match(listText, /#50/);
+  } finally {
+    testManager.stop();
+    defaultAutobioManager.stop();
+    defaultAutobioStore.clearCache();
+    globalThis.__spiderAutobioManager = origGlobalManager;
+    process.chdir(origCwd);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+

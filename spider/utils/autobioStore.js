@@ -1,22 +1,136 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { S_WHATSAPP_NET } from '@whiskeysockets/baileys';
+import { S_WHATSAPP_NET, getBinaryNodeChild } from '@whiskeysockets/baileys';
 import { isSendMessageFailure } from './groupActionHelper.js';
 
 export const MAX_BIO_LENGTH = 139;
 export const DEFAULT_AUTOBIO_INTERVAL_MS = 60_000;
 export const MIN_AUTOBIO_INTERVAL_MS = 15_000;
 export const MAX_AUTOBIO_INTERVAL_MS = 86_400_000;
-export const MAX_SAVED_BIOS = 25;
+export const MAX_SAVED_BIOS = 150;
 
-const DYNAMIC_FALLBACK_SLOGANS = [
-  'Online & Ready',
-  'Always Active',
-  'Systems Nominal',
-  'Automated & Connected',
-  'Ready for Commands',
-];
+export const PRESET_AUTOBIOS = Object.freeze([
+  // 1-10: Live Status & Telemetry
+  '⚡ {bot} | Online & Ready • Up {uptime} ({time})',
+  '🕷️ {bot} | Active 24/7 • {date} • {time}',
+  '🚀 {bot} | Systems Nominal • Up {uptime}',
+  '🟢 Connected & Responding • {time} ({date})',
+  '⚡ Live on WhatsApp • Uptime {uptime}',
+  '🛡️ {bot} | Automated & Secure • {time}',
+  '🌐 Always Online • Synced at {time}',
+  '📡 Signal Strong • {bot} Running Smoothly',
+  '⏱️ Zero Downtime Mode • Up {uptime}',
+  '✨ {bot} | Fast, Clean & Reliable ({date})',
+
+  // 11-20: Focus & Hustle
+  '🎯 Focused on goals, silent on noise.',
+  '⚡ Building quietly, shipping daily.',
+  '🔥 Progress over perfection, every single day.',
+  '💼 Busy turning plans into reality.',
+  '🧠 Deep work in progress — reply soon.',
+  '⏳ Trading excuses for execution.',
+  '🚀 Chasing growth, not attention.',
+  '📈 1% better than yesterday.',
+  '🛠️ Creating things that actually matter.',
+  '⚡ Energy saved for things worth doing.',
+
+  // 21-30: Calm & Minimalist
+  '🌿 Peace of mind is my priority.',
+  '☁️ Slow mornings, sharp focus, calm nights.',
+  '🤍 Less clutter, more clarity.',
+  '🌊 Flowing with patience and purpose.',
+  '🕊️ Unbothered, grateful, and moving forward.',
+  '🍃 Protecting my energy like treasure.',
+  '☀️ Simple life, clear mind, good heart.',
+  '🌙 Quiet space, loud ambitions.',
+  '✨ Living in the present moment.',
+  '🫧 Calm outside, unstoppable inside.',
+
+  // 31-40: Ambition & Mindset
+  '👑 Discipline beats motivation every time.',
+  '💎 Pressure builds diamonds.',
+  '🦅 Flying above temporary distractions.',
+  '🔑 Consistency unlocks every locked door.',
+  '⚡ Stay humble, stay hungry, stay sharp.',
+  '🧭 Direction matters more than speed.',
+  '🏆 Dream big, start small, act now.',
+  '🔥 Outworking my old self.',
+  '🪜 Step by step, mile by mile.',
+  '🌟 Betting on myself every time.',
+
+  // 41-50: Tech & Developer Vibes
+  '💻 Eat. Sleep. Code. Deploy. Repeat.',
+  '⚙️ Powered by coffee and clean logic.',
+  '🖥️ Debugging life one line at a time.',
+  '🤖 Automated by {bot} • {time}',
+  '🔌 Plugged into the future.',
+  '📡 Low latency, high uptime.',
+  '🧩 Solving problems no one sees.',
+  '⌨️ Shipping updates in real time.',
+  '🔋 Battery charged, terminal open.',
+  '🛰️ Running async in a sync world.',
+
+  // 51-60: Good Vibes & Energy
+  '✨ Good vibes only, no exceptions.',
+  '🎧 Lost in good music and big ideas.',
+  '🌈 Choosing joy in every little thing.',
+  '☕ Fueled by coffee and ambition.',
+  '🌞 Bringing sunshine to every chat.',
+  '🎶 Rhythm in my soul, peace in my mind.',
+  '💫 Attracting what belongs to me.',
+  '🍀 Lucky are those who never quit.',
+  '🔥 High spirit, warm heart, sharp mind.',
+  '🌻 Growing through everything I go through.',
+
+  // 61-70: Late Night & Chill
+  '🌙 Night owl hours • Best ideas come after midnight.',
+  '🌌 Stargazing while the world sleeps.',
+  '🏙️ City lights, quiet thoughts, steady grind.',
+  '🕯️ Late night focus hits different.',
+  '🎧 Midnight playlist on repeat.',
+  '🌠 Dreaming with my eyes wide open.',
+  '🌑 Silent nights build loud futures.',
+  '🍵 Late night tea and deep conversations.',
+  '✨ Under the same stars, chasing different dreams.',
+  '🛋️ Chill mode enabled — message anytime.',
+
+  // 71-80: Short Wisdom & Quotes
+  '📖 Write a story worth rereading.',
+  '🕰️ Time reveals what words hide.',
+  '🌱 Patience makes everything bloom on time.',
+  '🪞 Fix your focus, fix your life.',
+  '⚖️ Balance work, rest, and gratitude.',
+  '🪨 Solid roots survive any storm.',
+  '🔦 Be the light you wish to see.',
+  '🎯 What you feed with focus grows.',
+  '💭 Thoughts shape habits; habits shape destiny.',
+  '🌤️ Every storm runs out of rain eventually.',
+
+  // 81-90: Sleek Status One-Liners
+  '📲 Text me, I might surprise you with a fast reply.',
+  '💬 Available for good vibes and real talk.',
+  '⚡ Short replies, genuine intentions.',
+  '📌 Pinning dreams on the calendar.',
+  '🚦 Green light to positivity only.',
+  '🔒 Private life, peaceful mind.',
+  '🧭 Exploring new paths every week.',
+  '🏁 Never finished, always leveling up.',
+  '⚡ Online now — drop your message.',
+  '🎯 Keep it real or keep it moving.',
+
+  // 91-100: Spider Man Signature & Dynamic Clock
+  '🕷️ Spider-Sense tingling • {bot} ({time})',
+  '🕸️ Connected across every chat • {date}',
+  '⚡ Fast as lightning • {bot} v2',
+  '🕷️ Swinging through tasks • Up {uptime}',
+  '🔥 Precision, speed, style • {bot}',
+  '🌐 Always in range • {time} UTC+Sync',
+  '🎭 Work in silence, let results speak.',
+  '🚨 Auto-Pilot Active • {bot} ({date})',
+  '💠 Clean code, crisp vibes, zero noise.',
+  '⚡ {bot} Auto-Bio Rotating • {date} {time}',
+]);
 
 export function sanitizeBioText(raw, maxLength = MAX_BIO_LENGTH) {
   const collapsed = String(raw ?? '')
@@ -159,18 +273,13 @@ export function buildDynamicBio({
     }
   }
 
-  const uptime = formatAutobioUptime(Math.max(0, nowMs - startTimeMs));
-  const timeStr = formatClock(nowMs, tz);
-  const dateStr = formatDate(nowMs, tz);
-  const slogan = DYNAMIC_FALLBACK_SLOGANS[Math.abs(index) % DYNAMIC_FALLBACK_SLOGANS.length];
-
-  const templates = [
-    `⚡ ${safeBotName} | ${slogan} • Up ${uptime} (${timeStr})`,
-    `🕷️ ${safeBotName} | ${dateStr} • ${timeStr} | Up ${uptime}`,
-    `⚡ ${safeBotName} | ${slogan} • ${dateStr} ${timeStr}`,
-  ];
-  const candidate = templates[Math.abs(index) % templates.length];
-  return sanitizeBioText(candidate).text;
+  const template = PRESET_AUTOBIOS[Math.abs(Number(index) || 0) % PRESET_AUTOBIOS.length];
+  return expandBioPlaceholders(template, {
+    botName: safeBotName,
+    tz,
+    startTimeMs,
+    nowMs,
+  });
 }
 
 function parseSeedBios(raw) {
@@ -437,6 +546,44 @@ export function createAutobioStore(
     };
   }
 
+  function loadPresetBios({ replace = false } = {}) {
+    const current = loadState();
+    const cleanPresets = PRESET_AUTOBIOS.map((b) => sanitizeBioText(b).text).filter(Boolean);
+    let nextBios;
+    let addedCount;
+
+    if (replace) {
+      nextBios = cleanPresets.slice(0, MAX_SAVED_BIOS);
+      addedCount = nextBios.length;
+    } else {
+      const merged = [...current.bios];
+      const existingSet = new Set(merged);
+      addedCount = 0;
+      for (const preset of cleanPresets) {
+        if (!existingSet.has(preset) && merged.length < MAX_SAVED_BIOS) {
+          merged.push(preset);
+          existingSet.add(preset);
+          addedCount += 1;
+        }
+      }
+      nextBios = merged;
+    }
+
+    const saved = saveState({
+      ...current,
+      bios: nextBios,
+      currentIndex: replace ? 0 : current.currentIndex < nextBios.length ? current.currentIndex : 0,
+    });
+
+    return {
+      ok: true,
+      addedCount,
+      presetCount: cleanPresets.length,
+      total: saved.bios.length,
+      state: { ...saved, bios: [...saved.bios] },
+    };
+  }
+
   function setIntervalMs(ms) {
     const current = loadState();
     const clamped = clampIntervalMs(ms);
@@ -532,6 +679,7 @@ export function createAutobioStore(
     setBio,
     removeBio,
     clearBios,
+    loadPresetBios,
     setIntervalMs,
     getNextBioCandidate,
     recordAppliedBio,
@@ -542,6 +690,52 @@ export function createAutobioStore(
 
 export const defaultAutobioStore = createAutobioStore();
 
+const workingBioStrategyBySock = new WeakMap();
+
+export function splitLeadingEmoji(text) {
+  const str = String(text || '').trim();
+  if (!str) return { emoji: '', text: '' };
+  const match = str.match(/^(\p{Extended_Pictographic}(?:\uFE0F|\u200D\p{Extended_Pictographic})*)\s+(.*)$/u);
+  if (match && match[2]?.trim()) {
+    return { emoji: match[1], text: match[2].trim() };
+  }
+  return { emoji: '', text: str };
+}
+
+function isRetryableStatusProtocolError(err) {
+  const statusCode = Number(err?.output?.statusCode ?? err?.statusCode ?? err?.data?.statusCode);
+  if ([400, 404, 405, 422, 501].includes(statusCode)) return true;
+  const msg = String(err?.message || err || '');
+  return /bad[\s_-]?request|graphql|unexpected response|not[- ]implemented|xmlns|validation/i.test(msg);
+}
+
+function assertMexResultOk(result) {
+  if (!result || typeof result !== 'object') return;
+  if (result.attrs?.type === 'error' || isSendMessageFailure(result)) {
+    throw new Error('WhatsApp rejected the About update.');
+  }
+  const child = getBinaryNodeChild(result, 'result');
+  if (child?.content) {
+    const rawStr = Buffer.isBuffer(child.content)
+      ? child.content.toString('utf8')
+      : child.content instanceof Uint8Array
+        ? Buffer.from(child.content).toString('utf8')
+        : String(child.content);
+    let parsed = null;
+    try {
+      parsed = JSON.parse(rawStr);
+    } catch {
+      parsed = null;
+    }
+    if (Array.isArray(parsed?.errors) && parsed.errors.length > 0) {
+      const errorMessages = parsed.errors.map((e) => e?.message || 'Unknown error').join(', ');
+      const err = new Error(`GraphQL server error: ${errorMessages}`);
+      err.statusCode = parsed.errors[0]?.extensions?.error_code || 400;
+      throw err;
+    }
+  }
+}
+
 export async function applyProfileBio(sock, bioText) {
   if (!sock || (typeof sock.updateProfileStatus !== 'function' && typeof sock.query !== 'function')) {
     throw new Error('WhatsApp socket is not connected.');
@@ -551,20 +745,149 @@ export async function applyProfileBio(sock, bioText) {
     throw new Error('Bio text cannot be empty.');
   }
 
-  const res =
-    typeof sock.updateProfileStatus === 'function'
-      ? await sock.updateProfileStatus(cleanBio)
-      : await sock.query({
+  const split = splitLeadingEmoji(cleanBio);
+  const strategies = [];
+
+  if (typeof sock.updateProfileStatus === 'function') {
+    strategies.push(
+      {
+        id: 'string',
+        run: async () => {
+          const res = await sock.updateProfileStatus(cleanBio);
+          if (isSendMessageFailure(res)) {
+            throw new Error('WhatsApp rejected the About update.');
+          }
+        },
+      },
+      {
+        id: 'ephemeral86400',
+        run: async () => {
+          const res = await sock.updateProfileStatus({
+            text: cleanBio,
+            ephemeralDurationSec: 86400,
+          });
+          if (isSendMessageFailure(res)) {
+            throw new Error('WhatsApp rejected the About update.');
+          }
+        },
+      },
+      {
+        id: 'ephemeral86400Emoji',
+        run: async () => {
+          const res = await sock.updateProfileStatus({
+            text: split.text || cleanBio,
+            emoji: split.emoji || '💬',
+            ephemeralDurationSec: 86400,
+          });
+          if (isSendMessageFailure(res)) {
+            throw new Error('WhatsApp rejected the About update.');
+          }
+        },
+      },
+      {
+        id: 'ephemeralNeg1',
+        run: async () => {
+          const res = await sock.updateProfileStatus({
+            text: cleanBio,
+            ephemeralDurationSec: -1,
+          });
+          if (isSendMessageFailure(res)) {
+            throw new Error('WhatsApp rejected the About update.');
+          }
+        },
+      },
+      {
+        id: 'ephemeral604800',
+        run: async () => {
+          const res = await sock.updateProfileStatus({
+            text: cleanBio,
+            ephemeralDurationSec: 604800,
+          });
+          if (isSendMessageFailure(res)) {
+            throw new Error('WhatsApp rejected the About update.');
+          }
+        },
+      },
+    );
+  }
+
+  if (typeof sock.query === 'function') {
+    const mexTextOnlyStrategy = {
+      id: 'mexTextOnly',
+      run: async () => {
+        const tag =
+          typeof sock.generateMessageTag === 'function'
+            ? sock.generateMessageTag()
+            : `autobio-${Date.now()}`;
+        const res = await sock.query({
+          tag: 'iq',
+          attrs: {
+            id: tag,
+            type: 'get',
+            to: S_WHATSAPP_NET,
+            xmlns: 'w:mex',
+          },
+          content: [
+            {
+              tag: 'query',
+              attrs: { query_id: '9152604461510864' },
+              content: Buffer.from(
+                JSON.stringify({ variables: { input: { text: cleanBio } } }),
+                'utf-8',
+              ),
+            },
+          ],
+        });
+        assertMexResultOk(res);
+      },
+    };
+    const legacyStatusIqStrategy = {
+      id: 'legacyStatusIq',
+      run: async () => {
+        const res = await sock.query({
           tag: 'iq',
           attrs: { to: S_WHATSAPP_NET, type: 'set', xmlns: 'status' },
           content: [{ tag: 'status', attrs: {}, content: Buffer.from(cleanBio, 'utf-8') }],
         });
+        if (res?.attrs?.type === 'error' || isSendMessageFailure(res)) {
+          throw new Error('WhatsApp rejected the About update.');
+        }
+      },
+    };
 
-  if (isSendMessageFailure(res)) {
-    throw new Error('WhatsApp rejected the About update.');
+    if (typeof sock.updateProfileStatus === 'function') {
+      strategies.push(mexTextOnlyStrategy, legacyStatusIqStrategy);
+    } else {
+      strategies.push(legacyStatusIqStrategy, mexTextOnlyStrategy);
+    }
   }
 
-  return { ok: true, bio: cleanBio };
+  const preferredId = workingBioStrategyBySock.get(sock);
+  const ordered = preferredId
+    ? [
+        ...strategies.filter((s) => s.id === preferredId),
+        ...strategies.filter((s) => s.id !== preferredId),
+      ]
+    : strategies;
+
+  let firstErr = null;
+  for (let i = 0; i < ordered.length; i += 1) {
+    const strategy = ordered[i];
+    try {
+      await strategy.run();
+      workingBioStrategyBySock.set(sock, strategy.id);
+      return { ok: true, bio: cleanBio, strategy: strategy.id };
+    } catch (err) {
+      if (!firstErr) firstErr = err;
+      if (!isRetryableStatusProtocolError(err)) {
+        workingBioStrategyBySock.delete(sock);
+        throw err;
+      }
+    }
+  }
+
+  workingBioStrategyBySock.delete(sock);
+  throw firstErr || new Error('WhatsApp rejected the About update.');
 }
 
 export async function fetchExternalBioFact({
@@ -680,16 +1003,8 @@ export function createAutobioManager({
 
     updating = true;
     try {
-      const state = store.getState();
       const botName = botNameResolver?.() || 'Spider Man';
       const tz = tzResolver?.() || 'Africa/Nairobi';
-
-      let externalFact = '';
-      if (!preferredBio && state.bios.length === 0 && allowExternalFetch) {
-        externalFact = await fetchExternalBioFact({
-          fetchImpl: fetchImpl || globalThis.fetch,
-        });
-      }
 
       const candidate = store.getNextBioCandidate({
         preferredBio,
@@ -697,7 +1012,6 @@ export function createAutobioManager({
         tz,
         startTimeMs,
         nowMs: now(),
-        externalFact,
       });
 
       const applied = await applyProfileBio(activeSock, candidate.bio);
@@ -854,6 +1168,25 @@ export function createAutobioManager({
     clearTimer();
   }
 
+  async function loadPresets({ sock = null, replace = false, enableAuto = true } = {}) {
+    const res = store.loadPresetBios({ replace });
+    if (enableAuto) {
+      const nextState = store.setEnabled(true);
+      startTimer(nextState.intervalMs);
+    }
+    const updateRes = await updateNow({ sock });
+    return {
+      ok: true,
+      addedCount: res.addedCount,
+      presetCount: res.presetCount,
+      total: store.getState().bios.length,
+      bio: updateRes.bio || '',
+      updated: Boolean(updateRes.ok),
+      error: updateRes.ok ? null : updateRes.error || null,
+      state: store.getState(),
+    };
+  }
+
   return {
     store,
     configure,
@@ -863,6 +1196,7 @@ export function createAutobioManager({
     disable,
     addAndApply,
     setAndApply,
+    loadPresets,
     setIntervalMs,
     syncOnConnect,
     stop,
