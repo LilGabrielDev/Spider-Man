@@ -269,7 +269,8 @@ test('menu command and handleMenuCategoryReply work across ?reload= module bound
   assert.match(combinedMenuText, /SYSTEM MENU/);
   assert.match(combinedMenuText, /COMMAND CATEGORIES/);
   assert.match(combinedMenuText, /GENERAL/);
-  assert.match(combinedMenuText, /SPIDER MAN \/\/ /);
+  assert.match(combinedMenuText, /SPIDER MAN/);
+  assert.doesNotMatch(combinedMenuText, /\/\/\s*LilTech/i);
 
   // 1. Quoted reply targeting menu message ID
   const replySent = [];
