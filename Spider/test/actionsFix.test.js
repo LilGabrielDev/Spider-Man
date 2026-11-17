@@ -1577,3 +1577,201 @@ test('WhatsApp .v alias resolves to vv and handles replies, audio ptt, captions,
   }
 });
 
+test('cacheViewOnce caches arriving view-once media for .vv/.openphoto/.vv2 even when WhatsApp strips quotes', async () => {
+  const {
+    cacheViewOnce,
+    clearViewOnceCache,
+    getCachedViewOnce,
+    normalizeMediaKey,
+    hasValidMediaKey,
+    extractViewOnceMedia,
+    createAntivvStore,
+    handleViewOnceAutoSave,
+  } = await import('../../spider/viewOnceAutoSave.js');
+
+  assert.equal(aliasesMap.get('openphoto'), 'vv');
+  assert.equal(aliasesMap.get('openvideo'), 'vv');
+  assert.equal(aliasesMap.get('vvphoto'), 'vv');
+
+  const vvCmd = commandsMap.get('vv');
+  const vv2Cmd = commandsMap.get('vv2');
+  assert.ok(vvCmd && vv2Cmd);
+
+  clearViewOnceCache();
+  try {
+    // 1. normalizeMediaKey & hasValidMediaKey handle numeric-keyed cloned objects and reject empty keys
+    const norm = normalizeMediaKey({ 0: 65, 1: 66, 2: 67 });
+    assert.ok(Buffer.isBuffer(norm));
+    assert.equal(norm.toString('utf8'), 'ABC');
+    assert.equal(hasValidMediaKey(new Uint8Array(0)), false);
+    assert.equal(hasValidMediaKey(Buffer.alloc(0)), false);
+    assert.equal(hasValidMediaKey({}), false);
+    assert.equal(hasValidMediaKey(Buffer.from([1, 2, 3])), true);
+
+    // 2. Non-view-once and empty mediaKey messages are ignored cleanly
+    const nonVoRes = await cacheViewOnce({
+      key: { remoteJid: '120363000000100001@g.us', id: 'non-vo-cache-1', fromMe: false },
+      message: { imageMessage: { caption: 'Regular pic', mediaKey: Buffer.from([1, 2, 3]) } },
+    });
+    assert.equal(nonVoRes.cached, false);
+    assert.equal(nonVoRes.reason, 'not-viewonce');
+
+    const emptyKeyRes = await cacheViewOnce({
+      key: { remoteJid: '120363000000100001@g.us', id: 'empty-key-cache-1', fromMe: false },
+      message: {
+        viewOnceMessageV2: {
+          message: { imageMessage: { viewOnce: true, mediaKey: new Uint8Array(0) } },
+        },
+      },
+    });
+    assert.equal(emptyKeyRes.cached, false);
+    assert.equal(emptyKeyRes.reason, 'missing-mediakey');
+
+    // 3. Nested documentWithCaptionMessage + viewOnceMessageV2 (including fromMe) caches via downloader on arrival
+    const cachedBytes = Buffer.from('arrival-cached-image-bytes');
+    let downloads = 0;
+    const arrivalMsg = {
+      key: { remoteJid: '120363000000100001@g.us', id: 'vo-arrived-1', fromMe: true },
+      message: {
+        ephemeralMessage: {
+          message: {
+            documentWithCaptionMessage: {
+              message: {
+                viewOnceMessageV2: {
+                  message: {
+                    imageMessage: {
+                      caption: 'Arrival secret',
+                      mimetype: 'image/webp',
+                      mediaKey: Buffer.from([9, 8, 7]),
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    assert.ok(extractViewOnceMedia(arrivalMsg.message));
+    const cacheRes = await cacheViewOnce(arrivalMsg, {
+      downloader: async (_media, dlType) => {
+        downloads += 1;
+        assert.equal(dlType, 'image');
+        return cachedBytes;
+      },
+    });
+    assert.equal(cacheRes.cached, true);
+    assert.equal(downloads, 1);
+    assert.ok(getCachedViewOnce('vo-arrived-1'));
+
+    // Duplicate arrival does not re-download
+    const dupRes = await cacheViewOnce(arrivalMsg, {
+      downloader: async () => {
+        downloads += 1;
+        return cachedBytes;
+      },
+    });
+    assert.equal(dupRes.cached, true);
+    assert.equal(dupRes.alreadyCached, true);
+    assert.equal(downloads, 1);
+
+    // 4. .vv / .openphoto reveals directly from viewOnceCache even when quotedMessage stripped viewOnce & mediaKey
+    const { sock, sent, groupMeta } = createAckAwareSock();
+    await vvCmd.execute({
+      sock,
+      from: groupMeta.id,
+      msg: {
+        key: { remoteJid: groupMeta.id, id: 'cmd-vv-cached-1' },
+        message: {
+          extendedTextMessage: {
+            text: '.openphoto',
+            contextInfo: {
+              stanzaId: 'vo-arrived-1',
+              quotedMessage: {
+                imageMessage: { mimetype: 'image/webp' },
+              },
+            },
+          },
+        },
+      },
+    });
+    assert.equal(sent.length, 1);
+    assert.deepEqual(sent[0].payload.image, cachedBytes);
+    assert.equal(sent[0].payload.mimetype, 'image/webp');
+    assert.match(sent[0].payload.caption, /Arrival secret/);
+    assert.match(sent[0].payload.caption, /REVEALED BY Spider Man/);
+
+    // 5. .vv2 also uses viewOnceCache seamlessly
+    await vv2Cmd.execute({
+      sock,
+      from: groupMeta.id,
+      msg: {
+        key: { remoteJid: groupMeta.id, id: 'cmd-vv2-cached-1' },
+        message: {
+          extendedTextMessage: {
+            text: '.vv2',
+            contextInfo: {
+              stanzaId: 'vo-arrived-1',
+              quotedMessage: { conversation: '' },
+            },
+          },
+        },
+      },
+    });
+    assert.equal(sent.length, 2);
+    assert.deepEqual(sent[1].payload.image, cachedBytes);
+
+    // 6. handleViewOnceAutoSave reuses cached buffer without failing on expired CDN
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'spider-vo-cache-antivv-'));
+    try {
+      const store = createAntivvStore({ filePath: path.join(tmpDir, 'antivv.json') });
+      store.setEnabled(true);
+      const avRes = await handleViewOnceAutoSave({
+        sock,
+        msg: arrivalMsg,
+        from: groupMeta.id,
+        getOwnerJid: () => '254700000001@s.whatsapp.net',
+        store,
+      });
+      assert.equal(avRes.handled, true);
+      assert.equal(avRes.withMedia, true);
+      assert.deepEqual(sent[2].payload.image, cachedBytes);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+
+    // 7. Uncached quoted view-once with empty Uint8Array(0) mediaKey fails with clear message
+    await vvCmd.execute({
+      sock,
+      from: groupMeta.id,
+      msg: {
+        key: { remoteJid: groupMeta.id, id: 'cmd-vv-empty-key' },
+        message: {
+          extendedTextMessage: {
+            text: '.vv',
+            contextInfo: {
+              stanzaId: 'vo-uncached-empty-key',
+              quotedMessage: {
+                viewOnceMessageV2: {
+                  message: {
+                    imageMessage: {
+                      viewOnce: true,
+                      url: 'https://mmg.whatsapp.net/v/test',
+                      mediaKey: new Uint8Array(0),
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    assert.equal(sent.length, 4);
+    assert.match(sent[3].payload.text, /Failed to reveal view-once media.*missing or expired/i);
+  } finally {
+    clearViewOnceCache();
+  }
+});
+
+

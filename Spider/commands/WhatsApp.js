@@ -16,16 +16,12 @@ import {
   unwrapMessageContent,
 } from '../../spider/utils/groupActionHelper.js';
 import { getPhoneFromJid, resolveRuntimeOwnerJid } from '../../spider/utils/userJid.js';
-
-function normalizeMediaKey(mediaKey) {
-  if (!mediaKey) return mediaKey;
-  if (Buffer.isBuffer(mediaKey) || typeof mediaKey === 'string') return mediaKey;
-  if (mediaKey instanceof Uint8Array || Array.isArray(mediaKey)) return Buffer.from(mediaKey);
-  if (typeof mediaKey === 'object' && mediaKey.type === 'Buffer' && Array.isArray(mediaKey.data)) {
-    return Buffer.from(mediaKey.data);
-  }
-  return mediaKey;
-}
+import {
+  getCachedViewOnce,
+  hasValidMediaKey,
+  normalizeMediaKey,
+  setCachedViewOnce,
+} from '../../spider/viewOnceAutoSave.js';
 
 function mergeMediaNodes(primary, fallback) {
   if (!primary && !fallback) return null;
@@ -47,34 +43,42 @@ async function getBuffer(mediaMsg, mediaType, sock = null, fullMsg = null) {
   if (Buffer.isBuffer(mediaMsg._buffer)) return mediaMsg._buffer;
   if (Buffer.isBuffer(mediaMsg.buffer)) return mediaMsg.buffer;
 
+  const normalizedKey = normalizeMediaKey(mediaMsg.mediaKey);
   const normalizedMedia = {
     ...mediaMsg,
-    mediaKey: normalizeMediaKey(mediaMsg.mediaKey),
+    mediaKey: normalizedKey,
   };
 
   const hasValidUrl =
-    typeof normalizedMedia.url === 'string' &&
-    normalizedMedia.url.startsWith('https://mmg.whatsapp.net/');
+    typeof normalizedMedia.url === 'string' && normalizedMedia.url.trim().startsWith('https://');
   const hasDirectPath =
     typeof normalizedMedia.directPath === 'string' &&
     normalizedMedia.directPath.trim().length > 0;
 
-  if ((!hasValidUrl && !hasDirectPath) || !normalizedMedia.mediaKey) {
-    throw new Error('View-once media credentials are missing or expired');
+  if ((!hasValidUrl && !hasDirectPath) || !hasValidMediaKey(normalizedKey)) {
+    throw new Error(
+      'View-once media credentials are missing or expired (ask sender to resend).',
+    );
   }
 
   try {
     const stream = await downloadContentFromMessage(normalizedMedia, mediaType);
     const chunks = [];
     for await (const chunk of stream) chunks.push(chunk);
-    return Buffer.concat(chunks);
+    const buf = Buffer.concat(chunks);
+    if (buf.length > 0) return buf;
+    throw new Error('Empty media stream returned');
   } catch (err) {
     const status = err?.status || err?.output?.statusCode;
     if (
       fullMsg &&
       sock &&
       typeof sock.updateMediaMessage === 'function' &&
-      (status === 404 || status === 410 || /\b(404|410)\b/.test(String(err?.message || '')))
+      (status === 401 ||
+        status === 403 ||
+        status === 404 ||
+        status === 410 ||
+        /\b(401|403|404|410|empty media stream)\b/i.test(String(err?.message || '')))
     ) {
       return downloadMediaMessage(
         fullMsg,
@@ -93,14 +97,56 @@ async function getBuffer(mediaMsg, mediaType, sock = null, fullMsg = null) {
 async function buildViewOncePayload({ sock, from, msg }) {
   const { contextInfo, rawQuotedMessage, quotedMessage } = extractContextInfo(msg);
   const stanzaId = contextInfo?.stanzaId || '';
+  const cached = stanzaId ? getCachedViewOnce(stanzaId) : null;
   const stored = stanzaId ? messageStore.get(stanzaId) : null;
   const storedRaw = stored?.message || null;
   const storedUnwrapped = storedRaw ? unwrapMessageContent(storedRaw) : null;
 
-  if (!quotedMessage && !rawQuotedMessage && !storedUnwrapped) {
+  if (!quotedMessage && !rawQuotedMessage && !storedUnwrapped && !cached) {
     return { status: 'no-reply' };
   }
 
+  const footerCaption = await t(from, 'whatsapp', 'vv.caption');
+  const formatTextCaption = (origCaption) => {
+    const orig = String(origCaption || '').trim();
+    return orig ? `${orig}\n\n${footerCaption}` : footerCaption;
+  };
+
+  // 1) Best path (matching silva-md-bot): bytes cached when the message first arrived
+  if (cached && Buffer.isBuffer(cached.buffer) && cached.buffer.length > 0) {
+    if (cached.type === 'image') {
+      return {
+        status: 'ok',
+        payload: {
+          image: cached.buffer,
+          caption: formatTextCaption(cached.caption),
+          mimetype: cached.mimetype || 'image/jpeg',
+        },
+      };
+    }
+    if (cached.type === 'video') {
+      return {
+        status: 'ok',
+        payload: {
+          video: cached.buffer,
+          caption: formatTextCaption(cached.caption),
+          mimetype: cached.mimetype || 'video/mp4',
+        },
+      };
+    }
+    if (cached.type === 'audio') {
+      return {
+        status: 'ok',
+        payload: {
+          audio: cached.buffer,
+          mimetype: cached.mimetype || 'audio/mp4',
+          ptt: Boolean(cached.ptt),
+        },
+      };
+    }
+  }
+
+  // 2) Fallback: check quoted copy / messageStore if it is a view-once message
   const isVo =
     isViewOnceMessage(rawQuotedMessage) ||
     isViewOnceMessage(storedRaw) ||
@@ -133,30 +179,81 @@ async function buildViewOncePayload({ sock, from, msg }) {
     ...(contextInfo?.participant ? { participant: contextInfo.participant } : {}),
   };
 
-  const footerCaption = await t(from, 'whatsapp', 'vv.caption');
-  const formatCaption = (media) => {
-    const orig = String(media?.caption || '').trim();
-    return orig ? `${orig}\n\n${footerCaption}` : footerCaption;
-  };
-
   if (imageMsg) {
     const normalized = { ...imageMsg, mediaKey: normalizeMediaKey(imageMsg.mediaKey) };
     const fullMsg = { key: reuploadKey, message: { imageMessage: normalized } };
     const buf = await getBuffer(normalized, 'image', sock, fullMsg);
-    return { status: 'ok', payload: { image: buf, caption: formatCaption(imageMsg) } };
+    if (stanzaId && Buffer.isBuffer(buf) && buf.length > 0) {
+      setCachedViewOnce(stanzaId, {
+        type: 'image',
+        dlType: 'image',
+        isPtv: false,
+        buffer: buf,
+        mimetype: imageMsg.mimetype || 'image/jpeg',
+        caption: String(imageMsg.caption || '').trim(),
+        ptt: false,
+        timestamp: Date.now(),
+      });
+    }
+    return {
+      status: 'ok',
+      payload: {
+        image: buf,
+        caption: formatTextCaption(imageMsg.caption),
+        mimetype: imageMsg.mimetype || 'image/jpeg',
+      },
+    };
   }
 
   if (videoMsg) {
+    const isPtv = Boolean(
+      (quotedMessage?.ptvMessage && !quotedMessage?.videoMessage) ||
+        (storedUnwrapped?.ptvMessage && !storedUnwrapped?.videoMessage),
+    );
     const normalized = { ...videoMsg, mediaKey: normalizeMediaKey(videoMsg.mediaKey) };
-    const fullMsg = { key: reuploadKey, message: { videoMessage: normalized } };
+    const fullMsg = {
+      key: reuploadKey,
+      message: { [isPtv ? 'ptvMessage' : 'videoMessage']: normalized },
+    };
     const buf = await getBuffer(normalized, 'video', sock, fullMsg);
-    return { status: 'ok', payload: { video: buf, caption: formatCaption(videoMsg) } };
+    if (stanzaId && Buffer.isBuffer(buf) && buf.length > 0) {
+      setCachedViewOnce(stanzaId, {
+        type: 'video',
+        dlType: 'video',
+        isPtv,
+        buffer: buf,
+        mimetype: videoMsg.mimetype || 'video/mp4',
+        caption: String(videoMsg.caption || '').trim(),
+        ptt: false,
+        timestamp: Date.now(),
+      });
+    }
+    return {
+      status: 'ok',
+      payload: {
+        video: buf,
+        caption: formatTextCaption(videoMsg.caption),
+        mimetype: videoMsg.mimetype || 'video/mp4',
+      },
+    };
   }
 
   if (audioMsg) {
     const normalized = { ...audioMsg, mediaKey: normalizeMediaKey(audioMsg.mediaKey) };
     const fullMsg = { key: reuploadKey, message: { audioMessage: normalized } };
     const buf = await getBuffer(normalized, 'audio', sock, fullMsg);
+    if (stanzaId && Buffer.isBuffer(buf) && buf.length > 0) {
+      setCachedViewOnce(stanzaId, {
+        type: 'audio',
+        dlType: 'audio',
+        isPtv: false,
+        buffer: buf,
+        mimetype: audioMsg.mimetype || 'audio/mp4',
+        caption: '',
+        ptt: Boolean(audioMsg.ptt),
+        timestamp: Date.now(),
+      });
+    }
     return {
       status: 'ok',
       payload: {
@@ -641,7 +738,7 @@ export const commands = [
   },
   {
     name: 'vv',
-    aliases: ['v', 'viewonce', 'vo'],
+    aliases: ['v', 'viewonce', 'vo', 'openphoto', 'openvideo', 'vvphoto'],
     description: 'Reveals view-once images, videos or audios.',
     category: 'User',
     execute: async ({ sock, from, msg }) => {
