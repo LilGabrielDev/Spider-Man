@@ -1,4 +1,6 @@
 node_modules/
+nodemodules/
+session/
 .env
 .env.*
 !.env.example

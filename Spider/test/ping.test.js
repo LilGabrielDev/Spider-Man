@@ -2,11 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { commands } from '../commands/Ping.js';
+import config from '../../spider/config.js';
+import { buildStatusButtons, commands } from '../commands/Ping.js';
 
 test('ping waits for the WhatsApp send acknowledgment before reporting milliseconds', async () => {
   const ping = commands.find((command) => command.name === 'ping');
   const sent = [];
+  const relayed = [];
   const msg = { key: { id: 'ping-test', remoteJid: 'test@s.whatsapp.net' } };
   let pingAcknowledged = false;
   const sock = {
@@ -15,9 +17,12 @@ test('ping waits for the WhatsApp send acknowledgment before reporting milliseco
       if (sent.length === 1) {
         await new Promise((resolve) => setTimeout(resolve, 30));
         pingAcknowledged = true;
-      } else {
-        assert.equal(pingAcknowledged, true, 'Pong was sent before the Pinging message was acknowledged');
       }
+      return { key: { id: `ping-response-${sent.length}`, remoteJid: 'test@s.whatsapp.net', fromMe: true } };
+    },
+    relayMessage: async (...args) => {
+      assert.equal(pingAcknowledged, true, 'Pong was relayed before the Pinging message was acknowledged');
+      relayed.push(args);
       return { key: { id: `ping-response-${sent.length}`, remoteJid: 'test@s.whatsapp.net', fromMe: true } };
     },
   };
@@ -25,20 +30,60 @@ test('ping waits for the WhatsApp send acknowledgment before reporting milliseco
   assert.deepEqual(ping.aliases, ['latency', 'speed']);
   await ping.execute({ sock, from: 'test@s.whatsapp.net', msg });
 
-  assert.equal(sent.length, 2);
+  assert.equal(sent.length, 1);
+  assert.equal(relayed.length, 1);
   assert.equal(sent[0][1].text, 'Pinging...');
-  assert.match(sent[1][1].text, /Pong!/);
-  assert.match(sent[1][1].text, /Speed: \d+ ms/);
-  const latency = Number(sent[1][1].text.match(/Speed: (\d+) ms/)[1]);
+  const pongPayload = JSON.stringify(relayed[0][1].interactiveMessage);
+  assert.match(pongPayload, /Pong!/);
+  assert.match(pongPayload, /Speed: \d+ ms/);
+  assert.match(pongPayload, /uptime/i, 'ping reply should offer the uptime quick action');
+  assert.match(pongPayload, /WhatsApp Channel/);
+  const latency = Number(pongPayload.match(/Speed: (\d+) ms/)[1]);
   assert.ok(latency >= 25, `expected the acknowledged send duration to be included, got ${latency} ms`);
   assert.ok(latency < 1000, `expected a reasonable mocked send latency, got ${latency} ms`);
   assert.equal(sent[0][2].quoted, msg);
-  assert.equal(sent[1][2].quoted, msg);
+  assert.equal(relayed[0][2].additionalNodes[0].tag, 'biz');
+});
+
+test('status buttons provide reciprocal quick actions and the configured channel link', () => {
+  const uptimeButtons = buildStatusButtons('uptime', '⏱️ Uptime');
+  const pingButtons = buildStatusButtons('ping', '⚡ Ping');
+
+  assert.equal(uptimeButtons[0].name, 'quick_reply');
+  assert.equal(JSON.parse(uptimeButtons[0].buttonParamsJson).id, `${config.PREFIXES?.[0] || '.'}uptime`);
+  assert.equal(JSON.parse(uptimeButtons[0].buttonParamsJson).display_text, '⏱️ Uptime');
+  assert.equal(pingButtons[0].name, 'quick_reply');
+  assert.equal(JSON.parse(pingButtons[0].buttonParamsJson).id, `${config.PREFIXES?.[0] || '.'}ping`);
+  assert.equal(JSON.parse(pingButtons[0].buttonParamsJson).display_text, '⚡ Ping');
+  assert.equal(JSON.parse(uptimeButtons[1].buttonParamsJson).url, config.CHANNEL_URL);
+  assert.equal(JSON.parse(pingButtons[1].buttonParamsJson).url, config.CHANNEL_URL);
+});
+
+test('uptime response uses the reference-style ping and channel buttons', async () => {
+  const uptime = commands.find((command) => command.name === 'uptime');
+  const relayed = [];
+  const sock = {
+    relayMessage: async (...args) => {
+      relayed.push(args);
+      return { key: { id: 'uptime-response', remoteJid: 'test@s.whatsapp.net', fromMe: true } };
+    },
+  };
+
+  await uptime.execute({ sock, from: 'test@s.whatsapp.net', msg: { key: { id: 'uptime-test' } } });
+
+  assert.equal(relayed.length, 1);
+  const response = JSON.stringify(relayed[0][1].interactiveMessage);
+  assert.match(response, /UPTIME/);
+  assert.match(response, /ping/i);
+  assert.match(response, /WhatsApp Channel/);
 });
 
 test('live dispatcher restores the ping reaction without awaiting it', () => {
   const source = fs.readFileSync(path.resolve(process.cwd(), 'spider/index.js'), 'utf8');
   assert.match(source, /if\(_0x836db9==='ping'\)\{try\{Promise\.resolve\(sock\[_0x541605\(0x74\)\]/);
+  assert.match(source, /interactiveResponseMessage/);
+  assert.match(source, /nativeFlowResponseMessage/);
+  assert.match(source, /templateButtonReplyMessage/);
   assert.match(source, /'text':'🧪'/);
 });
 
