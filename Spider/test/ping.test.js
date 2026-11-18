@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import config from '../../spider/config.js';
-import { buildStatusButtons, commands } from '../commands/Ping.js';
+import { commands as aliveCommands } from '../commands/Alive.js';
+import { commands } from '../commands/Ping.js';
+import { buildStatusButtons } from '../utils/interactiveButtons.js';
 
 test('ping waits for the WhatsApp send acknowledgment before reporting milliseconds', async () => {
   const ping = commands.find((command) => command.name === 'ping');
@@ -76,6 +78,36 @@ test('uptime response uses the reference-style ping and channel buttons', async 
   assert.match(response, /UPTIME/);
   assert.match(response, /ping/i);
   assert.match(response, /WhatsApp Channel/);
+});
+
+test('alive response keeps its status details and adds a ping quick action', async () => {
+  const alive = aliveCommands.find((command) => command.name === 'alive');
+  const sent = [];
+  const relayed = [];
+  const sock = {
+    sendMessage: async (...args) => {
+      sent.push(args);
+      return { key: { id: 'alive-checking', remoteJid: 'test@s.whatsapp.net', fromMe: true } };
+    },
+    relayMessage: async (...args) => {
+      relayed.push(args);
+      return { key: { id: 'alive-status', remoteJid: 'test@s.whatsapp.net', fromMe: true } };
+    },
+  };
+
+  await alive.execute({ sock, from: 'test@s.whatsapp.net', msg: { key: { id: 'alive-test' } } });
+
+  assert.equal(sent.length, 1);
+  assert.equal(relayed.length, 1);
+  const status = relayed[0][1].interactiveMessage;
+  assert.match(status.body.text, /UP|online|alive/i);
+  assert.match(status.body.text, /uptime/i);
+  assert.match(status.body.text, /ping/i);
+  assert.match(status.body.text, /RAM|memory/i);
+  const buttons = status.nativeFlowMessage.buttons;
+  assert.equal(buttons[0].name, 'quick_reply');
+  assert.equal(JSON.parse(buttons[0].buttonParamsJson).id, `${config.PREFIXES?.[0] || '.'}ping`);
+  assert.equal(JSON.parse(buttons[1].buttonParamsJson).url, config.CHANNEL_URL);
 });
 
 test('live dispatcher restores the ping reaction without awaiting it', () => {
