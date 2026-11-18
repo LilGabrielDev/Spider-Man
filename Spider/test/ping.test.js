@@ -5,7 +5,7 @@ import path from 'node:path';
 import config from '../../spider/config.js';
 import { commands as aliveCommands } from '../commands/Alive.js';
 import { commands } from '../commands/Ping.js';
-import { buildStatusButtons } from '../utils/interactiveButtons.js';
+import { buildInteractiveButtons, buildStatusButtons } from '../utils/interactiveButtons.js';
 
 test('ping waits for the WhatsApp send acknowledgment before reporting milliseconds', async () => {
   const ping = commands.find((command) => command.name === 'ping');
@@ -59,6 +59,22 @@ test('status buttons provide reciprocal quick actions and the configured channel
   assert.equal(JSON.parse(pingButtons[0].buttonParamsJson).display_text, '⚡ Ping');
   assert.equal(JSON.parse(uptimeButtons[1].buttonParamsJson).url, config.CHANNEL_URL);
   assert.equal(JSON.parse(pingButtons[1].buttonParamsJson).url, config.CHANNEL_URL);
+});
+
+test('navigation buttons support two quick replies plus the channel link', () => {
+  const buttons = buildInteractiveButtons([
+    { command: 'categories', label: 'Categories' },
+    { command: 'menu', label: 'Menu' },
+    { command: 'help', label: 'Help' },
+  ]);
+
+  assert.equal(buttons.length, 3, 'keep the native-flow button count within its supported limit');
+  assert.deepEqual(
+    buttons.slice(0, 2).map((button) => JSON.parse(button.buttonParamsJson).id),
+    [`${config.PREFIXES?.[0] || '.'}categories`, `${config.PREFIXES?.[0] || '.'}menu`],
+  );
+  assert.equal(buttons[2].name, 'cta_url');
+  assert.equal(JSON.parse(buttons[2].buttonParamsJson).url, config.CHANNEL_URL);
 });
 
 test('uptime response uses the reference-style ping and channel buttons', async () => {

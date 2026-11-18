@@ -42,6 +42,14 @@ function createMockSock(sentLog = [], options = {}) {
       sentLog.push({ jid, payload, sendOpts, id });
       return { key: { id, remoteJid: jid, fromMe: true } };
     },
+    relayMessage: async (jid, message, sendOpts = {}) => {
+      const id = `relayed-${sentLog.length + 1}`;
+      const payload = message?.interactiveMessage
+        ? { text: message.interactiveMessage.body?.text, interactiveMessage: message.interactiveMessage }
+        : message;
+      sentLog.push({ jid, payload, sendOpts, id, relayed: true });
+      return { key: { id, remoteJid: jid, fromMe: true } };
+    },
     groupMetadata: async (jid) => ({
       id: jid,
       subject: 'Spider Test Group',
@@ -197,6 +205,30 @@ test('all 189 commands and aliases load cleanly with valid metadata and handlers
 
   for (const [alias, target] of aliasesMap.entries()) {
     assert.ok(commandsMap.has(target), `Alias ${alias} points to missing command ${target}`);
+  }
+});
+
+test('categories, category, and findcmd replies include navigation quick actions', async () => {
+  const sent = [];
+  const sock = createMockSock(sent);
+  await commandsMap.get('categories').execute(makeCtx('categories', { sock }));
+  await commandsMap.get('category').execute(makeCtx('category', { sock, text: 'general' }));
+  await commandsMap.get('findcmd').execute(makeCtx('findcmd', { sock, text: 'ping' }));
+
+  const replies = sent.filter((message) => message.relayed);
+  assert.equal(replies.length, 3);
+  const quickReplyIds = replies.map(({ payload }) =>
+    payload.interactiveMessage.nativeFlowMessage.buttons
+      .filter((button) => button.name === 'quick_reply')
+      .map((button) => JSON.parse(button.buttonParamsJson).id),
+  );
+  const prefix = config.PREFIXES?.[0] || '.';
+  assert.deepEqual(quickReplyIds[0], [`${prefix}category General`, `${prefix}menu`]);
+  assert.deepEqual(quickReplyIds[1], [`${prefix}categories`, `${prefix}menu`]);
+  assert.deepEqual(quickReplyIds[2], [`${prefix}categories`, `${prefix}menu`]);
+  for (const { payload } of replies) {
+    const buttons = payload.interactiveMessage.nativeFlowMessage.buttons;
+    assert.equal(JSON.parse(buttons.at(-1).buttonParamsJson).url, config.CHANNEL_URL);
   }
 });
 
