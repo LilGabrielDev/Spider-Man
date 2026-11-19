@@ -44,19 +44,27 @@ test('ping waits for the WhatsApp send acknowledgment before reporting milliseco
   assert.ok(latency >= 25, `expected the acknowledged send duration to be included, got ${latency} ms`);
   assert.ok(latency < 1000, `expected a reasonable mocked send latency, got ${latency} ms`);
   assert.equal(sent[0][2].quoted, msg);
-  assert.equal(relayed[0][2].additionalNodes[0].tag, 'biz');
+  const relayOptions = relayed[0][2];
+  const businessNode = relayOptions.additionalNodes.find((node) => node.tag === 'biz');
+  const botNode = relayOptions.additionalNodes.find((node) => node.tag === 'bot');
+  assert.equal(businessNode.content[0].tag, 'interactive');
+  assert.equal(businessNode.content[0].attrs.type, 'native_flow');
+  assert.equal(botNode.attrs.biz_bot, '1', 'private-chat buttons need the bot node to render');
+  const buttons = relayed[0][1].interactiveMessage.nativeFlowMessage.buttons;
+  assert.equal(buttons[0].name, 'quick_reply');
+  assert.equal(JSON.parse(buttons[0].buttonParamsJson).id, `${config.PREFIXES?.[0] || '.'}uptime`);
+  assert.equal(buttons[1].name, 'cta_url');
+  assert.equal(JSON.parse(buttons[1].buttonParamsJson).url, config.CHANNEL_URL);
 });
 
 test('status buttons provide reciprocal quick actions and the configured channel link', () => {
   const uptimeButtons = buildStatusButtons('uptime', '⏱️ Uptime');
   const pingButtons = buildStatusButtons('ping', '⚡ Ping');
 
-  assert.equal(uptimeButtons[0].name, 'quick_reply');
-  assert.equal(JSON.parse(uptimeButtons[0].buttonParamsJson).id, `${config.PREFIXES?.[0] || '.'}uptime`);
-  assert.equal(JSON.parse(uptimeButtons[0].buttonParamsJson).display_text, '⏱️ Uptime');
-  assert.equal(pingButtons[0].name, 'quick_reply');
-  assert.equal(JSON.parse(pingButtons[0].buttonParamsJson).id, `${config.PREFIXES?.[0] || '.'}ping`);
-  assert.equal(JSON.parse(pingButtons[0].buttonParamsJson).display_text, '⚡ Ping');
+  assert.equal(uptimeButtons[0].id, `${config.PREFIXES?.[0] || '.'}uptime`);
+  assert.equal(uptimeButtons[0].text, '⏱️ Uptime');
+  assert.equal(pingButtons[0].id, `${config.PREFIXES?.[0] || '.'}ping`);
+  assert.equal(pingButtons[0].text, '⚡ Ping');
   assert.equal(JSON.parse(uptimeButtons[1].buttonParamsJson).url, config.CHANNEL_URL);
   assert.equal(JSON.parse(pingButtons[1].buttonParamsJson).url, config.CHANNEL_URL);
 });
@@ -70,9 +78,10 @@ test('navigation buttons support two quick replies plus the channel link', () =>
 
   assert.equal(buttons.length, 3, 'keep the native-flow button count within its supported limit');
   assert.deepEqual(
-    buttons.slice(0, 2).map((button) => JSON.parse(button.buttonParamsJson).id),
+    buttons.slice(0, 2).map((button) => button.id),
     [`${config.PREFIXES?.[0] || '.'}categories`, `${config.PREFIXES?.[0] || '.'}menu`],
   );
+  assert.deepEqual(buttons.slice(0, 2).map((button) => button.text), ['Categories', 'Menu']);
   assert.equal(buttons[2].name, 'cta_url');
   assert.equal(JSON.parse(buttons[2].buttonParamsJson).url, config.CHANNEL_URL);
 });
@@ -131,6 +140,7 @@ test('live dispatcher restores the ping reaction without awaiting it', () => {
   assert.match(source, /if\(_0x836db9==='ping'\)\{try\{Promise\.resolve\(sock\[_0x541605\(0x74\)\]/);
   assert.match(source, /interactiveResponseMessage/);
   assert.match(source, /nativeFlowResponseMessage/);
+  assert.match(source, /paramsJson/);
   assert.match(source, /templateButtonReplyMessage/);
   assert.match(source, /'text':'🧪'/);
 });
