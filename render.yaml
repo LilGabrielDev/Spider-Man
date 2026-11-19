@@ -25,3 +25,7 @@ services:
         value: "on"
       - key: AUTO_READ
         value: "off"
+      - key: AUTO_VIEW
+        value: "off"
+      - key: AUTO_LIKE
+        value: "off"

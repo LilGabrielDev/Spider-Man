@@ -94,12 +94,12 @@
     },
     "AUTO_VIEW": {
       "description": "Auto view status updates (on/off); AUTO_READ_STATUS is also supported",
-      "value": "on",
+      "value": "off",
       "required": false
     },
     "AUTO_LIKE": {
       "description": "Auto react to status updates (on/off); AUTO_LIKE_STATUS is also supported",
-      "value": "on",
+      "value": "off",
       "required": false
     },
     "DM_PRESENCE": {
