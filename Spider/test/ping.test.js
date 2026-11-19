@@ -47,9 +47,10 @@ test('ping waits for the WhatsApp send acknowledgment before reporting milliseco
   const relayOptions = relayed[0][2];
   const businessNode = relayOptions.additionalNodes.find((node) => node.tag === 'biz');
   const botNode = relayOptions.additionalNodes.find((node) => node.tag === 'bot');
+  assert.equal(relayOptions.additionalNodes.length, 1, 'match atassa by leaving aimode disabled');
   assert.equal(businessNode.content[0].tag, 'interactive');
   assert.equal(businessNode.content[0].attrs.type, 'native_flow');
-  assert.equal(botNode.attrs.biz_bot, '1', 'private-chat buttons need the bot node to render');
+  assert.equal(botNode, undefined, 'the reference does not add a private-chat bot node');
   const buttons = relayed[0][1].interactiveMessage.nativeFlowMessage.buttons;
   assert.equal(buttons[0].name, 'quick_reply');
   assert.equal(JSON.parse(buttons[0].buttonParamsJson).id, `${config.PREFIXES?.[0] || '.'}uptime`);

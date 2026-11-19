@@ -70,7 +70,7 @@ test('retry cache immediately captures sendMessage and relayMessage payloads', a
   assert.deepEqual(await getMessageForRetry({ remoteJid: groupA, id: relayedStringId }), relayedNoOptContent);
 });
 
-test('pre-send patch wraps interactive messages for multi-device rendering', async () => {
+test('pre-send patch keeps native-flow messages direct and wraps only legacy buttons like atassa', async () => {
   const nativeFlow = {
     interactiveMessage: {
       body: { text: 'Pong!' },
@@ -79,11 +79,34 @@ test('pre-send patch wraps interactive messages for multi-device rendering', asy
       },
     },
   };
-  const expected = { documentWithCaptionMessage: { message: nativeFlow } };
   const patch = createPreSendPatchCapture();
 
-  assert.deepEqual(await patch(nativeFlow, [groupA]), expected);
-  assert.deepEqual(await patch(expected, [groupA]), expected, 'do not double-wrap an already patched message');
+  assert.equal(await patch(nativeFlow, [groupA]), nativeFlow, 'native-flow payloads are sent directly');
+
+  const legacyButtons = { buttonsMessage: { contentText: 'Choose', buttons: [] } };
+  const expectedLegacy = {
+    viewOnceMessage: {
+      message: {
+        messageContextInfo: { deviceListMetadataVersion: 2, deviceListMetadata: {} },
+        ...legacyButtons,
+      },
+    },
+  };
+  assert.deepEqual(await patch(legacyButtons, [groupA]), expectedLegacy);
+  assert.deepEqual(await patch(expectedLegacy, [groupA]), expectedLegacy, 'do not double-wrap an already patched message');
+  for (const legacyMessage of [
+    { templateMessage: { hydratedTemplate: {} } },
+    { listMessage: { title: 'Choose' } },
+  ]) {
+    assert.deepEqual(await patch(legacyMessage, [groupA]), {
+      viewOnceMessage: {
+        message: {
+          messageContextInfo: { deviceListMetadataVersion: 2, deviceListMetadata: {} },
+          ...legacyMessage,
+        },
+      },
+    });
+  }
 
   const plainMessage = { conversation: 'plain text stays unchanged' };
   assert.equal(await patch(plainMessage, [groupA]), plainMessage);
@@ -91,8 +114,9 @@ test('pre-send patch wraps interactive messages for multi-device rendering', asy
   const recipientSpecificPatch = createPreSendPatchCapture(async (content) => [
     { recipientJid: groupA, message: content },
   ]);
-  assert.deepEqual(await recipientSpecificPatch(nativeFlow, [groupA]), [
-    { recipientJid: groupA, message: expected },
+  assert.deepEqual(await recipientSpecificPatch(nativeFlow, [groupA]), [{ recipientJid: groupA, message: nativeFlow }]);
+  assert.deepEqual(await recipientSpecificPatch(legacyButtons, [groupA]), [
+    { recipientJid: groupA, message: expectedLegacy },
   ]);
 });
 
@@ -336,4 +360,3 @@ test('trimMessageRetryStore shrinks retry cache and retains newest messages unde
     resetMessageRetryStore();
   }
 });
-

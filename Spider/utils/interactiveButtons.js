@@ -41,7 +41,6 @@ export async function sendInteractiveButtons(sock, from, msg, { title, text, act
       text,
       footer: `> *${config.BOT_NAME || 'Spider Man'}*`,
       buttons: buildInteractiveButtons(actions),
-      aimode: true,
     });
   } catch (error) {
     console.warn('Could not send interactive buttons; using text fallback:', error?.message || error);

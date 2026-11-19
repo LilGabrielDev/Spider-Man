@@ -408,12 +408,24 @@ export async function getMessageForRetry(key) {
   return messageStore.get(key.id)?.message;
 }
 
-function patchInteractiveMessageForMd(message) {
+function patchLegacyButtonMessageForMd(message) {
   if (!message || typeof message !== 'object') return message;
-  if (message.documentWithCaptionMessage?.message) return message;
-  if (!message.buttonsMessage && !message.listMessage && !message.interactiveMessage) return message;
+  if (message.viewOnceMessage?.message) return message;
+  // gifted-btns adds native-flow nodes itself; wrapping that payload changes its wire shape.
+  const requiresPatch = Boolean(message.buttonsMessage || message.templateMessage || message.listMessage);
+  if (!requiresPatch) return message;
 
-  return { documentWithCaptionMessage: { message: { ...message } } };
+  return {
+    viewOnceMessage: {
+      message: {
+        messageContextInfo: {
+          deviceListMetadataVersion: 2,
+          deviceListMetadata: {},
+        },
+        ...message,
+      },
+    },
+  };
 }
 
 export function createPreSendPatchCapture(basePatcher = null) {
@@ -425,10 +437,10 @@ export function createPreSendPatchCapture(basePatcher = null) {
           if (!entry || typeof entry !== 'object') return entry;
           return {
             ...entry,
-            message: patchInteractiveMessageForMd(entry.message ?? message),
+            message: patchLegacyButtonMessageForMd(entry.message ?? message),
           };
         })
-      : patchInteractiveMessageForMd(basePatched ?? message);
+      : patchLegacyButtonMessageForMd(basePatched ?? message);
     const ctx = sendContextStorage.getStore();
     if (ctx?.remoteJid && ctx?.messageId) {
       const msgToCache = Array.isArray(patched)
@@ -1026,4 +1038,3 @@ export async function handleEditedMessage(
 
   return { handled: sentCount > 0, sentCount, beforeText, afterText };
 }
-
