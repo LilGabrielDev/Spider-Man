@@ -16,7 +16,7 @@ export const DEFAULT_DISCONNECT_REASONS = {
 
 export function classifyDisconnect(
   statusCode,
-  { attempt = 1, badSessionRetries = 0, replacedRetries = 0, baseDelayMs = 2_000, maxDelayMs = 30_000 } = {},
+  { attempt = 1, badSessionRetries = 0, replacedRetries = 0, baseDelayMs = 5_000, maxDelayMs = 60_000 } = {},
 ) {
   const code = statusCode !== undefined && statusCode !== null ? Number(statusCode) : NaN;
 
@@ -128,9 +128,9 @@ export function createConnectionController({
   onFatalDisconnect = null,
   onReconnectScheduled = null,
   onStartError = null,
-  baseDelayMs = 2_000,
-  maxDelayMs = 30_000,
-  stableConnectionMs = 15_000,
+  baseDelayMs = 5_000,
+  maxDelayMs = 60_000,
+  stableConnectionMs = 60_000,
 } = {}) {
   if (typeof createSocket !== 'function') {
     throw new TypeError('createSocket callback is required');

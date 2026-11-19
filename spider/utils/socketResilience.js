@@ -4,6 +4,7 @@ import { proto } from '@whiskeysockets/baileys';
 import { normalizeAuthCreds, normalizeMeCredentials, parseJidParts } from './authState.js';
 import { installConsoleSignalSanitizer } from './privacyLogger.js';
 import { cleanUserJid } from './userJid.js';
+import { getOutboundPacer } from './outboundPacer.js';
 
 const require = createRequire(import.meta.url);
 let cachedHasLinkPreviewPkg = null;
@@ -307,15 +308,40 @@ export function wrapPresenceResilience(sock, { defaultPushName = 'Spider Man' } 
   if (sock.sendPresenceUpdate.__spiderPresenceWrapped) return true;
 
   const origSendPresenceUpdate = sock.sendPresenceUpdate.bind(sock);
+  const outboundPacer = getOutboundPacer(sock);
   const wrappedSendPresence = async (type, toJid) => {
     if (type === 'available' || type === 'unavailable') {
       ensureFallbackMeName(sock.authState?.creds, defaultPushName);
     }
-    return origSendPresenceUpdate(type, toJid);
+    return outboundPacer.run(() => origSendPresenceUpdate(type, toJid));
   };
   wrappedSendPresence.__spiderPresenceWrapped = true;
   sock.sendPresenceUpdate = wrappedSendPresence;
   return true;
+}
+
+export function wrapReadAndInviteResilience(sock) {
+  if (!sock || typeof sock !== 'object') return false;
+  const outboundPacer = getOutboundPacer(sock);
+  let wrapped = false;
+
+  if (typeof sock.readMessages === 'function' && !sock.readMessages.__spiderReadPaced) {
+    const originalReadMessages = sock.readMessages.bind(sock);
+    const pacedReadMessages = (keys) => outboundPacer.run(() => originalReadMessages(keys));
+    pacedReadMessages.__spiderReadPaced = true;
+    sock.readMessages = pacedReadMessages;
+    wrapped = true;
+  }
+
+  if (typeof sock.groupAcceptInvite === 'function' && !sock.groupAcceptInvite.__spiderInvitePaced) {
+    const originalGroupAcceptInvite = sock.groupAcceptInvite.bind(sock);
+    const pacedGroupAcceptInvite = (code) => outboundPacer.run(() => originalGroupAcceptInvite(code));
+    pacedGroupAcceptInvite.__spiderInvitePaced = true;
+    sock.groupAcceptInvite = pacedGroupAcceptInvite;
+    wrapped = true;
+  }
+
+  return wrapped;
 }
 
 export async function ensureActiveOnlinePresence(
@@ -1808,6 +1834,7 @@ export function installSocketResilience(
   wrapSendOptionsNormalization(sock, { logError });
   wrapOnWhatsAppGuard(sock);
   wrapPresenceResilience(sock, { defaultPushName });
+  wrapReadAndInviteResilience(sock);
   installPresenceTracking(sock);
 
   if (sock?.ev && typeof sock.ev.on === 'function') {

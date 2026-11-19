@@ -8,6 +8,7 @@ import { cleanJid, extractPhoneDigits } from './utils/groupRoleResolver.js';
 import { unwrapMessageContent } from './utils/groupActionHelper.js';
 import { extractMessageText } from './utils/antiscam.js';
 import config from './config.js';
+import { getOutboundPacer } from './utils/outboundPacer.js';
 
 const sendContextStorage = new AsyncLocalStorage();
 
@@ -462,6 +463,7 @@ export function installMessageRetryStore(sock) {
   if (wrappedSockets.has(sock)) return true;
 
   const originalSendMessage = sock.sendMessage.bind(sock);
+  const outboundPacer = getOutboundPacer(sock);
   const sendQueues = new Map();
   const getCanonicalQueueKey = (jid) => {
     const norm = normalizeChatJid(jid) || String(jid || '');
@@ -499,7 +501,7 @@ export function installMessageRetryStore(sock) {
     const explicitMsgId = options && typeof options === 'object' ? options.messageId : undefined;
     const nextMsgId = explicitMsgId || (isLiveSocket ? generateMessageIDV2(sock.user.id) : undefined);
 
-    const runSend = async () => {
+    const runSend = () => outboundPacer.run(async () => {
       if (isLiveSocket && !explicitMsgId && nextMsgId) {
         const nextOptions =
           options && typeof options === 'object' && !Array.isArray(options)
@@ -508,7 +510,7 @@ export function installMessageRetryStore(sock) {
         return originalSendMessage(targetJid, content, nextOptions);
       }
       return originalSendMessage(...args);
-    };
+    });
 
     const sentMessage = nextMsgId
       ? await sendContextStorage.run({ remoteJid: targetJid, messageId: nextMsgId }, runSend)
@@ -530,7 +532,7 @@ export function installMessageRetryStore(sock) {
       if (options?.messageId && message) {
         rememberMessage({ key: { remoteJid: jid, id: options.messageId, fromMe: true }, message });
       }
-      const result = await originalRelayMessage(jid, message, options);
+      const result = await outboundPacer.run(() => originalRelayMessage(jid, message, options));
       const id =
         options?.messageId ||
         (typeof result === 'string' ? result : result?.key?.id);
