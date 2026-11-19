@@ -70,6 +70,32 @@ test('retry cache immediately captures sendMessage and relayMessage payloads', a
   assert.deepEqual(await getMessageForRetry({ remoteJid: groupA, id: relayedStringId }), relayedNoOptContent);
 });
 
+test('pre-send patch wraps interactive messages for multi-device rendering', async () => {
+  const nativeFlow = {
+    interactiveMessage: {
+      body: { text: 'Pong!' },
+      nativeFlowMessage: {
+        buttons: [{ name: 'quick_reply', buttonParamsJson: '{"id":".uptime"}' }],
+      },
+    },
+  };
+  const expected = { documentWithCaptionMessage: { message: nativeFlow } };
+  const patch = createPreSendPatchCapture();
+
+  assert.deepEqual(await patch(nativeFlow, [groupA]), expected);
+  assert.deepEqual(await patch(expected, [groupA]), expected, 'do not double-wrap an already patched message');
+
+  const plainMessage = { conversation: 'plain text stays unchanged' };
+  assert.equal(await patch(plainMessage, [groupA]), plainMessage);
+
+  const recipientSpecificPatch = createPreSendPatchCapture(async (content) => [
+    { recipientJid: groupA, message: content },
+  ]);
+  assert.deepEqual(await recipientSpecificPatch(nativeFlow, [groupA]), [
+    { recipientJid: groupA, message: expected },
+  ]);
+});
+
 test('retry cache resolves device-suffixed JIDs and PN/LID aliases without leaking across groups', async () => {
   const pn = '254711111111@s.whatsapp.net';
   const pnDevice = '254711111111:3@s.whatsapp.net';

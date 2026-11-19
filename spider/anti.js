@@ -408,10 +408,27 @@ export async function getMessageForRetry(key) {
   return messageStore.get(key.id)?.message;
 }
 
+function patchInteractiveMessageForMd(message) {
+  if (!message || typeof message !== 'object') return message;
+  if (message.documentWithCaptionMessage?.message) return message;
+  if (!message.buttonsMessage && !message.listMessage && !message.interactiveMessage) return message;
+
+  return { documentWithCaptionMessage: { message: { ...message } } };
+}
+
 export function createPreSendPatchCapture(basePatcher = null) {
   return async (message, recipientJids) => {
-    const patched =
+    const basePatched =
       typeof basePatcher === 'function' ? await basePatcher(message, recipientJids) : message;
+    const patched = Array.isArray(basePatched)
+      ? basePatched.map((entry) => {
+          if (!entry || typeof entry !== 'object') return entry;
+          return {
+            ...entry,
+            message: patchInteractiveMessageForMd(entry.message ?? message),
+          };
+        })
+      : patchInteractiveMessageForMd(basePatched ?? message);
     const ctx = sendContextStorage.getStore();
     if (ctx?.remoteJid && ctx?.messageId) {
       const msgToCache = Array.isArray(patched)
